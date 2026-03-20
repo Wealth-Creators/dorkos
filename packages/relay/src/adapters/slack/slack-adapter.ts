@@ -77,109 +77,123 @@ export const SLACK_MANIFEST: AdapterManifest = {
   builtin: true,
   multiInstance: true,
   actionButton: {
-    label: 'Create Slack App',
+    label: 'Open Slack App Setup',
     url: SLACK_CREATE_APP_URL,
   },
   setupSteps: [
     {
       stepId: 'create-app',
-      title: 'Create & Configure a Slack App',
-      description:
-        'Go to api.slack.com/apps \u2192 Create New App \u2192 From Scratch.\n\n' +
-        '1. **Socket Mode** \u2014 Enable it (Settings \u2192 Socket Mode).\n' +
-        '2. **Event Subscriptions** \u2014 Turn on Enable Events, then subscribe to bot events: message.channels, message.groups, message.im, app_mention.\n' +
-        '3. **OAuth & Permissions** \u2014 Add bot token scopes: channels:history, channels:read, chat:write, groups:history, groups:read, im:history, im:read, im:write, mpim:history, app_mentions:read, users:read, reactions:write. Then install the app to your workspace.\n' +
-        '4. **App-Level Token** \u2014 In Basic Information \u2192 App-Level Tokens, generate a token with the connections:write scope.\n\n' +
-        '\u26a0\ufe0f Do NOT enable "Agents & AI Apps" \u2014 it adds user scopes that cause install failures on most workspaces.',
-      fields: ['botToken', 'appToken', 'signingSecret', 'streaming', 'typingIndicator'],
+      title: 'Step 1 of 3 — Create your Slack bot',
+      description: 'Takes about 2 minutes — Slack walks you through it.',
+      fields: [],
+    },
+    {
+      stepId: 'bot-token',
+      title: 'Step 2 of 3 — Paste your Bot Key',
+      description: "Go to your Slack app and copy the Bot Key. It starts with xoxb- and is found under OAuth & Permissions.",
+      fields: ['botToken'],
+    },
+    {
+      stepId: 'credentials',
+      title: 'Step 3 of 3 — Paste two more codes',
+      description: "Almost done. Copy two more codes from Slack and paste them below. Use \"Where do I find this?\" if you get stuck.",
+      fields: ['appToken', 'signingSecret', 'streaming', 'typingIndicator'],
     },
   ],
   configFields: [
     {
       key: 'botToken',
-      label: 'Bot Token',
+      label: 'Bot Key',
       type: 'password',
       required: true,
       placeholder: 'xoxb-...',
-      description: 'Bot User OAuth Token from OAuth & Permissions page.',
+      description: 'Starts with xoxb- \u00b7 Paste from your Slack app \u2192 OAuth & Permissions',
       pattern: '^xoxb-',
-      patternMessage: 'Bot tokens start with xoxb-',
+      patternMessage: 'Bot keys start with xoxb- — double-check you copied the right one',
       visibleByDefault: true,
-      helpMarkdown: `1. Go to your [Slack App Settings](https://api.slack.com/apps)
-2. Select your app
-3. Navigate to **OAuth & Permissions** in the sidebar
-4. Copy the **Bot User OAuth Token** (starts with \`xoxb-\`)`,
+      helpMarkdown: `**Where to find this:**
+
+1. Open [api.slack.com/apps](https://api.slack.com/apps) and select your app
+2. Click **OAuth & Permissions** in the left sidebar
+3. Look for **Bot User OAuth Token** — it starts with \`xoxb-\`
+4. Click **Copy** and paste it here`,
     },
     {
       key: 'appToken',
-      label: 'App-Level Token',
+      label: 'Connection Token',
       type: 'password',
       required: true,
       placeholder: 'xapp-...',
-      description:
-        'App-Level Token with connections:write scope. Generate in Basic Information \u2192 App-Level Tokens.',
+      description: 'Starts with xapp- \u00b7 Paste from your Slack app \u2192 Basic Information \u2192 App-Level Tokens',
       pattern: '^xapp-',
-      patternMessage: 'App tokens start with xapp-',
+      patternMessage: 'Connection tokens start with xapp- — double-check you copied the right one',
       visibleByDefault: true,
-      helpMarkdown: `1. Go to your [Slack App Settings](https://api.slack.com/apps)
-2. Select your app
-3. Navigate to **Basic Information** in the sidebar
-4. Scroll to **App-Level Tokens**
-5. Click **Generate Token and Scopes**
-6. Add the \`connections:write\` scope
-7. Click **Generate** and copy the token (starts with \`xapp-\`)`,
+      helpMarkdown: `**Where to find this:**
+
+1. Open [api.slack.com/apps](https://api.slack.com/apps) and select your app
+2. Click **Basic Information** in the left-hand menu
+3. Scroll down until you see a section titled **App-Level Tokens**
+4. Click the **Generate Token and Scopes** button
+5. Type any name in the box (e.g. "botinfra"), then click **Add Scope** and select \`connections:write\`
+6. Click **Generate** — a long code will appear
+7. Click **Copy** and paste it above
+
+**What it looks like:** a long code starting with \`xapp-\`
+> Example: \`xapp-1-A12345678-1234567890123-abcdef1234567890abcdef1234567890\``,
     },
     {
       key: 'signingSecret',
-      label: 'Signing Secret',
+      label: 'Security Code',
       type: 'password',
       required: true,
       placeholder: 'abc123...',
-      description: 'Signing Secret from Basic Information page. Used to verify requests.',
-      helpMarkdown: `1. Go to your [Slack App Settings](https://api.slack.com/apps)
-2. Select your app
-3. Navigate to **Basic Information** in the sidebar
-4. Scroll to **App Credentials**
-5. Click **Show** next to **Signing Secret** and copy it`,
+      description: 'Paste from your Slack app \u2192 Basic Information \u2192 App Credentials',
+      helpMarkdown: `**Where to find this:**
+
+1. Open [api.slack.com/apps](https://api.slack.com/apps) and select your app
+2. Click **Basic Information** in the left-hand menu
+3. Scroll down to the **App Credentials** section
+4. Find the row labeled **Signing Secret** — it shows as dots (••••••••)
+5. Click the **Show** button next to it to reveal the code
+6. Click **Copy** and paste it above
+
+**What it looks like:** a 32-character mix of letters and numbers
+> Example: \`a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4\``,
     },
     {
       key: 'streaming',
-      label: 'Stream Responses',
+      label: 'Show typing as it arrives',
       type: 'boolean',
       required: false,
-      description:
-        'Show responses as they arrive (live editing). Disable to send a single message when complete.',
+      description: 'On: responses stream in word-by-word, like a live chat. Off: the agent sends one complete message when it finishes. Either works — this is just a preference.',
       visibleByDefault: true,
-      helpMarkdown:
-        'When enabled, agent responses appear token-by-token in Slack via message editing. ' +
-        'When disabled, the full response is sent as a single message after the agent finishes.',
+      section: 'Optional settings',
     },
     {
       key: 'typingIndicator',
-      label: 'Typing Indicator',
+      label: 'Show a "thinking" indicator',
       type: 'select',
       required: false,
-      description: 'Show a visual indicator while the agent is working.',
+      description: 'Adds a small signal while the agent is working on a reply, so people know it heard them.',
       options: [
-        { label: 'None', value: 'none' },
-        { label: 'Emoji reaction', value: 'reaction' },
+        { label: 'Off — no indicator', value: 'none' },
+        { label: '⏳ Hourglass emoji on the message', value: 'reaction' },
       ],
       visibleByDefault: true,
-      helpMarkdown:
-        'When set to "Emoji reaction", adds an :hourglass_flowing_sand: reaction to your message ' +
-        'while the agent is processing. Requires the `reactions:write` scope.',
+      section: 'Optional settings',
+    },
+    {
+      key: 'requireMention',
+      label: 'Only respond when mentioned',
+      type: 'boolean',
+      required: false,
+      description: 'On: only respond when someone @mentions the bot in a channel. Off: respond to all messages. DMs always get a response either way.',
+      section: 'Optional settings',
     },
   ],
   setupInstructions:
-    '1. Create a Slack app at api.slack.com/apps (From Scratch, not From Manifest).\n' +
-    '2. Enable Socket Mode (Settings \u2192 Socket Mode).\n' +
-    '3. Enable Event Subscriptions and subscribe to bot events: message.channels, message.groups, message.im, app_mention.\n' +
-    '4. Add bot token scopes under OAuth & Permissions: channels:history, channels:read, chat:write, groups:history, groups:read, im:history, im:read, im:write, mpim:history, app_mentions:read, users:read, reactions:write.\n' +
-    '5. Install the app to your workspace (OAuth & Permissions \u2192 Install).\n' +
-    '6. Copy the Bot User OAuth Token (starts with xoxb-).\n' +
-    '7. Generate an App-Level Token with connections:write scope (Basic Information \u2192 App-Level Tokens).\n' +
-    '8. Copy the Signing Secret from Basic Information.\n\n' +
-    '\u26a0\ufe0f Do NOT enable "Agents & AI Apps" \u2014 it adds user-level scopes that cause invalid_scope errors on most workspace plans.',
+    '\u26a0\ufe0f One thing to watch for: when Slack asks about **"Agents & AI Apps"** \u2014 leave that **turned off**. ' +
+    'Turning it on causes errors on most Slack accounts.',
 };
 
 /**
@@ -233,7 +247,12 @@ export class SlackAdapter extends BaseRelayAdapter {
     const authResult = await app.client.auth.test();
     this.botUserId = (authResult.user_id as string) ?? '';
 
-    // Register event listeners before starting
+    const requireMention = this.config.requireMention ?? false;
+
+    // Register event listeners before starting.
+    // app.message handles all messages (DMs + channels). app_mention is NOT registered
+    // separately — Slack fires both for the same mention event, causing duplicate responses.
+    // Instead, mention filtering is applied inside handleInboundMessage.
     app.message(async ({ event, client }) => {
       await handleInboundMessage(
         event as Parameters<typeof handleInboundMessage>[0],
@@ -241,16 +260,7 @@ export class SlackAdapter extends BaseRelayAdapter {
         relay,
         this.botUserId,
         this.makeInboundCallbacks(),
-      );
-    });
-
-    app.event('app_mention', async ({ event, client }) => {
-      await handleInboundMessage(
-        event as Parameters<typeof handleInboundMessage>[0],
-        client,
-        relay,
-        this.botUserId,
-        this.makeInboundCallbacks(),
+        requireMention,
       );
     });
 

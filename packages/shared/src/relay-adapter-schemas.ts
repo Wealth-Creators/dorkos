@@ -14,7 +14,7 @@ extendZodWithOpenApi(z);
 // === Adapter Configuration Schemas ===
 
 export const AdapterTypeSchema = z
-  .enum(['telegram', 'webhook', 'claude-code', 'slack', 'plugin'])
+  .enum(['telegram', 'webhook', 'claude-code', 'slack', 'sms', 'plugin'])
   .openapi('AdapterType');
 
 export type AdapterType = z.infer<typeof AdapterTypeSchema>;
@@ -86,10 +86,31 @@ export const SlackAdapterConfigSchema = z
     signingSecret: z.string().min(1),
     streaming: z.boolean().default(true),
     typingIndicator: z.enum(['none', 'reaction']).default('none'),
+    requireMention: z.boolean().default(false),
   })
   .openapi('SlackAdapterConfig');
 
 export type SlackAdapterConfig = z.infer<typeof SlackAdapterConfigSchema>;
+
+export const SmsAdapterConfigSchema = z
+  .object({
+    /** Twilio Account SID (starts with AC). */
+    accountSid: z.string().min(1),
+    /** Twilio Auth Token. */
+    authToken: z.string().min(1),
+    /** Your Twilio phone number in E.164 format (e.g. +14155552671). */
+    fromNumber: z.string().min(1),
+    /** Port for the inbound webhook HTTP server. */
+    webhookPort: z.number().int().positive().default(8445),
+    /**
+     * Public HTTPS URL where Twilio POSTs inbound SMS.
+     * When set, Twilio request signature validation is enforced.
+     */
+    webhookUrl: z.string().url().optional(),
+  })
+  .openapi('SmsAdapterConfig');
+
+export type SmsAdapterConfig = z.infer<typeof SmsAdapterConfigSchema>;
 
 export const AdapterConfigSchema = z
   .object({
@@ -110,6 +131,7 @@ export const AdapterConfigSchema = z
       TelegramAdapterConfigSchema,
       WebhookAdapterConfigSchema,
       SlackAdapterConfigSchema,
+      SmsAdapterConfigSchema,
       z.record(z.string(), z.unknown()),
     ]),
   })

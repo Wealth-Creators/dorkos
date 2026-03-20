@@ -227,6 +227,7 @@ export function clearCaches(): void {
  * @param relay - The relay publisher
  * @param botUserId - The bot's own user ID for echo prevention
  * @param callbacks - Callbacks to mutate adapter state
+ * @param requireMention - When true, ignore channel messages that don't mention the bot (DMs are always accepted)
  */
 export async function handleInboundMessage(
   event: SlackMessageEvent,
@@ -234,6 +235,7 @@ export async function handleInboundMessage(
   relay: RelayPublisher,
   botUserId: string,
   callbacks: AdapterInboundCallbacks,
+  requireMention = false,
 ): Promise<void> {
   // Skip bot's own messages (echo prevention)
   if (event.user === botUserId) return;
@@ -246,6 +248,10 @@ export async function handleInboundMessage(
   if (!event.text) return;
 
   const isGroup = isGroupChannel(event.channel);
+
+  // When requireMention is enabled, only respond to channel messages that @mention the bot.
+  // DMs (non-group channels) are always accepted since they're inherently directed at the bot.
+  if (requireMention && isGroup && botUserId && !event.text.includes(`<@${botUserId}>`)) return;
   const subject = buildSubject(event.channel, isGroup);
 
   // Cap inbound content to prevent oversized payloads

@@ -6,5 +6,6 @@
 export { StepIndicator } from './StepIndicator';
 export { ConfigureStep } from './ConfigureStep';
 export { TestStep } from './TestStep';
+export { DiagnosticStep } from './DiagnosticStep';
 export { ConfirmStep } from './ConfirmStep';
 export { BindStep } from './BindStep';

@@ -2,12 +2,13 @@ import { Fragment } from 'react';
 import { Check } from 'lucide-react';
 import { cn } from '@/layers/shared/lib';
 
-type WizardStep = 'configure' | 'test' | 'confirm' | 'bind';
+type WizardStep = 'configure' | 'test' | 'diagnostic' | 'confirm' | 'bind';
 
-const STEPS: WizardStep[] = ['configure', 'test', 'confirm', 'bind'];
+const STEPS: WizardStep[] = ['configure', 'diagnostic', 'confirm', 'bind'];
 const STEP_LABELS: Record<WizardStep, string> = {
-  configure: 'Configure',
+  configure: 'Setup',
   test: 'Test',
+  diagnostic: 'Check',
   confirm: 'Confirm',
   bind: 'Bind',
 };
@@ -26,7 +27,6 @@ export function StepIndicator({ current, showBindStep }: { current: WizardStep; 
 
         return (
           <Fragment key={s}>
-            {/* Connector line before each step except the first */}
             {i > 0 && (
               <div
                 className={cn(
@@ -35,8 +35,6 @@ export function StepIndicator({ current, showBindStep }: { current: WizardStep; 
                 )}
               />
             )}
-
-            {/* Step circle + label */}
             <div className="flex flex-col items-center gap-1">
               <div
                 className={cn(

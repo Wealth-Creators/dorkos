@@ -23,6 +23,7 @@ import type {
   TelegramAdapterConfig,
   WebhookAdapterConfig,
   SlackAdapterConfig,
+  SmsAdapterConfig,
   AdapterConfig,
   AdapterStatus as SharedAdapterStatus,
 } from '@dorkos/shared/relay-schemas';
@@ -54,6 +55,9 @@ export type { WebhookAdapterConfig };
 
 /** Configuration for the Slack adapter. */
 export type { SlackAdapterConfig };
+
+/** Configuration for the SMS (Twilio) adapter. */
+export type { SmsAdapterConfig };
 
 /** Persisted configuration for a single adapter instance. */
 export type { AdapterConfig };

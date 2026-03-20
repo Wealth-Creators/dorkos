@@ -13,6 +13,7 @@ import { getAdapterTools } from './adapter-tools.js';
 import { getBindingTools } from './binding-tools.js';
 import { getTraceTools } from './trace-tools.js';
 import { getMeshTools } from './mesh-tools.js';
+import { getFigmaTools } from './figma-tools.js';
 
 // Re-export types and handlers for external consumers
 export type { McpToolDeps } from './types.js';
@@ -23,6 +24,7 @@ export { createRelayListAdaptersHandler, createRelayEnableAdapterHandler, create
 export { createBindingListHandler, createBindingCreateHandler, createBindingDeleteHandler } from './binding-tools.js';
 export { createRelayGetTraceHandler, createRelayGetMetricsHandler } from './trace-tools.js';
 export { createMeshDiscoverHandler, createMeshRegisterHandler, createMeshListHandler, createMeshDenyHandler, createMeshUnregisterHandler, createMeshStatusHandler, createMeshInspectHandler, createMeshQueryTopologyHandler } from './mesh-tools.js';
+export { createFigmaGetFileHandler, createFigmaGetNodesHandler, createFigmaGetComponentsHandler, createFigmaGetStylesHandler, createFigmaGetImagesHandler, createFigmaGetCommentsHandler } from './figma-tools.js';
 
 /**
  * Create the DorkOS MCP tool server with all registered tools.
@@ -41,6 +43,7 @@ export function createDorkOsToolServer(deps: McpToolDeps) {
       ...getBindingTools(deps),
       ...getTraceTools(deps),
       ...getMeshTools(deps),
+      ...getFigmaTools(deps),
     ],
   });
 }

@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DorkOS — Slack Setup · Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:              #0e0e12;
+      --surface:         #16161c;
+      --surface-raised:  #1c1c24;
+      --border:          #26262e;
+      --text:            #f0f0f4;
+      --text-2:          #9898a8;
+      --text-3:          #55556a;
+      --accent:          #e8642a;
+      --accent-dim:      rgba(232,100,42,.14);
+      --green:           #22c55e;
+      --green-dim:       rgba(34,197,94,.10);
+      --red:             #ef4444;
+      --red-dim:         rgba(239,68,68,.10);
+      --yellow:          #f59e0b;
+      --yellow-dim:      rgba(245,158,11,.10);
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+
+    /* ── Nav bar (prototype chrome) ─────────────────────────────── */
+    .proto-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 40px;
+      background: rgba(14,14,18,.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      z-index: 99;
+    }
+    .proto-label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-3);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .proto-screens {
+      display: flex;
+      gap: 4px;
+    }
+    .proto-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--border);
+      cursor: pointer;
+      transition: background 150ms;
+    }
+    .proto-dot:hover { background: var(--text-3); }
+    .proto-dot.here  { background: var(--accent); }
+
+    /* ── Wizard shell ────────────────────────────────────────────── */
+    .wizard {
+      width: 100%;
+      max-width: 468px;
+      margin-top: 40px;
+    }
+
+    /* ── Screen system ───────────────────────────────────────────── */
+    .screen { display: none; }
+    .screen.active {
+      display: block;
+      animation: rise 220ms cubic-bezier(.22,1,.36,1);
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Card ────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 18px 20px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .card-body {
+      padding: 28px 20px 22px;
+    }
+
+    /* ── Progress ────────────────────────────────────────────────── */
+    .progress { display: flex; align-items: center; gap: 5px; }
+    .pd {
+      width: 6px; height: 6px;
+      border-radius: 3px;
+      background: var(--border);
+      transition: width 250ms, background 250ms;
+    }
+    .pd.on  { width: 16px; background: var(--accent); }
+    .pd.ok  { background: var(--green); }
+
+    .close-btn {
+      width: 26px; height: 26px;
+      border-radius: 6px;
+      background: transparent;
+      border: none;
+      color: var(--text-3);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 120ms, color 120ms;
+    }
+    .close-btn:hover { background: var(--surface-raised); color: var(--text-2); }
+
+    /* ── Typography ──────────────────────────────────────────────── */
+    .step-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 10px;
+    }
+    h1 {
+      font-size: 21px;
+      font-weight: 600;
+      line-height: 1.3;
+      margin-bottom: 6px;
+    }
+    .sub {
+      font-size: 13.5px;
+      color: var(--text-2);
+      line-height: 1.55;
+      margin-bottom: 24px;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 10px 17px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      border: none;
+      text-decoration: none;
+      transition: transform 120ms, background 120ms, opacity 120ms;
+      width: 100%;
+    }
+    .btn:active { transform: scale(.98); }
+    .btn-primary  { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: #f0713a; }
+    .btn-slack    { background: #4a154b; color: #fff; }
+    .btn-slack:hover { background: #5c1a5e; }
+    .btn-outline  { background: transparent; border: 1px solid var(--border); color: var(--text-2); }
+    .btn-outline:hover { border-color: var(--text-3); color: var(--text); }
+    .btn-ghost    { background: transparent; color: var(--text-3); font-size: 13px; }
+    .btn-ghost:hover { color: var(--text-2); }
+    .btn-lg       { padding: 13px 17px; font-size: 14.5px; }
+    .actions      { display: flex; flex-direction: column; gap: 7px; margin-top: 22px; }
+
+    /* ── Form ────────────────────────────────────────────────────── */
+    .field { margin-bottom: 14px; }
+    .field-label {
+      display: block;
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--text-2);
+      margin-bottom: 5px;
+    }
+    .field-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 13px;
+      font-size: 13px;
+      font-family: 'SF Mono','Fira Code',monospace;
+      color: var(--text);
+      outline: none;
+      transition: border-color 150ms;
+    }
+    .field-input:focus { border-color: var(--accent); }
+    .field-input::placeholder { color: var(--text-3); }
+
+    /* ── Disclosure ──────────────────────────────────────────────── */
+    .disc-btn {
+      font-size: 12px;
+      color: var(--accent);
+      background: none;
+      border: none;
+      font-family: inherit;
+      cursor: pointer;
+      padding: 4px 0;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .disc-btn:hover { text-decoration: underline; }
+    .disc-body {
+      display: none;
+      margin-top: 8px;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: 12px;
+      color: var(--text-2);
+      line-height: 1.65;
+    }
+    .disc-body.open { display: block; animation: rise 180ms ease; }
+    .disc-body ol { padding-left: 14px; }
+    .disc-body li { margin-bottom: 3px; }
+    code {
+      font-family: 'SF Mono','Fira Code',monospace;
+      font-size: 10.5px;
+      background: var(--bg);
+      color: var(--accent);
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    /* ── Adapter tile ────────────────────────────────────────────── */
+    .adapter-tile {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 22px;
+    }
+    .adapter-icon {
+      width: 38px; height: 38px;
+      border-radius: 8px;
+      background: #4a154b;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 17px; color: #fff;
+      flex-shrink: 0;
+    }
+    .adapter-name  { font-size: 14px; font-weight: 600; }
+    .adapter-desc  { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+    .adapter-badge {
+      margin-left: auto;
+      font-size: 10px; font-weight: 600;
+      letter-spacing: .06em; text-transform: uppercase;
+      background: var(--accent-dim);
+      color: var(--accent);
+      padding: 3px 8px; border-radius: 4px;
+    }
+
+    /* ── Warning banner ──────────────────────────────────────────── */
+    .warn-banner {
+      background: var(--yellow-dim);
+      border: 1px solid rgba(245,158,11,.18);
+      border-radius: 8px;
+      padding: 11px 13px;
+      font-size: 12.5px;
+      color: var(--text-2);
+      line-height: 1.5;
+      margin-bottom: 20px;
+    }
+
+    /* ── Divider ─────────────────────────────────────────────────── */
+    .divider { height: 1px; background: var(--border); margin: 18px 0; }
+
+    /* ── Diagnostic list ─────────────────────────────────────────── */
+    .diag-list { display: flex; flex-direction: column; gap: 2px; }
+    .diag-item {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 11px 12px;
+      border-radius: 8px;
+    }
+    .diag-item.fail { background: var(--red-dim); }
+    .diag-item.warn { background: var(--yellow-dim); }
+
+    .di-icon {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700;
+      flex-shrink: 0;
+    }
+    .di-icon.pass { background: var(--green-dim); color: var(--green); }
+    .di-icon.fail { background: var(--red-dim);   color: var(--red); }
+    .di-icon.warn { background: var(--yellow-dim); color: var(--yellow); }
+    .di-icon.spin { background: var(--surface-raised); border: 1px solid var(--border); }
+
+    .di-text { flex: 1; }
+    .di-primary   { font-size: 13px; font-weight: 500; }
+    .di-secondary { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
+
+    .di-action {
+      font-size: 12px; font-weight: 500;
+      color: var(--accent);
+      background: none; border: none;
+      font-family: inherit;
+      cursor: pointer;
+      padding: 4px 8px; border-radius: 5px;
+      transition: background 120ms;
+      white-space: nowrap;
+    }
+    .di-action:hover { background: var(--accent-dim); }
+    .di-action:disabled { color: var(--text-3); cursor: default; }
+
+    /* ── Pulse dot ───────────────────────────────────────────────── */
+    .pulse-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:.4; transform:scale(.75); }
+    }
+
+    /* ── Back button ─────────────────────────────────────────────── */
+    .back-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 12.5px; color: var(--text-3);
+      background: none; border: none; font-family: inherit;
+      cursor: pointer; padding: 0 0 18px;
+      transition: color 120ms;
+    }
+    .back-btn:hover { color: var(--text-2); }
+
+    /* ── Step list ───────────────────────────────────────────────── */
+    .step-list { list-style: none; display: flex; flex-direction: column; gap: 10px; margin: 18px 0; }
+    .sl-item   { display: flex; gap: 11px; align-items: flex-start; }
+    .sl-num {
+      width: 21px; height: 21px;
+      border-radius: 50%;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      color: var(--text-2);
+      font-size: 10.5px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; margin-top: 1px;
+    }
+    .sl-text { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+    .sl-text strong { color: var(--text); }
+
+    /* ── Code block ──────────────────────────────────────────────── */
+    .code-block {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .code-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 7px 13px;
+      border-bottom: 1px solid var(--border);
+    }
+    .code-title { font-size: 10.5px; color: var(--text-3); font-weight: 500; }
+    .copy-btn {
+      font-size: 11px; color: var(--text-2);
+      background: none; border: none; font-family: inherit;
+      cursor: pointer; padding: 3px 8px; border-radius: 4px;
+      transition: background 120ms, color 120ms;
+    }
+    .copy-btn:hover { background: var(--surface-raised); color: var(--text); }
+    .copy-btn.ok { color: var(--green); }
+    .code-pre {
+      padding: 13px;
+      font-family: 'SF Mono','Fira Code',monospace;
+      font-size: 11px; color: var(--text-2); line-height: 1.75;
+      max-height: 155px; overflow-y: auto;
+      white-space: pre;
+    }
+    .ck { color: #7aa2f7; } /* key */
+    .cs { color: #9ece6a; } /* string */
+    .cb { color: #ff9e64; } /* bool/num */
+
+    /* ── Slack mock ──────────────────────────────────────────────── */
+    .slack-mock {
+      background: #1a1d21;
+      border: 1px solid #2e3035;
+      border-radius: 9px;
+      overflow: hidden;
+      margin: 16px 0;
+    }
+    .sm-head {
+      padding: 11px 15px;
+      border-bottom: 1px solid #2e3035;
+      display: flex; align-items: center; gap: 9px;
+    }
+    .sm-avatar {
+      width: 27px; height: 27px;
+      border-radius: 5px;
+      background: #4a154b;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; color: #fff;
+    }
+    .sm-name   { font-size: 13.5px; font-weight: 600; color: #f2f3f5; }
+    .sm-status { font-size: 11px; color: #72767d; }
+    .sm-body   { padding: 14px 15px 6px; }
+    .sm-msg    { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 10px; }
+    .sm-msg-av {
+      width: 31px; height: 31px;
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; color: #fff;
+      flex-shrink: 0;
+    }
+    .sm-msg-name  { font-size: 13px; font-weight: 700; color: #f2f3f5; }
+    .sm-msg-time  { font-size: 10.5px; color: #72767d; margin-left: 5px; }
+    .sm-msg-text  { font-size: 13px; color: #cfd0d2; margin-top: 2px; line-height: 1.4; }
+    .sm-input {
+      margin: 0 15px 15px;
+      background: #2d3136;
+      border-radius: 7px;
+      padding: 9px 13px;
+      font-size: 12.5px; color: #72767d;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+
+    /* ── App Home mockup ─────────────────────────────────────────── */
+    .app-home-mock {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      overflow: hidden;
+      margin: 18px 0;
+    }
+    .ahm-bar {
+      background: #22222e;
+      padding: 7px 12px;
+      font-size: 10.5px; color: var(--text-3); font-weight: 500;
+      border-bottom: 1px solid var(--border);
+    }
+    .ahm-body { padding: 14px; }
+    .ahm-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+    .ahm-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .ahm-row-label { font-size: 12.5px; color: var(--text); }
+    .ahm-row-sub   { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+    .toggle-on {
+      width: 34px; height: 19px;
+      background: var(--green);
+      border-radius: 10px;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .toggle-on::after {
+      content: '';
+      width: 15px; height: 15px;
+      background: #fff;
+      border-radius: 50%;
+      position: absolute;
+      top: 2px; right: 2px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.3);
+    }
+    .check-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      margin-top: 10px;
+    }
+    .check-box {
+      width: 14px; height: 14px;
+      background: var(--accent);
+      border-radius: 3px;
+      flex-shrink: 0; margin-top: 1px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .check-box svg { width: 9px; height: 9px; }
+    .check-label { font-size: 12px; color: var(--text-2); line-height: 1.4; }
+    .ahm-callout {
+      margin-top: 11px;
+      padding: 7px 11px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(232,100,42,.25);
+      border-radius: 6px;
+      font-size: 11.5px; color: var(--accent);
+    }
+
+    /* ── Metric cards ────────────────────────────────────────────── */
+    .metrics   { display: flex; gap: 8px; margin-top: 18px; }
+    .metric    {
+      flex: 1;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .metric-v  { font-size: 19px; font-weight: 600; color: var(--green); }
+    .metric-l  { font-size: 10.5px; color: var(--text-3); margin-top: 3px; }
+
+    /* ── Success icon ────────────────────────────────────────────── */
+    .success-ring {
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: var(--green-dim);
+      border: 1px solid rgba(34,197,94,.2);
+      color: var(--green);
+      font-size: 22px;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 18px;
+    }
+
+    /* ── Relay status pill ───────────────────────────────────────── */
+    .relay-status {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 13px 15px;
+      margin-top: 18px;
+    }
+    .rs-header {
+      font-size: 10.5px; font-weight: 600;
+      color: var(--text-3);
+      letter-spacing: .07em; text-transform: uppercase;
+      margin-bottom: 7px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .rs-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    .rs-row  { font-size: 13px; color: var(--text-2); margin-bottom: 4px; }
+    .rs-row strong { color: var(--text); }
+    .rs-sub  { font-size: 11.5px; color: var(--text-3); }
+
+    /* ── Scanning animate-in ─────────────────────────────────────── */
+    .scan-appear {
+      animation: rise 200ms ease both;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Prototype nav bar -->
+<div class="proto-bar">
+  <span class="proto-label">DorkOS · Slack Setup · Prototype</span>
+  <div class="proto-screens" id="proto-dots"></div>
+</div>
+
+<div class="wizard">
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 1 · Entry
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen active" id="s1">
+    <div class="card">
+      <div class="card-head">
+        <div class="progress">
+          <div class="pd on"></div>
+          <div class="pd"></div>
+          <div class="pd"></div>
+        </div>
+        <button class="close-btn">×</button>
+      </div>
+      <div class="card-body">
+        <div class="adapter-tile">
+          <div class="adapter-icon">#</div>
+          <div>
+            <div class="adapter-name">Slack</div>
+            <div class="adapter-desc">Send and receive messages in channels and DMs</div>
+          </div>
+          <div class="adapter-badge">Messaging</div>
+        </div>
+        <div class="step-label">Step 1 of 3</div>
+        <h1>Create your Slack bot</h1>
+        <p class="sub">This opens Slack's app creator with everything pre-filled — events, scopes, Socket Mode. Takes about 2 minutes.</p>
+        <div class="warn-banner">
+          ⚠️&nbsp; When Slack asks about <strong>"Agents &amp; AI Apps"</strong> — leave that <strong>off</strong>. Turning it on causes errors on most accounts.
+        </div>
+        <div class="actions">
+          <button class="btn btn-slack btn-lg" onclick="go('s2')">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="white">
+              <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
+            </svg>
+            Open Slack App Setup
+          </button>
+          <button class="btn btn-ghost" onclick="go('s2')">I already have a Slack app →</button>
+        </div>
+        <div style="margin-top: 14px; text-align:center;">
+          <button class="btn btn-ghost" style="font-size:12px;color:var(--text-3);" onclick="go('s2')">I'm done with setup →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 2 · Bot Token
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s2">
+    <div class="card">
+      <div class="card-head">
+        <div class="progress">
+          <div class="pd ok"></div>
+          <div class="pd on"></div>
+          <div class="pd"></div>
+        </div>
+        <button class="close-btn" onclick="go('s1')">×</button>
+      </div>
+      <div class="card-body">
+        <div class="step-label">Step 2 of 3</div>
+        <h1>Paste your Bot Key</h1>
+        <p class="sub">Found in your Slack app under OAuth &amp; Permissions.</p>
+        <div class="field">
+          <label class="field-label">Bot Key</label>
+          <input class="field-input" placeholder="xoxb-..." value="xoxb-12345-demo-key" />
+          <div style="margin-top:6px;">
+            <button class="disc-btn" onclick="disc(this)">▸ Where do I find this?</button>
+            <div class="disc-body">
+              <ol>
+                <li>Open <strong>api.slack.com/apps</strong> → select your app</li>
+                <li>Click <strong>OAuth &amp; Permissions</strong> in the sidebar</li>
+                <li>Look for <strong>Bot User OAuth Token</strong> — starts with <code>xoxb-</code></li>
+                <li>Click Copy and paste it above</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" onclick="go('s3')">Continue →</button>
+          <button class="btn btn-ghost" onclick="go('s1')">← Back</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 3 · Two more codes
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s3">
+    <div class="card">
+      <div class="card-head">
+        <div class="progress">
+          <div class="pd ok"></div>
+          <div class="pd ok"></div>
+          <div class="pd on"></div>
+        </div>
+        <button class="close-btn" onclick="go('s1')">×</button>
+      </div>
+      <div class="card-body">
+        <div class="step-label">Step 3 of 3</div>
+        <h1>Two more codes</h1>
+        <p class="sub">Almost done. Both are in your Slack app under Basic Information.</p>
+        <div class="field">
+          <label class="field-label">Connection Token</label>
+          <input class="field-input" placeholder="xapp-..." value="xapp-1-demo-token" />
+          <div style="margin-top:6px;">
+            <button class="disc-btn" onclick="disc(this)">▸ Where do I find this?</button>
+            <div class="disc-body">
+              <ol>
+                <li>Open your Slack app → <strong>Basic Information</strong></li>
+                <li>Scroll to <strong>App-Level Tokens</strong></li>
+                <li>Click <strong>Generate Token</strong>, add scope <code>connections:write</code></li>
+                <li>Copy the <code>xapp-</code> token and paste above</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label">Security Code</label>
+          <input class="field-input" placeholder="abc123..." value="demo-signing-secret" />
+          <div style="margin-top:6px;">
+            <button class="disc-btn" onclick="disc(this)">▸ Where do I find this?</button>
+            <div class="disc-body">
+              <ol>
+                <li>Open your Slack app → <strong>Basic Information</strong></li>
+                <li>Scroll to <strong>App Credentials</strong></li>
+                <li>Click <strong>Show</strong> next to Signing Secret</li>
+                <li>Copy the 32-character code and paste above</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" onclick="startScan()">Connect →</button>
+          <button class="btn btn-ghost" onclick="go('s2')">← Back</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 4 · Scanning
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s4">
+    <div class="card">
+      <div class="card-body" style="padding:48px 22px; text-align:center;">
+        <div class="pulse-dot" style="margin:0 auto 16px;"></div>
+        <p style="font-size:15px;font-weight:500;">Checking your Slack configuration...</p>
+        <p style="font-size:12.5px;color:var(--text-3);margin-top:5px;">Usually takes a second</p>
+        <div class="diag-list" id="scan-list" style="text-align:left;margin-top:24px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 5 · Diagnostic — 2 issues
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s5">
+    <div class="card">
+      <div class="card-head" style="padding-bottom:18px;">
+        <div></div>
+        <button class="close-btn" onclick="go('s1')">×</button>
+      </div>
+      <div class="card-body" style="padding-top:0;">
+        <div style="margin-bottom:18px;">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px;">
+            <span style="font-size:15px;">⚠️</span>
+            <h1 style="font-size:18px;">2 things need fixing</h1>
+          </div>
+          <p class="sub" style="margin-bottom:0;">Fix each one below. Your agents will be live once all are green.</p>
+        </div>
+        <div class="diag-list">
+          <div class="diag-item">
+            <div class="di-icon pass">✓</div>
+            <div class="di-text">
+              <div class="di-primary">Bot connected</div>
+              <div class="di-secondary">@CVLGOS · CVLG workspace</div>
+            </div>
+          </div>
+          <div class="diag-item">
+            <div class="di-icon pass">✓</div>
+            <div class="di-text">
+              <div class="di-primary">Socket Mode enabled</div>
+              <div class="di-secondary">No public URL needed</div>
+            </div>
+          </div>
+          <div class="diag-item fail">
+            <div class="di-icon fail">✕</div>
+            <div class="di-text">
+              <div class="di-primary">Event subscriptions missing</div>
+              <div class="di-secondary">Bot won't receive any messages</div>
+            </div>
+            <button class="di-action" onclick="go('s6')">Fix →</button>
+          </div>
+          <div class="diag-item fail">
+            <div class="di-icon fail">✕</div>
+            <div class="di-text">
+              <div class="di-primary">Messages Tab not enabled</div>
+              <div class="di-secondary">Users can't DM your bot yet</div>
+            </div>
+            <button class="di-action" disabled>Fix →</button>
+          </div>
+          <div class="diag-item warn">
+            <div class="di-icon warn">!</div>
+            <div class="di-text">
+              <div class="di-primary">Reinstall needed after fixes</div>
+            </div>
+            <button class="di-action" disabled>Later</button>
+          </div>
+        </div>
+        <p style="font-size:11px;color:var(--text-3);text-align:center;margin-top:14px;">Fix in order — each one unlocks the next</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 6 · Fix: Event subscriptions
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s6">
+    <div class="card">
+      <div class="card-body">
+        <button class="back-btn" onclick="go('s5')">← Back to checklist</button>
+        <div class="step-label">Fix 1 of 2</div>
+        <h1>Add event subscriptions</h1>
+        <p class="sub">Your bot needs these to receive messages. Paste the manifest into Slack and save — no URL required.</p>
+        <div class="code-block">
+          <div class="code-head">
+            <span class="code-title">App Manifest · JSON (relevant section)</span>
+            <button class="copy-btn" onclick="cp(this)">Copy</button>
+          </div>
+          <div class="code-pre"><span class="ck">"event_subscriptions"</span>: {
+  <span class="ck">"bot_events"</span>: [
+    <span class="cs">"message.im"</span>,
+    <span class="cs">"message.channels"</span>,
+    <span class="cs">"message.groups"</span>,
+    <span class="cs">"app_mention"</span>
+  ]
+},
+<span class="ck">"socket_mode_enabled"</span>: <span class="cb">true</span></div>
+        </div>
+        <ul class="step-list">
+          <li class="sl-item"><div class="sl-num">1</div><div class="sl-text">In your Slack app, click <strong>App Manifest</strong> in the sidebar</div></li>
+          <li class="sl-item"><div class="sl-num">2</div><div class="sl-text">Switch to the <strong>JSON</strong> tab. Replace the entire contents with the full manifest</div></li>
+          <li class="sl-item"><div class="sl-num">3</div><div class="sl-text">Click <strong>Save Changes</strong></div></li>
+        </ul>
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" onclick="go('s7')">I've saved it ✓</button>
+          <button class="btn btn-outline">Open App Manifest →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 7 · Diagnostic — 1 issue left
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s7">
+    <div class="card">
+      <div class="card-head" style="padding-bottom:18px;">
+        <div></div>
+        <button class="close-btn" onclick="go('s1')">×</button>
+      </div>
+      <div class="card-body" style="padding-top:0;">
+        <div style="margin-bottom:18px;">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px;">
+            <span style="font-size:15px;">⚠️</span>
+            <h1 style="font-size:18px;">1 thing left</h1>
+          </div>
+          <p class="sub" style="margin-bottom:0;">Almost there.</p>
+        </div>
+        <div class="diag-list">
+          <div class="diag-item"><div class="di-icon pass">✓</div><div class="di-text"><div class="di-primary">Bot connected</div><div class="di-secondary">@CVLGOS · CVLG workspace</div></div></div>
+          <div class="diag-item"><div class="di-icon pass">✓</div><div class="di-text"><div class="di-primary">Socket Mode enabled</div></div></div>
+          <div class="diag-item"><div class="di-icon pass">✓</div><div class="di-text"><div class="di-primary">Event subscriptions</div><div class="di-secondary">message.im · message.channels · app_mention</div></div></div>
+          <div class="diag-item fail">
+            <div class="di-icon fail">✕</div>
+            <div class="di-text">
+              <div class="di-primary">Messages Tab not enabled</div>
+              <div class="di-secondary">Users can't DM your bot yet</div>
+            </div>
+            <button class="di-action" onclick="go('s8')">Fix →</button>
+          </div>
+          <div class="diag-item warn">
+            <div class="di-icon warn">!</div>
+            <div class="di-text"><div class="di-primary">Reinstall needed after fix</div></div>
+            <button class="di-action" disabled>Later</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 8 · Fix: Messages Tab
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s8">
+    <div class="card">
+      <div class="card-body">
+        <button class="back-btn" onclick="go('s7')">← Back to checklist</button>
+        <div class="step-label">Fix 2 of 2</div>
+        <h1>Allow DMs to your bot</h1>
+        <p class="sub">Turn on the Messages Tab so people can send your bot direct messages.</p>
+        <div class="app-home-mock">
+          <div class="ahm-bar">Slack API · App Home · Show Tabs</div>
+          <div class="ahm-body">
+            <div class="ahm-title">Show Tabs</div>
+            <div class="ahm-row">
+              <div>
+                <div class="ahm-row-label">Messages Tab</div>
+                <div class="ahm-row-sub">Direct messages your app sends will show here</div>
+              </div>
+              <div class="toggle-on"></div>
+            </div>
+            <div class="check-row" style="margin-top:10px;">
+              <div class="check-box">
+                <svg viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div class="check-label">Allow users to send Slash commands and messages from the messages tab</div>
+            </div>
+            <div class="ahm-callout">↑ Both of these need to be on</div>
+          </div>
+        </div>
+        <ul class="step-list">
+          <li class="sl-item"><div class="sl-num">1</div><div class="sl-text">In your Slack app, click <strong>App Home</strong></div></li>
+          <li class="sl-item"><div class="sl-num">2</div><div class="sl-text">Scroll to <strong>Show Tabs</strong> → toggle <strong>Messages Tab</strong> on</div></li>
+          <li class="sl-item"><div class="sl-num">3</div><div class="sl-text">Check <strong>"Allow users to send messages"</strong></div></li>
+        </ul>
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" onclick="go('s9')">Done ✓</button>
+          <button class="btn btn-outline">Open App Home →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 9 · Reinstall
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s9">
+    <div class="card">
+      <div class="card-head" style="padding-bottom:18px;">
+        <div></div>
+        <button class="close-btn" onclick="go('s1')">×</button>
+      </div>
+      <div class="card-body" style="padding-top:0;">
+        <div style="margin-bottom:18px;">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px;">
+            <span style="font-size:15px;">🔄</span>
+            <h1 style="font-size:18px;">One last step</h1>
+          </div>
+          <p class="sub" style="margin-bottom:0;">All fixes applied. Reinstall the app to make them take effect.</p>
+        </div>
+        <div class="diag-list" style="margin-bottom:18px;">
+          <div class="diag-item"><div class="di-icon pass">✓</div><div class="di-text"><div class="di-primary">Bot connected</div></div></div>
+          <div class="diag-item"><div class="di-icon pass">✓</div><div class="di-text"><div class="di-primary">Socket Mode enabled</div></div></div>
+          <div class="diag-item"><div class="di-icon pass">✓</div><div class="di-text"><div class="di-primary">Event subscriptions</div></div></div>
+          <div class="diag-item"><div class="di-icon pass">✓</div><div class="di-text"><div class="di-primary">Messages Tab enabled</div></div></div>
+          <div class="diag-item warn">
+            <div class="di-icon warn">!</div>
+            <div class="di-text">
+              <div class="di-primary">Reinstall your app</div>
+              <div class="di-secondary">Applies all the changes you made above</div>
+            </div>
+          </div>
+        </div>
+        <div style="background:var(--surface-raised);border:1px solid var(--border);border-radius:8px;padding:13px 14px;font-size:13px;color:var(--text-2);line-height:1.55;">
+          Go to <strong style="color:var(--text);">Install App</strong> in the Slack API sidebar → click <strong style="color:var(--text);">Reinstall to Workspace</strong> → approve the permissions.
+        </div>
+        <div class="actions" style="margin-top:18px;">
+          <button class="btn btn-primary btn-lg" onclick="go('s10')">I've reinstalled →</button>
+          <button class="btn btn-outline">Open Install App →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 10 · Test message
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s10">
+    <div class="card">
+      <div class="card-body">
+        <div class="step-label">Final step</div>
+        <h1>Send a test message</h1>
+        <p class="sub">DM your bot in Slack to confirm everything works end-to-end.</p>
+        <div class="slack-mock">
+          <div class="sm-head">
+            <div class="sm-avatar">C</div>
+            <div>
+              <div class="sm-name">CVLGOS</div>
+              <div class="sm-status">APP · Online</div>
+            </div>
+          </div>
+          <div class="sm-body">
+            <div class="sm-msg">
+              <div class="sm-msg-av" style="background:#5865f2;">I</div>
+              <div>
+                <span class="sm-msg-name">Ikechi</span>
+                <span class="sm-msg-time">Just now</span>
+                <div class="sm-msg-text">@CVLGOS hey, are you there?</div>
+              </div>
+            </div>
+          </div>
+          <div class="sm-input">
+            Message @CVLGOS
+            <span style="font-size:16px;opacity:.35;">↑</span>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" onclick="go('s11')">Reply received ✓</button>
+        </div>
+        <p style="font-size:11.5px;color:var(--text-3);text-align:center;margin-top:11px;">DorkOS is listening. Send the message in Slack now.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       SCREEN 11 · Success
+  ═══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="s11">
+    <div class="card">
+      <div class="card-body" style="text-align:center;">
+        <div class="success-ring">✓</div>
+        <h1 style="font-size:20px;margin-bottom:7px;">You're live</h1>
+        <p class="sub">Test message received in 0.8s. Your agents can now send and receive messages in Slack.</p>
+        <div class="slack-mock" style="text-align:left;">
+          <div class="sm-head">
+            <div class="sm-avatar">C</div>
+            <div><div class="sm-name">CVLGOS</div><div class="sm-status">APP · Online</div></div>
+          </div>
+          <div class="sm-body">
+            <div class="sm-msg">
+              <div class="sm-msg-av" style="background:#5865f2;">I</div>
+              <div>
+                <span class="sm-msg-name">Ikechi</span><span class="sm-msg-time">1m ago</span>
+                <div class="sm-msg-text">@CVLGOS hey, are you there?</div>
+              </div>
+            </div>
+            <div class="sm-msg">
+              <div class="sm-msg-av" style="background:#4a154b;">C</div>
+              <div>
+                <span class="sm-msg-name">CVLGOS</span><span class="sm-msg-time" style="color:var(--green);">Just now</span>
+                <div class="sm-msg-text">Hey! I'm here and ready. What can I help you with?</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="metrics">
+          <div class="metric"><div class="metric-v">0.8s</div><div class="metric-l">Latency</div></div>
+          <div class="metric"><div class="metric-v">1</div><div class="metric-l">Received</div></div>
+          <div class="metric"><div class="metric-v">🟢</div><div class="metric-l">Status</div></div>
+        </div>
+        <div class="relay-status" style="text-align:left;">
+          <div class="rs-header"><div class="rs-dot"></div> Slack (CVLG) · Active</div>
+          <div class="rs-row">→ Bound to <strong>DorkOS</strong></div>
+          <div class="rs-sub" style="margin-top:4px;">Agents respond to @mentions and DMs · per-chat sessions</div>
+        </div>
+        <div class="actions" style="margin-top:20px;">
+          <button class="btn btn-primary btn-lg">Done</button>
+          <button class="btn btn-ghost" onclick="go('s5')">Run diagnostics again</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /wizard -->
+
+<script>
+  const SCREENS = ['s1','s2','s3','s4','s5','s6','s7','s8','s9','s10','s11'];
+  const LABELS  = ['Entry','Bot Key','Credentials','Scanning','Issues (2)','Fix: Events','Issues (1)','Fix: Messages Tab','Reinstall','Test','Success'];
+
+  // Build proto nav dots
+  const dotsEl = document.getElementById('proto-dots');
+  SCREENS.forEach((id, i) => {
+    const d = document.createElement('div');
+    d.className = 'proto-dot' + (i === 0 ? ' here' : '');
+    d.title = LABELS[i];
+    d.onclick = () => go(id);
+    dotsEl.appendChild(d);
+  });
+
+  function go(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // sync dots
+    SCREENS.forEach((sid, i) => {
+      dotsEl.children[i].classList.toggle('here', sid === id);
+    });
+  }
+
+  function disc(btn) {
+    const body = btn.nextElementSibling;
+    const open = body.classList.toggle('open');
+    btn.textContent = (open ? '▾' : '▸') + btn.textContent.slice(1);
+  }
+
+  function cp(btn) {
+    btn.textContent = 'Copied!';
+    btn.classList.add('ok');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 2000);
+  }
+
+  function startScan() {
+    go('s4');
+    const checks = [
+      'Authenticating bot token...',
+      'Checking Socket Mode...',
+      'Inspecting event subscriptions...',
+      'Checking App Home settings...',
+    ];
+    const list = document.getElementById('scan-list');
+    list.innerHTML = '';
+    checks.forEach((txt, i) => {
+      setTimeout(() => {
+        const el = document.createElement('div');
+        el.className = 'diag-item scan-appear';
+        el.innerHTML = `
+          <div class="di-icon spin"><div class="pulse-dot" style="width:6px;height:6px;"></div></div>
+          <div class="di-text"><div class="di-primary">${txt}</div></div>`;
+        list.appendChild(el);
+      }, i * 650);
+    });
+    setTimeout(() => go('s5'), checks.length * 650 + 500);
+  }
+</script>
+</body>
+</html>

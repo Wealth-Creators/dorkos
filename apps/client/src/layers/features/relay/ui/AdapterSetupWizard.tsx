@@ -21,12 +21,12 @@ import { useCreateBinding } from '@/layers/entities/binding';
 import type { AdapterManifest, CatalogInstance, SessionStrategy } from '@dorkos/shared/relay-schemas';
 import { StepIndicator } from './wizard/StepIndicator';
 import { ConfigureStep } from './wizard/ConfigureStep';
-import { TestStep } from './wizard/TestStep';
+import { DiagnosticStep } from './wizard/DiagnosticStep';
 import { ConfirmStep } from './wizard/ConfirmStep';
 import { BindStep } from './wizard/BindStep';
 import { SetupGuideSheet } from './SetupGuideSheet';
 
-type WizardStep = 'configure' | 'test' | 'confirm' | 'bind';
+type WizardStep = 'configure' | 'diagnostic' | 'confirm' | 'bind';
 
 interface AdapterSetupWizardProps {
   open: boolean;
@@ -130,6 +130,7 @@ export function AdapterSetupWizard({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [setupStepIndex, setSetupStepIndex] = useState(0);
   const [botUsername, setBotUsername] = useState('');
+  const [diagnosticReady, setDiagnosticReady] = useState(false);
 
   // Bind step state — tracks the newly created adapter ID and binding config.
   const [createdAdapterId, setCreatedAdapterId] = useState('');
@@ -187,6 +188,22 @@ export function AdapterSetupWizard({
     [values, manifest],
   );
 
+  /** Triggers the connection test and advances to the diagnostic step. */
+  const startConnectionTest = useCallback(() => {
+    setStep('diagnostic');
+    testConnection.mutate(
+      { type: manifest.type, config: unflattenConfig(values as Record<string, unknown>) },
+      {
+        onSuccess: (result) => {
+          if (result.botUsername) {
+            setBotUsername(result.botUsername);
+            if (!label) setLabel(`@${result.botUsername}`);
+          }
+        },
+      },
+    );
+  }, [manifest.type, values, testConnection, label]);
+
   const handleContinue = useCallback(() => {
     if (step === 'configure') {
       // Multi-step: advance within setup steps first.
@@ -199,34 +216,18 @@ export function AdapterSetupWizard({
       } else {
         if (!validate(manifest.configFields)) return;
       }
-      setStep('test');
-      // Auto-start the connection test.
-      testConnection.mutate(
-        {
-          type: manifest.type,
-          config: unflattenConfig(values as Record<string, unknown>),
-        },
-        {
-          onSuccess: (result) => {
-            if (result.botUsername) {
-              setBotUsername(result.botUsername);
-              // Auto-populate label from bot username when user hasn't set one.
-              if (!label) setLabel(`@${result.botUsername}`);
-            }
-          },
-        },
-      );
-    } else if (step === 'test') {
+      startConnectionTest();
+    } else if (step === 'diagnostic') {
       setStep('confirm');
     }
-  }, [step, hasSetupSteps, manifest, visibleFields, setupStepIndex, validate, values, testConnection, label]);
+  }, [step, hasSetupSteps, manifest, visibleFields, setupStepIndex, validate, startConnectionTest]);
 
   const handleBack = useCallback(() => {
-    if (step === 'test') {
+    if (step === 'diagnostic') {
       setStep('configure');
       testConnection.reset();
     } else if (step === 'confirm') {
-      setStep('test');
+      setStep('diagnostic');
     } else if (step === 'bind') {
       // Back from bind step closes the wizard — the adapter was already saved.
       onOpenChange(false);
@@ -303,6 +304,7 @@ export function AdapterSetupWizard({
         setBindAgentId('');
         setBindStrategy('per-chat');
         setGuideOpen(false);
+        setDiagnosticReady(false);
         testConnection.reset();
       }
       onOpenChange(nextOpen);
@@ -329,14 +331,14 @@ export function AdapterSetupWizard({
   return (
     <Fragment>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
+        <DialogContent className="max-w-xl max-h-[90vh] flex flex-col bg-white dark:bg-white">
           <DialogHeader>
             <DialogTitle>
               {isEditMode ? `Edit ${manifest.displayName}` : `Add ${manifest.displayName}`}
             </DialogTitle>
             <DialogDescription>
               {step === 'configure' && (currentSetupStep?.description ?? 'Configure the adapter settings.')}
-              {step === 'test' && 'Testing connection to the adapter.'}
+              {step === 'diagnostic' && 'Verifying your adapter configuration.'}
               {step === 'confirm' && 'Review your configuration before saving.'}
               {step === 'bind' && 'Optionally bind this adapter to an agent.'}
             </DialogDescription>
@@ -364,15 +366,15 @@ export function AdapterSetupWizard({
                     values={values}
                     errors={errors}
                     onChange={handleFieldChange}
-                    currentSetupStep={currentSetupStep}
                     hasSetupGuide={Boolean(manifest.setupGuide)}
                     onOpenGuide={() => setGuideOpen(true)}
                   />
                 )}
 
-                {/* Test step */}
-                {step === 'test' && (
-                  <TestStep
+                {/* Diagnostic step */}
+                {step === 'diagnostic' && (
+                  <DiagnosticStep
+                    adapterType={manifest.type}
                     isPending={testConnection.isPending}
                     isSuccess={testConnection.isSuccess}
                     isError={testConnection.isError}
@@ -384,6 +386,7 @@ export function AdapterSetupWizard({
                         config: unflattenConfig(values as Record<string, unknown>),
                       })
                     }
+                    onReadyChange={setDiagnosticReady}
                   />
                 )}
 
@@ -416,7 +419,7 @@ export function AdapterSetupWizard({
           <DialogFooter className="flex items-center justify-between sm:justify-between">
             {/* Left side: Back button (where applicable) */}
             <div>
-              {(step === 'test' || step === 'confirm') && (
+              {(step === 'diagnostic' || step === 'confirm') && (
                 <Button variant="ghost" onClick={handleBack} disabled={isSaving}>
                   <ArrowLeft className="mr-1 size-4" />
                   Back
@@ -437,19 +440,14 @@ export function AdapterSetupWizard({
                   Cancel
                 </Button>
               )}
-              {step === 'test' && (
-                <Button variant="ghost" onClick={() => setStep('confirm')}>
-                  Skip
-                </Button>
-              )}
               {step === 'configure' && (
                 <Button onClick={handleContinue}>
                   Continue
                   <ArrowRight className="ml-1 size-4" />
                 </Button>
               )}
-              {step === 'test' && !testConnection.isPending && (
-                <Button onClick={handleContinue}>
+              {step === 'diagnostic' && (
+                <Button onClick={handleContinue} disabled={!diagnosticReady}>
                   Continue
                   <ArrowRight className="ml-1 size-4" />
                 </Button>

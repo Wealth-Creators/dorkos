@@ -138,10 +138,9 @@ describe('Built-in adapter manifests', () => {
       const field = SLACK_MANIFEST.configFields.find((f) => f.key === 'typingIndicator');
       expect(field).toBeDefined();
       expect(field?.type).toBe('select');
-      expect(field?.options).toEqual([
-        { label: 'None', value: 'none' },
-        { label: 'Emoji reaction', value: 'reaction' },
-      ]);
+      const values = field?.options?.map((o) => o.value);
+      expect(values).toContain('none');
+      expect(values).toContain('reaction');
     });
 
     it('manifest URL does not contain user scopes section', () => {

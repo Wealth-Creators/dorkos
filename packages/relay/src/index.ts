@@ -99,6 +99,7 @@ export type {
   TelegramAdapterConfig,
   WebhookAdapterConfig,
   SlackAdapterConfig,
+  SmsAdapterConfig,
   AdapterRegistryLike,
   PublishResultLike,
   AdapterInboundCallbacks,
@@ -115,6 +116,7 @@ export { AdapterRegistry } from './adapter-registry.js';
 export { TelegramAdapter, TELEGRAM_MANIFEST } from './adapters/telegram/index.js';
 export { WebhookAdapter, verifySignature, WEBHOOK_MANIFEST } from './adapters/webhook/index.js';
 export { SlackAdapter, SLACK_MANIFEST } from './adapters/slack/index.js';
+export { SmsAdapter, SMS_MANIFEST } from './adapters/sms/index.js';
 
 // Built-in adapters
 export { ClaudeCodeAdapter, CLAUDE_CODE_MANIFEST } from './adapters/claude-code/index.js';

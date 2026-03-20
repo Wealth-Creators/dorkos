@@ -59,6 +59,7 @@ const RESUME_FAILURE_PATTERNS = [
   'no such file',
   'enoent',
   'process exited with code',
+  'no conversation found',
 ];
 
 /** Detect whether an error indicates a failed SDK session resume. */

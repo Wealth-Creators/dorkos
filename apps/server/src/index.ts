@@ -18,6 +18,7 @@ import { AdapterManager } from './services/relay/adapter-manager.js';
 import { TraceStore } from './services/relay/trace-store.js';
 import { MeshCore } from '@dorkos/mesh';
 import { createMeshRouter } from './routes/mesh.js';
+import { FigmaClient } from './services/core/figma-client.js';
 import { setMeshEnabled, setMeshInitError } from './services/mesh/mesh-state.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
@@ -221,6 +222,10 @@ async function start() {
   // Register MCP tool server factory — only available with ClaudeCodeRuntime.
   // In test mode claudeRuntime is null so the MCP server and /mcp route are skipped.
   if (claudeRuntime) {
+    const figmaClient = env.FIGMA_ACCESS_TOKEN
+      ? new FigmaClient({ accessToken: env.FIGMA_ACCESS_TOKEN })
+      : undefined;
+
     const mcpToolDeps = {
       transcriptReader: claudeRuntime.getTranscriptReader(),
       defaultCwd: env.DORKOS_DEFAULT_CWD ?? process.cwd(),
@@ -230,6 +235,7 @@ async function start() {
       ...(adapterManager && { bindingStore: adapterManager.getBindingStore() }),
       ...(traceStore && { traceStore }),
       ...(meshCore && { meshCore }),
+      ...(figmaClient && { figmaClient }),
     };
     claudeRuntime.setMcpServerFactory(() => ({ dorkos: createDorkOsToolServer(mcpToolDeps) }));
 

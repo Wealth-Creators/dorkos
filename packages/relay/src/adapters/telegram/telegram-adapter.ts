@@ -84,8 +84,6 @@ For local development, use a tunnel service (e.g., ngrok, Cloudflare Tunnel).` }
       description: 'Secret token for validating incoming webhook requests from Telegram.',
       showWhen: { field: 'mode', equals: 'webhook' } },
   ],
-  setupInstructions:
-    'Open Telegram and search for @BotFather. Send /newbot, choose a name and username. Copy the token provided.',
 };
 
 /**

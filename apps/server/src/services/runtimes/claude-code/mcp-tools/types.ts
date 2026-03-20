@@ -5,6 +5,7 @@ import type { AdapterManager } from '../../../relay/adapter-manager.js';
 import type { BindingStore } from '../../../relay/binding-store.js';
 import type { TraceStore } from '../../../relay/trace-store.js';
 import type { MeshCore } from '@dorkos/mesh';
+import type { FigmaClient } from '../../../core/figma-client.js';
 
 /**
  * Explicit dependency interface for MCP tool handlers.
@@ -14,6 +15,8 @@ export interface McpToolDeps {
   transcriptReader: TranscriptReader;
   /** The default working directory for the server */
   defaultCwd: string;
+  /** The agent ID of this DorkOS instance — used to tag agent-created schedules */
+  selfAgentId?: string;
   /** Optional Pulse store — undefined when Pulse is disabled */
   pulseStore?: PulseStore;
   /** Optional RelayCore — undefined when Relay is disabled */
@@ -26,6 +29,8 @@ export interface McpToolDeps {
   bindingStore?: BindingStore;
   /** Optional MeshCore — undefined when Mesh is disabled */
   meshCore?: MeshCore;
+  /** Optional Figma client — undefined when FIGMA_ACCESS_TOKEN is not set */
+  figmaClient?: FigmaClient;
 }
 
 /** Helper to return a JSON content block for MCP tool responses. */

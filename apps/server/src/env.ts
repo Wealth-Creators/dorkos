@@ -16,6 +16,8 @@ const serverEnvSchema = z.object({
   CLIENT_DIST_PATH: z.string().optional(),
   // MCP external server — optional API key for authenticated access
   MCP_API_KEY: z.string().optional(),
+  // Figma — optional Personal Access Token for design-to-code MCP tools
+  FIGMA_ACCESS_TOKEN: z.string().optional(),
   // Feature flags (boolean after transform)
   DORKOS_PULSE_ENABLED: boolFlag,
   DORKOS_RELAY_ENABLED: boolFlag,

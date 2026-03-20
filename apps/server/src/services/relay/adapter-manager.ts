@@ -21,6 +21,7 @@ import {
   TELEGRAM_MANIFEST,
   WEBHOOK_MANIFEST,
   SLACK_MANIFEST,
+  SMS_MANIFEST,
   CLAUDE_CODE_MANIFEST,
 } from '@dorkos/relay';
 import type {
@@ -546,6 +547,7 @@ export class AdapterManager {
     this.manifests.set('telegram', TELEGRAM_MANIFEST);
     this.manifests.set('webhook', WEBHOOK_MANIFEST);
     this.manifests.set('slack', SLACK_MANIFEST);
+    this.manifests.set('sms', SMS_MANIFEST);
     this.manifests.set('claude-code', CLAUDE_CODE_MANIFEST);
   }
 
