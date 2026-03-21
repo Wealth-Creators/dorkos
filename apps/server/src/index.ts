@@ -132,7 +132,7 @@ async function start() {
       traceStore = new TraceStore(db);
       logger.info('[Relay] TraceStore initialized');
 
-      relayCore = new RelayCore({ dataDir: relayDataDir, adapterRegistry, db, traceStore });
+      relayCore = new RelayCore({ dataDir: relayDataDir, adapterRegistry, db, traceStore, logger });
       await relayCore.registerEndpoint('relay.system.console');
       logger.info(`[Relay] RelayCore initialized (dataDir: ${relayDataDir})`);
     } catch (err) {
@@ -253,7 +253,7 @@ async function start() {
       retentionCount: schedulerConfig.retentionCount,
       timezone: schedulerConfig.timezone,
     }, relayCore, meshCore);
-    app.use('/api/pulse', createPulseRouter(pulseStore, schedulerService, meshCore));
+    app.use('/api/pulse', createPulseRouter(pulseStore, schedulerService, dorkHome, meshCore));
     setPulseEnabled(true);
     logger.info('[Pulse] Routes mounted and scheduler configured');
 
@@ -394,8 +394,11 @@ async function shutdownServices() {
   await tunnelManager.stop();
 }
 
-// Graceful shutdown
+// Graceful shutdown — guarded against concurrent signals (SIGINT + SIGTERM)
+let shuttingDown = false;
 async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info('Shutting down...');
   await shutdownServices();
   process.exit(0);

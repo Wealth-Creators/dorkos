@@ -208,7 +208,7 @@ export class SmsAdapter extends BaseRelayAdapter {
   }
 
   /** Build callbacks for inbound message handling. */
-  private makeInboundCallbacks(): AdapterInboundCallbacks {
+  protected makeInboundCallbacks(): AdapterInboundCallbacks {
     return {
       trackInbound: () => this.trackInbound(),
       recordError: (err: unknown) => this.recordError(err),
@@ -216,7 +216,7 @@ export class SmsAdapter extends BaseRelayAdapter {
   }
 
   /** Build callbacks for outbound message delivery. */
-  private makeOutboundCallbacks(): AdapterOutboundCallbacks {
+  protected makeOutboundCallbacks(): AdapterOutboundCallbacks {
     return {
       trackOutbound: () => this.trackOutbound(),
       recordError: (err: unknown) => this.recordError(err),

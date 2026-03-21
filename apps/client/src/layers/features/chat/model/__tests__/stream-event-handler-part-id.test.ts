@@ -17,18 +17,26 @@ function createMinimalDeps() {
   const setEstimatedTokens = vi.fn();
   const setStreamStartTime = vi.fn();
   const setIsTextStreaming = vi.fn();
+  const setRateLimitRetryAfter = vi.fn();
+  const setIsRateLimited = vi.fn();
+  const setSystemStatus = vi.fn();
+  const rateLimitClearRef = { current: null };
+  const orphanHooksRef = { current: new Map() };
   const onTaskEventRef = { current: undefined };
   const onSessionIdChangeRef = { current: undefined };
   const onStreamingDoneRef = { current: undefined };
+  const thinkingStartRef = { current: null };
 
   const handler = createStreamEventHandler({
     currentPartsRef,
+    orphanHooksRef,
     assistantCreatedRef,
     sessionStatusRef,
     streamStartTimeRef,
     estimatedTokensRef,
     textStreamingTimerRef,
     isTextStreamingRef,
+    thinkingStartRef,
     setMessages,
     setError,
     setStatus,
@@ -36,10 +44,16 @@ function createMinimalDeps() {
     setEstimatedTokens,
     setStreamStartTime,
     setIsTextStreaming,
+    setRateLimitRetryAfter,
+    setIsRateLimited,
+    setSystemStatus,
+    setPromptSuggestions: vi.fn(),
+    rateLimitClearRef,
     sessionId: 'test-session',
     onTaskEventRef,
     onSessionIdChangeRef,
     onStreamingDoneRef,
+    isRemappingRef: { current: false },
   });
 
   return { handler, currentPartsRef, setMessages };

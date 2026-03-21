@@ -5,8 +5,12 @@ import {
   extractTextDelta,
   extractErrorMessage,
   formatForPlatform,
-  SILENT_EVENT_TYPES,
+  extractApprovalData,
+  formatToolDescription,
+  extractAgentIdFromEnvelope,
+  extractSessionIdFromEnvelope,
 } from '../payload-utils.js';
+import type { RelayEnvelope } from '@dorkos/shared/relay-schemas';
 
 describe('extractPayloadContent', () => {
   it('returns string payload directly', () => {
@@ -172,20 +176,95 @@ describe('extractErrorMessage', () => {
   });
 });
 
-describe('SILENT_EVENT_TYPES', () => {
-  it('contains expected event types', () => {
-    expect(SILENT_EVENT_TYPES.has('session_status')).toBe(true);
-    expect(SILENT_EVENT_TYPES.has('tool_call_start')).toBe(true);
-    expect(SILENT_EVENT_TYPES.has('tool_call_delta')).toBe(true);
-    expect(SILENT_EVENT_TYPES.has('tool_call_end')).toBe(true);
-    expect(SILENT_EVENT_TYPES.has('tool_result')).toBe(true);
-    expect(SILENT_EVENT_TYPES.has('task_update')).toBe(true);
+describe('extractApprovalData', () => {
+  it('returns approval data from valid approval_required payload', () => {
+    const payload = {
+      type: 'approval_required',
+      data: {
+        toolCallId: 'toolu_123',
+        toolName: 'Write',
+        input: '{"path":"src/index.ts","content":"hello"}',
+        timeoutMs: 600000,
+      },
+    };
+    const result = extractApprovalData(payload);
+    expect(result).toEqual({
+      toolCallId: 'toolu_123',
+      toolName: 'Write',
+      input: '{"path":"src/index.ts","content":"hello"}',
+      timeoutMs: 600000,
+    });
   });
 
-  it('does not contain content event types', () => {
-    expect(SILENT_EVENT_TYPES.has('text_delta')).toBe(false);
-    expect(SILENT_EVENT_TYPES.has('done')).toBe(false);
-    expect(SILENT_EVENT_TYPES.has('error')).toBe(false);
+  it('returns null for non-approval_required payload', () => {
+    expect(extractApprovalData({ type: 'text_delta', data: { text: 'hi' } })).toBeNull();
+  });
+
+  it('returns null for missing toolCallId', () => {
+    expect(extractApprovalData({ type: 'approval_required', data: { toolName: 'Write' } })).toBeNull();
+  });
+
+  it('returns null for missing toolName', () => {
+    expect(extractApprovalData({ type: 'approval_required', data: { toolCallId: 'x' } })).toBeNull();
+  });
+
+  it('returns null for null payload', () => {
+    expect(extractApprovalData(null)).toBeNull();
+  });
+
+  it('returns null for string payload', () => {
+    expect(extractApprovalData('hello')).toBeNull();
+  });
+
+  it('defaults input to empty string when missing', () => {
+    const result = extractApprovalData({
+      type: 'approval_required',
+      data: { toolCallId: 'x', toolName: 'Write' },
+    });
+    expect(result?.input).toBe('');
+  });
+
+  it('defaults timeoutMs to 600000 when missing', () => {
+    const result = extractApprovalData({
+      type: 'approval_required',
+      data: { toolCallId: 'x', toolName: 'Write' },
+    });
+    expect(result?.timeoutMs).toBe(600_000);
+  });
+});
+
+describe('formatToolDescription', () => {
+  it('describes Write tool with file path', () => {
+    expect(formatToolDescription('Write', '{"path":"src/index.ts","content":"x"}')).toBe(
+      'wants to write to `src/index.ts`',
+    );
+  });
+
+  it('describes Edit tool with file_path', () => {
+    expect(formatToolDescription('Edit', '{"file_path":"src/app.ts"}')).toBe(
+      'wants to edit `src/app.ts`',
+    );
+  });
+
+  it('describes Bash tool with short command', () => {
+    expect(formatToolDescription('Bash', '{"command":"ls -la"}')).toBe(
+      'wants to run `ls -la`',
+    );
+  });
+
+  it('truncates long Bash commands', () => {
+    const longCmd = 'a'.repeat(100);
+    const result = formatToolDescription('Bash', JSON.stringify({ command: longCmd }));
+    expect(result.length).toBeLessThan(80);
+    expect(result).toContain('...');
+  });
+
+  it('falls back to generic description for unknown tools', () => {
+    expect(formatToolDescription('CustomTool', '{}')).toBe('wants to use tool `CustomTool`');
+  });
+
+  it('falls back to generic description for non-JSON input', () => {
+    expect(formatToolDescription('Write', 'not json')).toBe('wants to use tool `Write`');
   });
 });
 
@@ -216,8 +295,62 @@ describe('formatForPlatform', () => {
   });
 
   describe('telegram', () => {
-    it('passes through unchanged', () => {
-      expect(formatForPlatform('**bold**', 'telegram')).toBe('**bold**');
+    it('converts bold text', () => {
+      expect(formatForPlatform('**bold**', 'telegram')).toBe('<b>bold</b>');
+    });
+
+    it('converts italic text', () => {
+      expect(formatForPlatform('*italic*', 'telegram')).toBe('<i>italic</i>');
+    });
+
+    it('converts strikethrough text', () => {
+      expect(formatForPlatform('~~struck~~', 'telegram')).toBe('<s>struck</s>');
+    });
+
+    it('converts inline code', () => {
+      expect(formatForPlatform('use `npm install`', 'telegram')).toBe('use <code>npm install</code>');
+    });
+
+    it('converts code blocks with language hint', () => {
+      const input = '```typescript\nconst x = 1;\n```';
+      expect(formatForPlatform(input, 'telegram')).toBe(
+        '<pre><code class="language-typescript">const x = 1;</code></pre>',
+      );
+    });
+
+    it('converts code blocks without language hint', () => {
+      const input = '```\nplain code\n```';
+      expect(formatForPlatform(input, 'telegram')).toBe('<pre><code>plain code</code></pre>');
+    });
+
+    it('converts links', () => {
+      expect(formatForPlatform('[Google](https://google.com)', 'telegram')).toBe(
+        '<a href="https://google.com">Google</a>',
+      );
+    });
+
+    it('converts headings to bold', () => {
+      expect(formatForPlatform('# Title', 'telegram')).toBe('<b>Title</b>');
+      expect(formatForPlatform('### Subtitle', 'telegram')).toBe('<b>Subtitle</b>');
+    });
+
+    it('escapes HTML entities before tag insertion', () => {
+      expect(formatForPlatform('a < b & c > d', 'telegram')).toBe('a &lt; b &amp; c &gt; d');
+    });
+
+    it('handles mixed formatting', () => {
+      const input = '**bold** and *italic* with `code`';
+      expect(formatForPlatform(input, 'telegram')).toBe(
+        '<b>bold</b> and <i>italic</i> with <code>code</code>',
+      );
+    });
+
+    it('returns empty string for empty input', () => {
+      expect(formatForPlatform('', 'telegram')).toBe('');
+    });
+
+    it('returns plain text unchanged when no markdown', () => {
+      expect(formatForPlatform('hello world', 'telegram')).toBe('hello world');
     });
   });
 
@@ -241,5 +374,69 @@ describe('formatForPlatform', () => {
     it('strips heading markers', () => {
       expect(formatForPlatform('## Heading', 'plain')).toBe('Heading');
     });
+  });
+});
+
+// Helper to build a minimal RelayEnvelope for tests
+function makeEnvelope(payload: unknown): RelayEnvelope {
+  return {
+    id: 'test-id',
+    subject: 'relay.test',
+    payload,
+    ts: Date.now(),
+  } as RelayEnvelope;
+}
+
+describe('extractAgentIdFromEnvelope', () => {
+  it('returns the agentId when payload.data.agentId is present', () => {
+    const envelope = makeEnvelope({ type: 'approval_required', data: { agentId: 'agent-abc', ccaSessionKey: 'sess-1' } });
+    expect(extractAgentIdFromEnvelope(envelope)).toBe('agent-abc');
+  });
+
+  it('returns undefined when payload has no data field', () => {
+    const envelope = makeEnvelope({ type: 'text_delta' });
+    expect(extractAgentIdFromEnvelope(envelope)).toBeUndefined();
+  });
+
+  it('returns undefined when data has no agentId field', () => {
+    const envelope = makeEnvelope({ type: 'approval_required', data: { ccaSessionKey: 'sess-1' } });
+    expect(extractAgentIdFromEnvelope(envelope)).toBeUndefined();
+  });
+
+  it('returns undefined when payload is a string', () => {
+    const envelope = makeEnvelope('plain text');
+    expect(extractAgentIdFromEnvelope(envelope)).toBeUndefined();
+  });
+
+  it('returns undefined when payload is null', () => {
+    const envelope = makeEnvelope(null);
+    expect(extractAgentIdFromEnvelope(envelope)).toBeUndefined();
+  });
+});
+
+describe('extractSessionIdFromEnvelope', () => {
+  it('returns the ccaSessionKey when payload.data.ccaSessionKey is present', () => {
+    const envelope = makeEnvelope({ type: 'approval_required', data: { agentId: 'agent-abc', ccaSessionKey: 'sess-xyz' } });
+    expect(extractSessionIdFromEnvelope(envelope)).toBe('sess-xyz');
+  });
+
+  it('returns undefined when payload has no data field', () => {
+    const envelope = makeEnvelope({ type: 'text_delta' });
+    expect(extractSessionIdFromEnvelope(envelope)).toBeUndefined();
+  });
+
+  it('returns undefined when data has no ccaSessionKey field', () => {
+    const envelope = makeEnvelope({ type: 'approval_required', data: { agentId: 'agent-abc' } });
+    expect(extractSessionIdFromEnvelope(envelope)).toBeUndefined();
+  });
+
+  it('returns undefined when payload is a string', () => {
+    const envelope = makeEnvelope('plain text');
+    expect(extractSessionIdFromEnvelope(envelope)).toBeUndefined();
+  });
+
+  it('returns undefined when payload is null', () => {
+    const envelope = makeEnvelope(null);
+    expect(extractSessionIdFromEnvelope(envelope)).toBeUndefined();
   });
 });

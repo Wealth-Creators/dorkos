@@ -15,6 +15,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.18.0] - 2026-03-19
+
+> Chat simulator, interactive tool fixes, and developer guide refresh
+
+### Added
+
+- Add chat simulator to Dev Playground for testing streaming, tool approval, and question flows without a live agent
+
+### Changed
+
+- Reconcile developer guides and external docs with recent architecture changes
+- Add test-results directory to .gitignore
+
+### Fixed
+
+- Fix stuck input bar and 404 errors in AskUserQuestion flow
+- Fix createPulseRouter missing dorkHome parameter
+- Fix tunnel CORS test using hardcoded port instead of dynamic assignment
+
+## [0.17.2] - 2026-03-19
+
+> Dev port convention update and test reliability fixes
+
+### Changed
+
+- Update dev port convention from 4xxx to 6xxx for simultaneous dev/production operation
+- Move tunnel port resolution to call time so tests can override VITE_PORT
+- Move `createTestDb` to `@dorkos/test-utils/db` subpath to avoid pulling Node.js-only db into jsdom tests
+
+### Fixed
+
+- Fix 153 client test failures caused by NODE_ENV=production leaking into jsdom environment
+- Fix error handler and tunnel tests failing when shell has NODE_ENV=production
+- Fix getCommands test finding real `.claude/commands/` from repo root
+
+---
+
+## [0.17.1] - 2026-03-19
+
+> Streaming message integrity and reliability fixes
+
+### Added
+
+- Document Claude Agent SDK Message History and Session Listing API for research library
+
+### Fixed
+
+- Prevent session remap flash and merge consecutive assistant JSONL entries
+- Eliminate message flash and disappearing errors on stream completion
+- Pause background-tab polling for always-on query hooks
+- Add hourglass reaction immediately and clean up orphaned reactions
+
+---
+
+## [0.17.0] - 2026-03-18
+
+> CLI polish, Apple-style field grouping, and relay hardening
+
+### Added
+
+- Improve CLI UX with clickable URLs, unknown option handling, and browser open prompt
+- Add FieldCard primitives and apply Apple-style field grouping
+
+### Changed
+
+- Move platform formatting rules into adapters
+- Eliminate DRY violations, enforce file size limits, and instance-scope mutable state
+
+### Fixed
+
+- Populate sender on index rebuild and fix stale TSDoc
+- Fix second hasStarted bug in updateSession and add resume diagnostics
+- Fix per-sender rate limiting, add publish rejection logging and inbound result checks
+- Prevent new sessions from crashing with invalid SDK resume ID
+- Enhance Slack inbound message handling with improved reaction management
+- Add inbound typing reaction with FIFO cleanup on stream completion
+- Improve ConfigFieldInput layout, error UX, and password toggle
+- Persist session map across restarts for Slack DM continuity
+- Extract binding permissionMode in CCA agent handler
+- Clear pending approval timeouts on SlackAdapter stop
+
+---
+
+## [0.16.0] - 2026-03-18
+
+> Interactive tool approval, standardized form fields, and resilient streaming
+
+### Added
+
+- Standardize form fields with Shadcn Field, SettingRow, and PasswordInput
+- Add interactive tool approval for Slack and Telegram adapters
+- Add dedicated Forms page and split registry into per-page section files
+- Add data path debug toggles for cross-client sync and message polling
+- Add unified input zone for interactive cards
+- Add 4 sidebar component showcases to dev playground
+
+### Fixed
+
+- Flush stream buffer before posting tool approval cards
+- Move empty-stream and retry-depth tests into sendMessage() describe block
+- Break infinite SDK retry loop and surface errors to adapters
+- Prevent tool_call_end from overwriting pending status on interactive tool calls
+
+---
+
+## [0.15.0] - 2026-03-17
+
+> Multi-client awareness, extended thinking visibility, and dev playground overhaul
+
+### Added
+
+- Add multi-client presence indicator, subagent/hook lifecycle visibility, and tool call enhancements
+- Implement tool-approval-timeout-visibility, prompt-suggestion-chips, multi-client-session-indicator
+- Add transport error categorization and retry affordance
+- Truncate tool results at 5KB with raw JSON fallback for large payloads
+- Surface SDK system status messages and compact boundary events in chat UI
+- Implement result-error-distinction, extended-thinking-visibility, and tool-progress-streaming
+- Add rate-limit countdown UI and prop threading
+- Add subagent lifecycle visibility to chat UI
+- Redesign QuestionPrompt and unify compact final states
+- Add scrollspy TOC, Cmd+K search, and overview landing page to Dev Playground
+- Implement navigation overhaul for Dev Playground with improved sidebar and routing
+- Add 14 missing component showcases to dev playground
+- Add slugify, copyable names, and responsive viewport toggle to dev playground
+- Add multi-select and 3-tab question showcases to design system
+- Add hook lifecycle showcase and refactor stream-event-handler
+- Add ClientsItem presence indicator showcase to design system
+- Add ToolApproval countdown timer showcases to design system
+- Add truncated tool result showcase to design system
+- Add SystemStatusZone to design system showcase
+- Add ErrorMessageBlock and ThinkingBlock showcases
+- Add rate-limit states to InferenceIndicator showcase
+- Add SubagentBlock to design system showcase
+
+### Changed
+
+- Unify ToolApproval and QuestionPrompt container styling
+- Extract shared primitives from duplicated chat UI components
+- Reconcile contributing guides with recent commits (37 commits since 2026-03-12)
+- Improve playground UX with demo wells and DRY cleanup
+
+### Fixed
+
+- Add setSystemStatusWithClear to useMemo deps
+- Stabilize ThinkingBlock tests — remove motion mock, add cleanup
+
+---
+
 ## [0.14.0] - 2026-03-16
 
 > Binding-level permissions, relay panel redesign, and SDK command discovery
@@ -516,7 +664,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keyboard shortcuts for navigation
 - Directory picker for working directory selection
 
-[Unreleased]: https://github.com/dork-labs/dorkos/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/dork-labs/dorkos/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/dork-labs/dorkos/compare/v0.17.2...v0.18.0
+[0.17.2]: https://github.com/dork-labs/dorkos/compare/v0.17.1...v0.17.2
+[0.17.1]: https://github.com/dork-labs/dorkos/compare/v0.17.0...v0.17.1
+[0.17.0]: https://github.com/dork-labs/dorkos/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/dork-labs/dorkos/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/dork-labs/dorkos/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/dork-labs/dorkos/compare/v0.13.1...v0.14.0
+[0.13.1]: https://github.com/dork-labs/dorkos/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/dork-labs/dorkos/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/dork-labs/dorkos/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/dork-labs/dorkos/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/dork-labs/dorkos/compare/v0.9.1...v0.10.0

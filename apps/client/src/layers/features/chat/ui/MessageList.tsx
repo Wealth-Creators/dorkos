@@ -56,10 +56,15 @@ interface MessageListProps {
   permissionMode?: PermissionMode;
   isWaitingForUser?: boolean;
   waitingType?: 'approval' | 'question';
+  isRateLimited?: boolean;
+  rateLimitRetryAfter?: number | null;
   activeToolCallId?: string | null;
   onToolRef?: (handle: InteractiveToolHandle | null) => void;
   focusedOptionIndex?: number;
   onToolDecided?: (toolCallId: string) => void;
+  onRetry?: () => void;
+  /** Tool call ID being handled in the input zone, or null. */
+  inputZoneToolCallId?: string | null;
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
@@ -74,10 +79,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     permissionMode,
     isWaitingForUser,
     waitingType,
+    isRateLimited,
+    rateLimitRetryAfter,
     activeToolCallId,
     onToolRef,
     focusedOptionIndex,
     onToolDecided,
+    onRetry,
+    inputZoneToolCallId,
   },
   ref
 ) {
@@ -290,6 +299,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   onToolRef={onToolRef}
                   focusedOptionIndex={focusedOptionIndex}
                   onToolDecided={onToolDecided}
+                  onRetry={onRetry}
+                  inputZoneToolCallId={inputZoneToolCallId}
                 />
               </div>
             );
@@ -305,6 +316,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               permissionMode={permissionMode}
               isWaitingForUser={isWaitingForUser}
               waitingType={waitingType}
+              isRateLimited={isRateLimited}
+              rateLimitRetryAfter={rateLimitRetryAfter}
             />
           </div>
         </div>

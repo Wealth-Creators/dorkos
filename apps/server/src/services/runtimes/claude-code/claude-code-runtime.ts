@@ -106,7 +106,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     this.cwd = cwd ?? DEFAULT_CWD;
     this.claudeCliPath = resolveClaudeCliPath();
     this.transcriptReader = new TranscriptReader();
-    this.broadcaster = new SessionBroadcaster(this.transcriptReader);
+    this.broadcaster = new SessionBroadcaster(this.transcriptReader, this.lockManager);
   }
 
   // ---------------------------------------------------------------------------
@@ -214,10 +214,14 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   ): boolean {
     let session = this.findSession(sessionId);
     if (!session) {
+      // Auto-create with hasStarted=false — sendMessage will check the transcript
+      // on disk before deciding whether to resume. Setting true here would crash
+      // new sessions (sdkSessionId is a DorkOS UUID, not a real SDK session ID).
       this.ensureSession(sessionId, {
         permissionMode: opts.permissionMode ?? 'default',
-        hasStarted: true,
+        hasStarted: false,
       });
+      this.sessions.get(sessionId)!.needsTranscriptCheck = true;
       session = this.sessions.get(sessionId)!;
     }
     if (opts.permissionMode) {
@@ -248,13 +252,40 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     content: string,
     opts?: MessageOpts
   ): AsyncGenerator<StreamEvent> {
-    // Auto-create session if it doesn't exist (for resuming SDK sessions).
+    // Auto-create session if it doesn't exist.
+    // Only set hasStarted=true when a JSONL transcript already exists on disk
+    // (e.g. session created by CLI or a prior server run). Brand new sessions
+    // must start with hasStarted=false to avoid passing a DorkOS UUID as the
+    // SDK resume ID, which crashes the Claude Code process.
     if (!this.sessions.has(sessionId)) {
+      const effectiveCwd = opts?.cwd ?? this.cwd;
+      const hasTranscript = await this.transcriptReader.hasTranscript(effectiveCwd, sessionId);
+      logger.debug('[sendMessage] auto-creating session', {
+        session: sessionId,
+        hasTranscript,
+        cwd: effectiveCwd,
+      });
       this.ensureSession(sessionId, {
         permissionMode: opts?.permissionMode ?? 'default',
         cwd: opts?.cwd,
-        hasStarted: true,
+        hasStarted: hasTranscript,
       });
+    } else {
+      const existingSession = this.sessions.get(sessionId)!;
+      // If updateSession auto-created the session (e.g. model change before first
+      // message after server restart), hasStarted is false and needsTranscriptCheck
+      // is set. Check transcript on disk so we correctly resume.
+      if (existingSession.needsTranscriptCheck) {
+        existingSession.needsTranscriptCheck = false;
+        const effectiveCwd = opts?.cwd || existingSession.cwd || this.cwd;
+        const hasTranscript = await this.transcriptReader.hasTranscript(effectiveCwd, sessionId);
+        if (hasTranscript) {
+          logger.debug('[sendMessage] upgrading hasStarted for existing transcript', {
+            session: sessionId,
+          });
+          existingSession.hasStarted = true;
+        }
+      }
     }
 
     const session = this.sessions.get(sessionId)!;
@@ -345,6 +376,37 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   /** Get the ETag for a session's transcript. */
   async getSessionETag(projectDir: string, sessionId: string): Promise<string | null> {
     return this.transcriptReader.getTranscriptETag(projectDir, sessionId);
+  }
+
+  /** @inheritdoc */
+  async getLastMessageIds(
+    sessionId: string,
+  ): Promise<{ user: string; assistant: string } | null> {
+    try {
+      const session = this.findSession(sessionId);
+      const projectDir = session?.cwd ?? this.cwd;
+      const messages = await this.transcriptReader.readTranscript(projectDir, sessionId);
+      if (!messages.length) return null;
+
+      let lastUser: string | null = null;
+      let lastAssistant: string | null = null;
+
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (!lastAssistant && m.role === 'assistant') lastAssistant = m.id;
+        if (!lastUser && m.role === 'user') lastUser = m.id;
+        if (lastUser && lastAssistant) break;
+      }
+
+      if (!lastUser || !lastAssistant) return null;
+      return { user: lastUser, assistant: lastAssistant };
+    } catch (err) {
+      logger.warn('[getLastMessageIds] failed to read transcript', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
   }
 
   /** Read new content from a session transcript starting at a byte offset. */

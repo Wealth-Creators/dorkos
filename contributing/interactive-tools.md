@@ -174,7 +174,10 @@ if (tc.interactiveType === 'question' && tc.questions) {
 
 ```typescript
 await transport.submitAnswers(sessionId, toolCallId, answers);
+onDecided?.(); // Optimistically clear waiting state (same pattern as ToolApproval)
 ```
+
+Both `QuestionPrompt` and `ToolApproval` treat HTTP 409 (`INTERACTION_ALREADY_RESOLVED`) as success — this handles the race condition where the SDK resolves the interaction before the client's HTTP request arrives.
 
 **6. Transport resolves the deferred promise**
 
@@ -429,6 +432,8 @@ submitMyNewResult(sessionId: string, toolCallId: string, result: MyResult): bool
 
 Implement in `HttpTransport` (POST to a new route) and `DirectTransport` (call the runtime directly).
 
+**Important:** Handle 409 responses in your transport method. The server returns 409 with `{ code: 'INTERACTION_ALREADY_RESOLVED' }` when the SDK resolves the interaction before the HTTP request arrives. Treat this as success in the client.
+
 ### Step 4: Add route (HttpTransport only)
 
 ```typescript
@@ -524,6 +529,27 @@ Every deferred promise includes a 10-minute timeout (`SESSIONS.INTERACTION_TIMEO
 
 The timeout is cleared whenever the interaction is resolved normally (user responds or interaction is cancelled).
 
+### Force-Complete Safety Net
+
+The stream `done` handler sweeps any remaining pending interactive tool calls to `'complete'` status. This ensures the UI never gets stuck in an interactive waiting state after the stream ends, even if a `tool_result` event was missed or arrived out of order.
+
+### Timeout Visibility
+
+The `ToolApproval` component makes the server-side timeout visible to users via a countdown timer. The server includes `timeoutMs` in the `approval_required` SSE event, which flows through the stream event handler to the component.
+
+**Visual indicators:**
+- A thin progress bar (4px) drains over the timeout duration via CSS `@keyframes drain` animation (GPU-composited, zero JS cost)
+- Bar color transitions: neutral → amber at 2 minutes remaining → red at 1 minute remaining
+- Text countdown (`M:SS remaining`) appears only in the final 2 minutes
+- On timeout: card transitions to denied state with explanation message
+
+**Accessibility:**
+- Progress bar has `role="progressbar"` with `aria-valuemin`, `aria-valuemax`, `aria-valuenow`, and `aria-valuetext`
+- Screen reader announcements via `aria-live="assertive"` fire only at threshold crossings (2 min, 1 min, timeout)
+- `prefers-reduced-motion` respected via `motion-safe:` Tailwind prefix — animation disabled, color transitions remain
+
+**Data flow:** Server `handleToolApproval()` → `approval_required` SSE event (includes `timeoutMs: SESSIONS.INTERACTION_TIMEOUT_MS`) → stream-event-handler passes to tool call part → `ToolApproval` renders countdown from `timeoutMs` prop.
+
 ### Transport Abstraction
 
 Both `HttpTransport` and `DirectTransport` implement the same `Transport` interface, so interactive tool components work identically in both environments:
@@ -610,3 +636,39 @@ const result = await promise;
 expect(result.behavior).toBe('allow');
 expect(result.updatedInput.answers).toEqual({ '0': 'Option A' });
 ```
+
+## Hook Lifecycle Events
+
+When users configure hooks in Claude Code, DorkOS surfaces their execution:
+
+- **Tool-contextual hooks** (PreToolUse, PostToolUse, PostToolUseFailure) appear as sub-rows in ToolCallCard
+- **Session-level hooks** (SessionStart, UserPromptSubmit, etc.) show in SystemStatusZone
+- **Hook failures** are always visible — tool card stays expanded, session failures escalate to error banner
+
+Hook events flow through the standard pipeline: `sdk-event-mapper.ts` → SSE → `stream-event-handler.ts` → `ToolCallCard`.
+
+### Routing Logic
+
+The `hook_event` field on each SDK message determines the rendering surface:
+
+| `hook_event` | Route | Surface |
+|---|---|---|
+| `PreToolUse`, `PostToolUse`, `PostToolUseFailure` | Tool-contextual | Sub-row in ToolCallCard |
+| All others (`SessionStart`, `UserPromptSubmit`, etc.) | Session-level | SystemStatusZone / error banner |
+
+### Orphan Hook Handling
+
+`PreToolUse` hooks may arrive before the associated `tool_call_start` event. These "orphan" hooks are buffered in `orphanHooksRef` (a `Map<string, HookPart[]>` keyed by `toolCallId`) and attached to the tool call when `tool_call_start` arrives.
+
+### HookRow Visual States
+
+| Status | Icon | Styling |
+|---|---|---|
+| `running` | Spinner (Loader2) | Muted |
+| `success` | Check | Muted |
+| `error` | X | Destructive, auto-expands, shows stderr |
+| `cancelled` | X | Muted |
+
+### Auto-Hide Suppression
+
+When a tool call has any hook with `status === 'error'`, the tool card's auto-hide behavior is suppressed so users can inspect the failure. Tool cards with only successful hooks auto-hide normally.

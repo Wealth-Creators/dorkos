@@ -19,6 +19,7 @@ export {
 export { Badge, badgeVariants } from './badge';
 export { Button, buttonVariants } from './button';
 export type { ButtonSize, ButtonProps } from './button';
+export { Checkbox } from './checkbox';
 export { Collapsible, CollapsibleTrigger, CollapsibleContent } from './collapsible';
 export { Input } from './input';
 export type { InputProps } from './input';
@@ -67,10 +68,28 @@ export {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from './dropdown-menu';
+export {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+  FieldTitle,
+} from './field';
+export { FieldCard, FieldCardContent, CollapsibleFieldCard } from './field-card';
+export type { CollapsibleFieldCardProps } from './field-card';
 export { HoverBorderGradient } from './hover-border-gradient';
 export { HoverCard, HoverCardTrigger, HoverCardContent } from './hover-card';
 export { Kbd } from './kbd';
 export { Label } from './label';
+export { PasswordInput } from './password-input';
+export type { PasswordInputProps } from './password-input';
+export { SettingRow } from './setting-row';
+export type { SettingRowProps } from './setting-row';
 export { PathBreadcrumb } from './path-breadcrumb';
 export {
   Popover,
@@ -81,6 +100,7 @@ export {
   PopoverTitle,
   PopoverDescription,
 } from './popover';
+export { RadioGroup, RadioGroupItem } from './radio-group';
 export {
   NavigationLayout,
   NavigationLayoutBody,
@@ -125,6 +145,7 @@ export {
 } from './select';
 export type { SelectTriggerProps, SelectItemProps } from './select';
 export { Separator } from './separator';
+export { Slider } from './slider';
 export { Switch } from './switch';
 export type { SwitchSize, SwitchProps } from './switch';
 export { Tabs, TabsList, TabsTrigger, TabsContent } from './tabs';

@@ -62,7 +62,7 @@ import { createMeshMethods } from './mesh-methods';
  *
  */
 export class HttpTransport implements Transport {
-  private readonly clientId: string;
+  readonly clientId: string;
   private readonly etagCache = new Map<string, string>();
   private readonly messageCache = new Map<string, { messages: HistoryMessage[] }>();
 
@@ -194,7 +194,7 @@ export class HttpTransport implements Transport {
   ) => Promise<AgentManifest>;
 
   constructor(private baseUrl: string) {
-    this.clientId = crypto.randomUUID();
+    this.clientId = `web-${crypto.randomUUID()}`;
     Object.assign(
       this,
       createPulseMethods(baseUrl),
@@ -266,14 +266,19 @@ export class HttpTransport implements Transport {
     onEvent: (event: StreamEvent) => void,
     signal?: AbortSignal,
     cwd?: string,
+    options?: { clientMessageId?: string },
   ): Promise<void> {
+    const body: Record<string, unknown> = { content };
+    if (cwd) body.cwd = cwd;
+    if (options?.clientMessageId) body.clientMessageId = options.clientMessageId;
+
     const response = await fetch(`${this.baseUrl}/sessions/${sessionId}/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Client-Id': this.clientId,
       },
-      body: JSON.stringify({ content, ...(cwd && { cwd }) }),
+      body: JSON.stringify(body),
       signal,
     });
 

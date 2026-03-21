@@ -10,7 +10,9 @@
  */
 import type { WebClient } from '@slack/web-api';
 import type { StandardPayload } from '@dorkos/shared/relay-schemas';
-import type { RelayPublisher, AdapterInboundCallbacks } from '../../types.js';
+import type { RelayPublisher, AdapterInboundCallbacks, RelayLogger } from '../../types.js';
+import { noopLogger } from '../../types.js';
+import type { PendingReactions } from './stream.js';
 
 // === Constants ===
 
@@ -25,6 +27,17 @@ export const MAX_MESSAGE_LENGTH = 4000;
 
 /** Maximum inbound message content length (32 KB). */
 export const MAX_CONTENT_LENGTH = 32_768;
+
+/** Slack-specific formatting rules injected into agent system prompts via responseContext. */
+const SLACK_FORMATTING_RULES = [
+  'FORMATTING RULES (you MUST follow these):',
+  '- Do NOT use Markdown tables (| col | col |). Slack cannot render them.',
+  '- For structured data: use bullet points, numbered lists, or bold key-value pairs.',
+  '- Example: instead of a table, write "*Name*: Alice\\n*Role*: Engineer"',
+  '- Use *bold* (single asterisk), _italic_ (underscore), `code`, ```code blocks```.',
+  '- Do NOT use ## headings — Slack ignores them. Use *bold text* for section titles.',
+  `- Keep responses concise. Slack messages over ${MAX_MESSAGE_LENGTH} characters are truncated.`,
+].join('\n');
 
 /** Message subtypes to skip (non-user-generated events). */
 const SKIP_SUBTYPES = new Set([
@@ -216,6 +229,40 @@ export function clearCaches(): void {
 }
 
 /**
+ * Remove an eagerly-queued reaction when publish fails or is rejected.
+ *
+ * Removes the entry from the pending queue and issues a fire-and-forget
+ * reactions.remove call so the hourglass doesn't linger on a message
+ * that will never be processed.
+ */
+function removeQueuedReaction(
+  client: WebClient,
+  channelId: string,
+  messageTs: string,
+  pendingReactions: PendingReactions | undefined,
+  wasQueued: boolean,
+  logger: RelayLogger,
+): void {
+  if (!wasQueued) return;
+  if (pendingReactions) {
+    const queue = pendingReactions.get(channelId);
+    if (queue) {
+      const idx = queue.indexOf(messageTs);
+      if (idx !== -1) queue.splice(idx, 1);
+      if (queue.length === 0) pendingReactions.delete(channelId);
+    }
+  }
+  void client.reactions
+    .remove({ channel: channelId, name: 'hourglass_flowing_sand', timestamp: messageTs })
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('no_reaction')) {
+        logger.warn(`inbound: failed to remove queued typing reaction from ${channelId}:${messageTs}: ${msg}`);
+      }
+    });
+}
+
+/**
  * Handle an inbound Slack message and publish it to the Relay.
  *
  * Builds the subject from the channel ID, constructs a StandardPayload,
@@ -228,6 +275,7 @@ export function clearCaches(): void {
  * @param botUserId - The bot's own user ID for echo prevention
  * @param callbacks - Callbacks to mutate adapter state
  * @param requireMention - When true, ignore channel messages that don't mention the bot (DMs are always accepted)
+ * @param logger - Optional relay logger for debug/warn output (defaults to silent)
  */
 export async function handleInboundMessage(
   event: SlackMessageEvent,
@@ -236,16 +284,31 @@ export async function handleInboundMessage(
   botUserId: string,
   callbacks: AdapterInboundCallbacks,
   requireMention = false,
+  logger: RelayLogger = noopLogger,
+  typingIndicator: 'none' | 'reaction' = 'none',
+  pendingReactions?: PendingReactions,
 ): Promise<void> {
   // Skip bot's own messages (echo prevention)
-  if (event.user === botUserId) return;
+  if (event.user === botUserId) {
+    logger.debug(`inbound skipped: echo (own user ${botUserId})`);
+    return;
+  }
 
   // Skip bot messages and non-user subtypes
-  if (event.bot_id) return;
-  if (event.subtype && SKIP_SUBTYPES.has(event.subtype)) return;
+  if (event.bot_id) {
+    logger.debug(`inbound skipped: bot message (bot_id=${event.bot_id})`);
+    return;
+  }
+  if (event.subtype && SKIP_SUBTYPES.has(event.subtype)) {
+    logger.debug(`inbound skipped: subtype '${event.subtype}'`);
+    return;
+  }
 
   // Skip messages without text content
-  if (!event.text) return;
+  if (!event.text) {
+    logger.debug(`inbound skipped: no text content in ${event.channel}`);
+    return;
+  }
 
   const isGroup = isGroupChannel(event.channel);
 
@@ -256,6 +319,38 @@ export async function handleInboundMessage(
 
   // Cap inbound content to prevent oversized payloads
   const content = event.text.slice(0, MAX_CONTENT_LENGTH);
+
+  // Add hourglass reaction immediately — before name resolution and publish
+  // so the user sees feedback within milliseconds of sending their message.
+  // Queue is populated synchronously so the outbound handler can find it
+  // when done/error arrives — even if the Slack API call is still in-flight.
+  let reactionQueued = false;
+  if (typingIndicator === 'reaction') {
+    if (pendingReactions) {
+      const queue = pendingReactions.get(event.channel) ?? [];
+      queue.push(event.ts);
+      pendingReactions.set(event.channel, queue);
+      reactionQueued = true;
+    }
+
+    client.reactions
+      .add({ channel: event.channel, name: 'hourglass_flowing_sand', timestamp: event.ts })
+      .then(() => {
+        logger.debug(`inbound: added typing reaction to ${event.channel}:${event.ts}`);
+      })
+      .catch((err) => {
+        // Remove from queue since the reaction was never actually added.
+        if (pendingReactions) {
+          const queue = pendingReactions.get(event.channel);
+          if (queue) {
+            const idx = queue.indexOf(event.ts);
+            if (idx !== -1) queue.splice(idx, 1);
+            if (queue.length === 0) pendingReactions.delete(event.channel);
+          }
+        }
+        logger.warn(`inbound: failed to add typing reaction to ${event.channel}:${event.ts}: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  }
 
   const senderName = event.user
     ? await resolveUserName(client, event.user)
@@ -275,6 +370,7 @@ export async function handleInboundMessage(
       maxLength: MAX_MESSAGE_LENGTH,
       supportedFormats: ['text', 'mrkdwn'],
       instructions: `Reply to subject ${subject} to respond to this Slack message.`,
+      formattingInstructions: SLACK_FORMATTING_RULES,
     },
     platformData: {
       channelId: event.channel,
@@ -286,12 +382,27 @@ export async function handleInboundMessage(
   };
 
   try {
-    await relay.publish(subject, payload, {
+    const result = await relay.publish(subject, payload, {
       from: `${SUBJECT_PREFIX}.bot`,
       replyTo: subject,
     });
+
+    // Check for rejected publishes (e.g. rate-limited) before tracking or reacting
+    if (result.deliveredTo === 0 && result.rejected?.length) {
+      const reason = result.rejected[0]?.reason ?? 'unknown';
+      callbacks.recordError(new Error(`Publish rejected: ${reason}`));
+      logger.warn(`inbound publish rejected for ${event.channel}: ${reason}`);
+      // Clean up the eagerly-added reaction since nothing will process this message
+      removeQueuedReaction(client, event.channel, event.ts, pendingReactions, reactionQueued, logger);
+      return;
+    }
+
     callbacks.trackInbound();
+    logger.debug(`inbound from ${senderName} in ${event.channel}: "${content.slice(0, 80)}${content.length > 80 ? '\u2026' : ''}" (${content.length} chars) \u2192 ${subject}`);
   } catch (err) {
     callbacks.recordError(err);
+    logger.warn(`inbound publish failed for ${event.channel}:`, err instanceof Error ? err.message : String(err));
+    // Clean up the eagerly-added reaction since nothing will process this message
+    removeQueuedReaction(client, event.channel, event.ts, pendingReactions, reactionQueued, logger);
   }
 }

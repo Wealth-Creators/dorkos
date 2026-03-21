@@ -1,9 +1,27 @@
-import { useState, useImperativeHandle, useCallback, forwardRef } from 'react';
-import { Check, MessageSquare } from 'lucide-react';
+import { useState, useId, useImperativeHandle, useCallback, useRef, forwardRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Check } from 'lucide-react';
 import { useTransport } from '@/layers/shared/model';
-import { cn } from '@/layers/shared/lib';
-import { Tabs, TabsList, TabsTrigger, TabsContent, Kbd } from '@/layers/shared/ui';
+import {
+  Kbd,
+  Button,
+  RadioGroup,
+  RadioGroupItem,
+  Checkbox,
+} from '@/layers/shared/ui';
+import { OptionRow, CompactResultRow, InteractiveCard } from './primitives';
 import type { QuestionItem } from '@dorkos/shared/types';
+
+// --- Animation constants (module-scope to avoid per-render allocation) ---
+
+const collapseTransition = { duration: 0.25, ease: [0.4, 0, 0.2, 1] } as const;
+const fadeTransition = { duration: 0.15, ease: 'easeOut' as const } as const;
+
+const questionSlideVariants = {
+  enter: (d: number) => ({ opacity: 0, x: d * 20 }),
+  center: { opacity: 1, x: 0 },
+  exit: (d: number) => ({ opacity: 0, x: d * -20 }),
+};
 
 interface QuestionPromptProps {
   sessionId: string;
@@ -15,6 +33,8 @@ interface QuestionPromptProps {
   isActive?: boolean;
   /** Which option is focused via keyboard */
   focusedOptionIndex?: number;
+  /** Called after user submits answers, to optimistically clear waiting state */
+  onDecided?: () => void;
 }
 
 export interface QuestionPromptHandle {
@@ -35,16 +55,19 @@ export const QuestionPrompt = forwardRef<QuestionPromptHandle, QuestionPromptPro
       answers: preAnswers,
       isActive = false,
       focusedOptionIndex = -1,
+      onDecided,
     },
     ref
   ) {
     const transport = useTransport();
+    const instanceId = useId();
     const [selections, setSelections] = useState<Record<string, string | string[]>>({});
     const [otherText, setOtherText] = useState<Record<string, string>>({});
     const [submitted, setSubmitted] = useState(!!preAnswers);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState('0');
+    const directionRef = useRef<1 | -1>(1);
 
     const activeQuestion = questions[Number(activeTab)] || questions[0];
     const activeQIdx = Number(activeTab);
@@ -129,13 +152,21 @@ export const QuestionPrompt = forwardRef<QuestionPromptHandle, QuestionPromptPro
       try {
         await transport.submitAnswers(sessionId, toolCallId, answers);
         setSubmitted(true);
+        onDecided?.();
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to submit answers');
+        // If the server says the interaction was already resolved (409), treat as success.
+        const code = (err as { code?: string }).code;
+        if (code === 'INTERACTION_ALREADY_RESOLVED') {
+          setSubmitted(true);
+          onDecided?.();
+        } else {
+          setError(err instanceof Error ? err.message : 'Failed to submit answers');
+        }
       } finally {
         setSubmitting(false);
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentional: isComplete is a local function
-    }, [selections, otherText, submitting, transport, sessionId, toolCallId, questions]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentional: isComplete and onDecided are local/stable
+    }, [selections, otherText, submitting, transport, sessionId, toolCallId, questions, onDecided]);
 
     useImperativeHandle(
       ref,
@@ -176,12 +207,21 @@ export const QuestionPrompt = forwardRef<QuestionPromptHandle, QuestionPromptPro
           if (questions.length <= 1) return;
           const current = Number(activeTab);
           if (direction === 'next' && current < questions.length - 1) {
+            directionRef.current = 1;
             setActiveTab(String(current + 1));
           } else if (direction === 'prev' && current > 0) {
+            directionRef.current = -1;
             setActiveTab(String(current - 1));
           }
         },
         submit() {
+          const currentIdx = Number(activeTab);
+          if (currentIdx < questions.length - 1) {
+            // Advance to next question — actual submission only on the last
+            directionRef.current = 1;
+            setActiveTab(String(currentIdx + 1));
+            return;
+          }
           handleSubmit();
         },
         getOptionCount() {
@@ -204,41 +244,75 @@ export const QuestionPrompt = forwardRef<QuestionPromptHandle, QuestionPromptPro
       ]
     );
 
-    // Collapsed submitted state
-    if (submitted) {
-      const hasSpecificAnswers = preAnswers
-        ? Object.values(preAnswers).some((v) => v !== '')
-        : Object.keys(selections).length > 0;
+    // Navigate to a specific question index by direction
+    function navigateToQuestion(direction: 'prev' | 'next') {
+      const current = Number(activeTab);
+      if (direction === 'next' && current < questions.length - 1) {
+        directionRef.current = 1;
+        setActiveTab(String(current + 1));
+      } else if (direction === 'prev' && current > 0) {
+        directionRef.current = -1;
+        setActiveTab(String(current - 1));
+      }
+    }
+
+    // Render the "Other" free-text option using the appropriate primitive
+    function renderOtherOption(q: QuestionItem, qIdx: number) {
+      const isOtherSelected = q.multiSelect
+        ? ((selections[qIdx] as string[]) || []).includes('__other__')
+        : selections[qIdx] === '__other__';
+      const optionId = `${instanceId}-q-${qIdx}-other`;
+      const oIdx = q.options.length;
 
       return (
-        <div className="my-1 rounded border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm transition-colors duration-200">
-          {hasSpecificAnswers ? (
-            <div className="flex items-start gap-2">
-              <Check className="mt-0.5 size-(--size-icon-md) shrink-0 text-emerald-500" />
-              <div className="min-w-0 space-y-1.5">
-                {questions.map((q, idx) => {
-                  const displayValue = getDisplayValue(q, idx);
-                  if (!displayValue) return null;
-                  return (
-                    <div key={idx}>
-                      <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                        {q.header}
-                      </span>
-                      <p className="text-sm break-words text-emerald-600 dark:text-emerald-400">
-                        {displayValue}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <Check className="size-(--size-icon-md) text-emerald-500" />
-              <span className="text-emerald-600 dark:text-emerald-400">Questions answered</span>
-            </div>
-          )}
-        </div>
+        <OptionRow
+          isSelected={isOtherSelected}
+          isFocused={isActive && focusedOptionIndex === oIdx}
+          data-selected={isOtherSelected}
+          control={
+            q.multiSelect ? (
+              <Checkbox
+                checked={isOtherSelected}
+                id={optionId}
+                disabled={submitting}
+                onCheckedChange={(checked) => handleMultiSelect(qIdx, '__other__', !!checked)}
+              />
+            ) : (
+              <RadioGroupItem value="__other__" id={optionId} disabled={submitting} />
+            )
+          }
+        >
+          <div className="flex-1">
+            <label htmlFor={optionId} className="flex cursor-pointer items-center">
+              <span className="text-sm font-medium">Other</span>
+              {oIdx < 9 && (
+                <Kbd className="ml-auto shrink-0 text-2xs text-muted-foreground">{oIdx + 1}</Kbd>
+              )}
+            </label>
+            <AnimatePresence initial={false}>
+              {isOtherSelected && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={collapseTransition}
+                  className="overflow-hidden"
+                >
+                  <textarea
+                    placeholder="Type your answer..."
+                    rows={2}
+                    value={otherText[qIdx] || ''}
+                    disabled={submitting}
+                    onChange={(e) => handleOtherText(qIdx, e.target.value)}
+                    className="bg-background mt-1 w-full resize-y rounded border border-border px-2 py-1 text-sm focus:ring-1 focus:ring-ring focus:outline-none"
+                    // eslint-disable-next-line jsx-a11y/no-autofocus -- Intentional: focus the answer input when "Other" is selected
+                    autoFocus
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </OptionRow>
       );
     }
 
@@ -246,172 +320,228 @@ export const QuestionPrompt = forwardRef<QuestionPromptHandle, QuestionPromptPro
     function renderQuestionContent(q: QuestionItem, qIdx: number) {
       return (
         <div>
-          <div className="mb-1 flex items-center gap-2">
-            <MessageSquare className="size-(--size-icon-sm) text-amber-500" />
-            <span className="text-sm font-semibold">{q.header}</span>
-          </div>
-          <p className="text-foreground mb-2">{q.question}</p>
+          <p className="text-foreground mb-1.5">{q.question}</p>
 
-          <div className="ml-1 space-y-1.5">
-            {q.options.map((opt, oIdx) => {
-              const isSelected = q.multiSelect
-                ? ((selections[qIdx] as string[]) || []).includes(opt.label)
-                : selections[qIdx] === opt.label;
-
-              return (
-                <label
-                  key={oIdx}
-                  className={cn(
-                    'flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 transition-all duration-150',
-                    isSelected ? 'bg-amber-500/15' : 'hover:bg-amber-500/5',
-                    isActive && focusedOptionIndex === oIdx && 'ring-1 ring-amber-500/50'
-                  )}
-                >
-                  <input
-                    type={q.multiSelect ? 'checkbox' : 'radio'}
-                    name={`q-${qIdx}`}
-                    checked={isSelected}
-                    disabled={submitting}
-                    onChange={(e) => {
-                      if (q.multiSelect) {
-                        handleMultiSelect(qIdx, opt.label, e.target.checked);
-                      } else {
-                        handleSingleSelect(qIdx, opt.label);
-                      }
-                    }}
-                    className="mt-0.5 accent-amber-500"
-                  />
-                  <div>
-                    <span className="font-medium">
-                      {opt.label}
-                      {isActive && oIdx < 9 && <Kbd className="ml-1.5">{oIdx + 1}</Kbd>}
-                    </span>
-                    {opt.description && (
-                      <p className="text-muted-foreground mt-0.5 text-xs">{opt.description}</p>
-                    )}
-                  </div>
-                </label>
-              );
-            })}
-
-            {/* "Other" free-text option */}
-            <label
-              className={cn(
-                'flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 transition-all duration-150',
-                q.multiSelect
-                  ? ((selections[qIdx] as string[]) || []).includes('__other__')
-                    ? 'bg-amber-500/15'
-                    : 'hover:bg-amber-500/5'
-                  : selections[qIdx] === '__other__'
-                    ? 'bg-amber-500/15'
-                    : 'hover:bg-amber-500/5',
-                isActive && focusedOptionIndex === q.options.length && 'ring-1 ring-amber-500/50'
-              )}
+          {!q.multiSelect ? (
+            <RadioGroup
+              value={(selections[qIdx] as string) ?? ''}
+              onValueChange={(value) => handleSingleSelect(qIdx, value)}
+              aria-label={q.question}
+              className="ml-1 gap-1"
             >
-              <input
-                type={q.multiSelect ? 'checkbox' : 'radio'}
-                name={`q-${qIdx}`}
-                checked={
-                  q.multiSelect
-                    ? ((selections[qIdx] as string[]) || []).includes('__other__')
-                    : selections[qIdx] === '__other__'
-                }
-                disabled={submitting}
-                onChange={(e) => {
-                  if (q.multiSelect) {
-                    handleMultiSelect(qIdx, '__other__', e.target.checked);
-                  } else {
-                    handleSingleSelect(qIdx, '__other__');
-                  }
-                }}
-                className="mt-0.5 accent-amber-500"
-              />
-              <div className="flex-1">
-                <span className="font-medium">
-                  Other
-                  {isActive && q.options.length < 9 && (
-                    <Kbd className="ml-1.5">{q.options.length + 1}</Kbd>
-                  )}
-                </span>
-                {(q.multiSelect
-                  ? ((selections[qIdx] as string[]) || []).includes('__other__')
-                  : selections[qIdx] === '__other__') && (
-                  <textarea
-                    placeholder="Type your answer..."
-                    rows={2}
-                    value={otherText[qIdx] || ''}
-                    disabled={submitting}
-                    onChange={(e) => handleOtherText(qIdx, e.target.value)}
-                    className="bg-background mt-1 w-full resize-y rounded border border-amber-500/30 px-2 py-1 text-sm focus:ring-1 focus:ring-amber-500/50 focus:outline-none"
-                    // eslint-disable-next-line jsx-a11y/no-autofocus -- Intentional: focus the answer input when "Other" is selected
-                    autoFocus
-                  />
-                )}
-              </div>
-            </label>
-          </div>
+              {q.options.map((opt, oIdx) => {
+                const isSelected = selections[qIdx] === opt.label;
+                const optionId = `${instanceId}-q-${qIdx}-opt-${oIdx}`;
+                return (
+                  <OptionRow
+                    key={oIdx}
+                    isSelected={isSelected}
+                    isFocused={isActive && focusedOptionIndex === oIdx}
+                    data-selected={isSelected}
+                    control={<RadioGroupItem value={opt.label} id={optionId} disabled={submitting} />}
+                  >
+                    <label htmlFor={optionId} className="flex flex-1 cursor-pointer items-center">
+                      <span className="text-sm font-medium">{opt.label}</span>
+                      {opt.description && (
+                        <span className="text-muted-foreground ml-1.5 text-xs">
+                          {' '}
+                          — {opt.description}
+                        </span>
+                      )}
+                      {oIdx < 9 && (
+                        <Kbd className="ml-auto shrink-0 text-2xs text-muted-foreground">{oIdx + 1}</Kbd>
+                      )}
+                    </label>
+                  </OptionRow>
+                );
+              })}
+
+              {/* "Other" free-text option */}
+              {renderOtherOption(q, qIdx)}
+            </RadioGroup>
+          ) : (
+            <div role="group" aria-label={q.question} className="ml-1 space-y-1">
+              {q.options.map((opt, oIdx) => {
+                const isSelected = ((selections[qIdx] as string[]) || []).includes(opt.label);
+                const optionId = `${instanceId}-q-${qIdx}-opt-${oIdx}`;
+                return (
+                  <OptionRow
+                    key={oIdx}
+                    isSelected={isSelected}
+                    isFocused={isActive && focusedOptionIndex === oIdx}
+                    data-selected={isSelected}
+                    control={
+                      <Checkbox
+                        checked={isSelected}
+                        id={optionId}
+                        disabled={submitting}
+                        onCheckedChange={(checked) =>
+                          handleMultiSelect(qIdx, opt.label, !!checked)
+                        }
+                      />
+                    }
+                  >
+                    <label htmlFor={optionId} className="flex flex-1 cursor-pointer items-center">
+                      <span className="text-sm font-medium">{opt.label}</span>
+                      {opt.description && (
+                        <span className="text-muted-foreground ml-1.5 text-xs">
+                          {' '}
+                          — {opt.description}
+                        </span>
+                      )}
+                      {oIdx < 9 && (
+                        <Kbd className="ml-auto shrink-0 text-2xs text-muted-foreground">{oIdx + 1}</Kbd>
+                      )}
+                    </label>
+                  </OptionRow>
+                );
+              })}
+
+              {/* "Other" free-text option */}
+              {renderOtherOption(q, qIdx)}
+            </div>
+          )}
         </div>
+      );
+    }
+
+    // Build submitted summary content
+    function renderSubmittedRow() {
+      const hasSpecificAnswers = preAnswers
+        ? Object.values(preAnswers).some((v) => v !== '')
+        : Object.keys(selections).length > 0;
+
+      let summaryText = 'Questions answered';
+      if (hasSpecificAnswers) {
+        if (questions.length === 1) {
+          const displayValue = getDisplayValue(questions[0], 0);
+          if (displayValue) {
+            summaryText = `${questions[0].header}: ${displayValue}`;
+          }
+        } else {
+          summaryText = `${questions.length} questions answered`;
+        }
+      }
+
+      return (
+        <CompactResultRow
+          data-testid="question-prompt-submitted"
+          icon={<Check className="size-(--size-icon-sm) shrink-0 text-status-success" />}
+          label={<span className="truncate">{summaryText}</span>}
+        />
+      );
+    }
+
+    // Collapsed submitted state — fade in the compact row
+    if (submitted) {
+      return (
+        <motion.div
+          initial={preAnswers ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={fadeTransition}
+        >
+          {renderSubmittedRow()}
+        </motion.div>
       );
     }
 
     // Pending state: render full question form
     return (
-      <div
-        className={cn(
-          'my-1 rounded border border-amber-500/20 bg-amber-500/10 p-3 text-sm transition-all duration-200',
-          isActive && 'ring-2 ring-amber-500/30'
-        )}
-      >
+      <InteractiveCard isActive={isActive} isResolved={submitted}>
         {questions.length === 1 ? (
-          // Single question — render directly without tabs
+          // Single question — render directly without navigation
           renderQuestionContent(questions[0], 0)
         ) : (
-          // Multiple questions — wrap in Tabs
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="mb-3 h-auto flex-wrap gap-1.5 bg-transparent p-0">
-              {questions.map((q, idx) => (
-                <TabsTrigger
-                  key={idx}
-                  value={String(idx)}
-                  className="data-[state=inactive]:bg-muted/50 h-auto rounded-full px-2.5 py-1 text-xs font-medium data-[state=active]:bg-amber-500/20 data-[state=active]:text-amber-700 data-[state=active]:shadow-none dark:data-[state=active]:text-amber-300"
+          // Multiple questions — sequential Back/Next navigation
+          <div>
+            {/* Step indicator + Back/Next buttons */}
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-muted-foreground text-xs">
+                {questions[Number(activeTab)].header ?? `Question ${Number(activeTab) + 1} of ${questions.length}`}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => navigateToQuestion('prev')}
+                  disabled={Number(activeTab) === 0}
+                  className="h-7 px-2 text-xs"
                 >
-                  {hasAnswer(idx) && <Check className="mr-1 size-3" />}
-                  <span className="max-w-[120px] truncate">{q.header}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            {isActive && questions.length > 1 && (
-              <div className="text-2xs text-muted-foreground mb-2 flex items-center gap-1">
-                <Kbd>&larr;</Kbd>
-                <Kbd>&rarr;</Kbd>
-                <span>navigate questions</span>
+                  Back {isActive && <Kbd className="ml-1">&larr;</Kbd>}
+                </Button>
+                {Number(activeTab) < questions.length - 1 ? (
+                  <Button
+                    size="sm"
+                    onClick={() => navigateToQuestion('next')}
+                    className="h-7 px-2 text-xs"
+                  >
+                    Next {isActive && <Kbd className="ml-1">&rarr;</Kbd>}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={handleSubmit}
+                    disabled={!isComplete() || submitting}
+                    className="h-7 px-2 text-xs transition-opacity duration-150"
+                  >
+                    <Check className="size-(--size-icon-xs)" />
+                    {submitting ? 'Submitting...' : 'Submit'}
+                    {isActive && <Kbd className="ml-1">Enter</Kbd>}
+                  </Button>
+                )}
               </div>
-            )}
-            {questions.map((q, idx) => (
-              <TabsContent key={idx} value={String(idx)} className="mt-0">
-                {renderQuestionContent(q, idx)}
-              </TabsContent>
-            ))}
-          </Tabs>
+            </div>
+
+            {/* Directional crossfade for question content */}
+            <AnimatePresence mode="wait" custom={directionRef.current}>
+              <motion.div
+                key={activeTab}
+                custom={directionRef.current}
+                variants={questionSlideVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={fadeTransition}
+              >
+                {renderQuestionContent(questions[Number(activeTab)], Number(activeTab))}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         )}
 
-        {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
-
-        <button
-          onClick={handleSubmit}
-          disabled={!isComplete() || submitting}
-          className="mt-3 flex items-center gap-1 rounded bg-amber-600 px-3 py-1.5 text-xs text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
-        >
-          {submitting ? (
-            <>Submitting...</>
-          ) : (
-            <>
-              <Check className="size-(--size-icon-xs)" /> Submit
-              {isActive && <Kbd className="ml-1.5">Enter</Kbd>}
-            </>
+        <AnimatePresence>
+          {error && (
+            <motion.p
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={fadeTransition}
+              className="mt-2 text-xs text-red-500"
+            >
+              {error}
+            </motion.p>
           )}
-        </button>
-      </div>
+        </AnimatePresence>
+
+        {/* Submit button for single-question flows */}
+        {questions.length === 1 && (
+          <Button
+            size="sm"
+            onClick={handleSubmit}
+            disabled={!isComplete() || submitting}
+            className="mt-2 transition-opacity duration-150"
+          >
+            {submitting ? (
+              'Submitting...'
+            ) : (
+              <>
+                <Check className="size-(--size-icon-xs)" /> Submit
+                {isActive && <Kbd className="ml-1.5">Enter</Kbd>}
+              </>
+            )}
+          </Button>
+        )}
+      </InteractiveCard>
     );
   }
 );

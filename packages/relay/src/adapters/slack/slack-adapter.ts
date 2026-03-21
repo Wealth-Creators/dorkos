@@ -12,16 +12,18 @@ import type { AdapterManifest, RelayEnvelope } from '@dorkos/shared/relay-schema
 import type { SlackAdapterConfig } from '@dorkos/shared/relay-schemas';
 import { BaseRelayAdapter } from '../../base-adapter.js';
 import type {
-  RelayPublisher, AdapterContext, DeliveryResult,
-  AdapterInboundCallbacks, AdapterOutboundCallbacks,
+  RelayPublisher, AdapterContext, DeliveryResult, PublishOptions,
 } from '../../types.js';
 import {
   SUBJECT_PREFIX,
   handleInboundMessage,
   clearCaches,
 } from './inbound.js';
-import { deliverMessage } from './outbound.js';
-import type { ActiveStream } from './outbound.js';
+import {
+  deliverMessage, clearApprovalTimeout,
+  createSlackOutboundState, clearAllApprovalTimeouts,
+} from './outbound.js';
+import type { ActiveStream, SlackOutboundState } from './outbound.js';
 
 /**
  * Slack App Manifest YAML for one-click app creation.
@@ -35,21 +37,18 @@ import type { ActiveStream } from './outbound.js';
  */
 const SLACK_APP_MANIFEST_YAML = `display_information:
   name: DorkOS Relay
-settings:
-  socket_mode_enabled: true
-  event_subscriptions:
-    bot_events:
-      - message.channels
-      - message.groups
-      - message.im
-      - app_mention
 features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
   bot_user:
     display_name: DorkOS Relay
     always_online: false
 oauth_config:
   scopes:
     bot:
+      - app_mentions:read
       - channels:history
       - channels:read
       - chat:write
@@ -59,9 +58,22 @@ oauth_config:
       - im:read
       - im:write
       - mpim:history
-      - app_mentions:read
+      - reactions:read
+      - reactions:write
       - users:read
-      - reactions:write`;
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false`;
 
 /** Slack's app creation URL with pre-filled manifest for one-click setup. */
 const SLACK_CREATE_APP_URL = `https://api.slack.com/apps?new_app=1&manifest_yaml=${encodeURIComponent(SLACK_APP_MANIFEST_YAML)}`;
@@ -97,7 +109,7 @@ export const SLACK_MANIFEST: AdapterManifest = {
       stepId: 'credentials',
       title: 'Step 3 of 3 — Paste two more codes',
       description: "Almost done. Copy two more codes from Slack and paste them below. Use \"Where do I find this?\" if you get stuck.",
-      fields: ['appToken', 'signingSecret', 'streaming', 'typingIndicator'],
+      fields: ['appToken', 'signingSecret', 'streaming', 'nativeStreaming', 'typingIndicator'],
     },
   ],
   configFields: [
@@ -170,6 +182,18 @@ export const SLACK_MANIFEST: AdapterManifest = {
       section: 'Optional settings',
     },
     {
+      key: 'nativeStreaming',
+      label: 'Native Streaming',
+      type: 'boolean',
+      required: false,
+      description:
+        "Use Slack's native streaming API (chat.startStream/appendStream/stopStream). Requires messages in threads.",
+      visibleByDefault: true,
+      helpMarkdown:
+        'When enabled, uses Slack\'s purpose-built streaming API for smoother, flicker-free responses. ' +
+        'When disabled, uses the legacy chat.update approach. Only applies when Stream Responses is enabled.',
+    },
+    {
       key: 'typingIndicator',
       label: 'Show a "thinking" indicator',
       type: 'select',
@@ -181,6 +205,9 @@ export const SLACK_MANIFEST: AdapterManifest = {
       ],
       visibleByDefault: true,
       section: 'Optional settings',
+      helpMarkdown:
+        'When set to "Emoji reaction", adds an :hourglass_flowing_sand: reaction to your message ' +
+        'while the agent is processing. Requires the `reactions:write` and `reactions:read` scopes.',
     },
     {
       key: 'requireMention',
@@ -209,6 +236,9 @@ export class SlackAdapter extends BaseRelayAdapter {
   /** Bot's own user ID — cached after auth.test for echo prevention. */
   private botUserId = '';
   private streamState = new Map<string, ActiveStream>();
+  /** FIFO queue of message timestamps with pending hourglass reactions, keyed by channelId. */
+  private pendingReactions: import('./stream.js').PendingReactions = new Map();
+  private readonly outboundState: SlackOutboundState = createSlackOutboundState();
 
   constructor(id: string, config: SlackAdapterConfig, displayName = 'Slack') {
     super(id, SUBJECT_PREFIX, displayName);
@@ -261,7 +291,20 @@ export class SlackAdapter extends BaseRelayAdapter {
         this.botUserId,
         this.makeInboundCallbacks(),
         requireMention,
+        this.logger,
+        this.config.typingIndicator ?? 'none',
+        this.pendingReactions,
       );
+    });
+
+    // Register tool approval action handlers (Approve/Deny buttons)
+    app.action('tool_approve', async ({ ack, action, body, client }) => {
+      await ack();
+      await this.handleToolAction(true, action, body, client, relay);
+    });
+    app.action('tool_deny', async ({ ack, action, body, client }) => {
+      await ack();
+      await this.handleToolAction(false, action, body, client, relay);
     });
 
     // Surface unhandled listener errors through adapter status
@@ -286,6 +329,8 @@ export class SlackAdapter extends BaseRelayAdapter {
     }
     this.botUserId = '';
     this.streamState.clear();
+    this.pendingReactions.clear();
+    clearAllApprovalTimeouts(this.outboundState);
     clearCaches();
   }
 
@@ -309,26 +354,93 @@ export class SlackAdapter extends BaseRelayAdapter {
       envelope,
       client: this.app?.client ?? null,
       streamState: this.streamState,
+      pendingReactions: this.pendingReactions,
       botUserId: this.botUserId,
       callbacks: this.makeOutboundCallbacks(),
       streaming: this.config.streaming ?? true,
+      nativeStreaming: this.config.nativeStreaming ?? true,
       typingIndicator: this.config.typingIndicator ?? 'none',
+      approvalState: this.outboundState,
+      logger: this.logger,
     });
   }
 
-  /** Build callbacks for inbound message handling. */
-  private makeInboundCallbacks(): AdapterInboundCallbacks {
-    return {
-      trackInbound: () => this.trackInbound(),
-      recordError: (err: unknown) => this.recordError(err),
-    };
-  }
+  /**
+   * Handle a tool approval or denial action from Slack interactive buttons.
+   *
+   * Parses the button value JSON, publishes an `approval_response` to the
+   * relay bus, and updates the original Slack message to reflect the decision.
+   *
+   * @param approved - Whether the user clicked Approve (true) or Deny (false)
+   * @param action - The Bolt action payload
+   * @param body - The Bolt body payload containing message context
+   * @param client - The Slack WebClient for updating messages
+   * @param relay - The relay publisher for publishing approval responses
+   */
+  private async handleToolAction(
+    approved: boolean,
+    action: unknown,
+    body: unknown,
+    client: import('@slack/web-api').WebClient,
+    relay: RelayPublisher,
+  ): Promise<void> {
+    try {
+      const btnAction = action as { value?: string };
+      const btnBody = body as {
+        user?: { id?: string };
+        channel?: { id?: string };
+        message?: { ts?: string };
+      };
 
-  /** Build callbacks for outbound message delivery. */
-  private makeOutboundCallbacks(): AdapterOutboundCallbacks {
-    return {
-      trackOutbound: () => this.trackOutbound(),
-      recordError: (err: unknown) => this.recordError(err),
-    };
+      if (!btnAction.value) {
+        this.logger.warn('[Slack] tool action missing button value');
+        return;
+      }
+
+      const { toolCallId, sessionId, agentId } = JSON.parse(btnAction.value) as {
+        toolCallId: string; sessionId: string; agentId: string;
+      };
+
+      // Clear any pending timeout for this approval
+      clearApprovalTimeout(this.outboundState, toolCallId);
+
+      // Publish approval response to relay bus
+      const opts: PublishOptions = { from: `slack:${btnBody.user?.id ?? 'unknown'}` };
+      await relay.publish(`relay.system.approval.${agentId}`, {
+        type: 'approval_response',
+        toolCallId,
+        sessionId,
+        approved,
+        respondedBy: btnBody.user?.id,
+        platform: 'slack',
+      }, opts);
+
+      // Update original message to show decision result
+      const channelId = btnBody.channel?.id;
+      const messageTs = btnBody.message?.ts;
+      if (channelId && messageTs) {
+        const decision = approved ? 'Approved' : 'Denied';
+        const emoji = approved ? ':white_check_mark:' : ':x:';
+        await client.chat.update({
+          channel: channelId,
+          ts: messageTs,
+          text: `${emoji} Tool ${decision} by <@${btnBody.user?.id ?? 'unknown'}>`,
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `${emoji} *Tool ${decision}* by <@${btnBody.user?.id ?? 'unknown'}>`,
+              },
+            },
+          ],
+        });
+      }
+
+      this.logger.debug?.(`[Slack] tool ${approved ? 'approved' : 'denied'}: toolCallId=${toolCallId}`);
+    } catch (err) {
+      this.logger.error('[Slack] tool action handler error:', err);
+      this.recordError(err);
+    }
   }
 }

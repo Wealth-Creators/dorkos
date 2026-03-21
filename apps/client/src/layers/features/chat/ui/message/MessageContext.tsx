@@ -12,6 +12,9 @@ interface MessageContextValue {
   onToolRef: ((handle: InteractiveToolHandle | null) => void) | undefined;
   focusedOptionIndex: number;
   onToolDecided: ((toolCallId: string) => void) | undefined;
+  onRetry?: () => void;
+  /** Tool call ID being handled in the input zone, or null. */
+  inputZoneToolCallId: string | null;
 }
 
 const MessageCtx = createContext<MessageContextValue | null>(null);
@@ -38,6 +41,8 @@ export function MessageProvider({
       value.onToolRef,
       value.focusedOptionIndex,
       value.onToolDecided,
+      value.onRetry,
+      value.inputZoneToolCallId,
     ]
   );
   return <MessageCtx value={memoized}>{children}</MessageCtx>;

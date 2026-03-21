@@ -6,10 +6,14 @@
 import type {
   RelayAdapter,
   RelayPublisher,
+  RelayLogger,
   AdapterStatus,
   AdapterContext,
   DeliveryResult,
+  AdapterInboundCallbacks,
+  AdapterOutboundCallbacks,
 } from './types.js';
+import { noopLogger } from './types.js';
 import type { RelayEnvelope } from '@dorkos/shared/relay-schemas';
 
 /**
@@ -51,6 +55,9 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
   /** Reference to the relay publisher, set on start, cleared on stop. */
   protected relay: RelayPublisher | null = null;
 
+  /** Logger for debug/info/warn/error output. Silent until injected via {@link setLogger}. */
+  protected logger: RelayLogger = noopLogger;
+
   private _status: AdapterStatus = {
     state: 'disconnected',
     messageCount: { inbound: 0, outbound: 0 },
@@ -68,6 +75,18 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
   }
 
   /**
+   * Inject a logger for structured debug output.
+   *
+   * Call after construction (typically from the adapter factory).
+   * Until called, the adapter uses a silent no-op logger.
+   *
+   * @param logger - A logger compatible with consola's tagged logger
+   */
+  setLogger(logger: RelayLogger): void {
+    this.logger = logger;
+  }
+
+  /**
    * Start the adapter with idempotency guard and status tracking.
    *
    * Subclasses implement `_start()` for the actual connection logic.
@@ -78,6 +97,7 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
     if (this._status.state === 'connected') return; // idempotent
     this._status = { ...this._status, state: 'starting' };
     this.relay = relay;
+    this.logger.info('starting');
     try {
       await this._start(relay);
       this._status = {
@@ -85,6 +105,7 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
         state: 'connected',
         startedAt: new Date().toISOString(),
       };
+      this.logger.info('connected');
     } catch (err) {
       this.recordError(err);
       this.relay = null;
@@ -100,6 +121,7 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
   async stop(): Promise<void> {
     if (this._status.state === 'disconnected') return; // idempotent
     this._status = { ...this._status, state: 'stopping' };
+    this.logger.info('stopping');
     try {
       await this._stop();
     } finally {
@@ -109,6 +131,7 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
         messageCount: this._status.messageCount,
         errorCount: this._status.errorCount,
       };
+      this.logger.info('stopped');
     }
   }
 
@@ -161,6 +184,7 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
    */
   protected recordError(err: unknown): void {
     const message = err instanceof Error ? err.message : String(err);
+    this.logger.warn('error:', message);
     this._status = {
       ...this._status,
       state: 'error',
@@ -178,6 +202,7 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
    */
   protected setReconnecting(): void {
     if (this._status.state !== 'error') return;
+    this.logger.info('reconnecting');
     this._status = { ...this._status, state: 'reconnecting' };
   }
 
@@ -190,6 +215,34 @@ export abstract class BaseRelayAdapter implements RelayAdapter {
   protected markConnected(): void {
     if (this._status.state !== 'reconnecting' && this._status.state !== 'starting') return;
     this._status = { ...this._status, state: 'connected' };
+  }
+
+  /**
+   * Build a callbacks object for inbound message handling sub-modules.
+   *
+   * Returns bound wrappers around `trackInbound()` and `recordError()` so
+   * sub-modules can update adapter status without holding a reference to the
+   * adapter itself.
+   */
+  protected makeInboundCallbacks(): AdapterInboundCallbacks {
+    return {
+      trackInbound: () => this.trackInbound(),
+      recordError: (err: unknown) => this.recordError(err),
+    };
+  }
+
+  /**
+   * Build a callbacks object for outbound message delivery sub-modules.
+   *
+   * Returns bound wrappers around `trackOutbound()` and `recordError()` so
+   * sub-modules can update adapter status without holding a reference to the
+   * adapter itself.
+   */
+  protected makeOutboundCallbacks(): AdapterOutboundCallbacks {
+    return {
+      trackOutbound: () => this.trackOutbound(),
+      recordError: (err: unknown) => this.recordError(err),
+    };
   }
 
   /** Whether the adapter has been stopped or is stopping. */

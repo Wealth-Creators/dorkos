@@ -67,6 +67,7 @@ function makeToolState(): ToolState {
     get taskToolInput() {
       return taskToolInput;
     },
+    toolNameById: new Map<string, string>(),
     appendTaskInput: (chunk: string) => {
       taskToolInput += chunk;
     },
@@ -262,6 +263,47 @@ describe('mapSdkMessage', () => {
     });
   });
 
+  describe('tool_progress messages', () => {
+    it('emits tool_progress with toolCallId and content', async () => {
+      const events = await collectEvents(
+        mapSdkMessage(
+          {
+            type: 'tool_progress',
+            tool_use_id: 'tc-1',
+            content: 'Installing dependencies...\n',
+          } as unknown,
+          makeSession(),
+          'session-1',
+          makeToolState()
+        )
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('tool_progress');
+      expect((events[0].data as Record<string, unknown>).toolCallId).toBe('tc-1');
+      expect((events[0].data as Record<string, unknown>).content).toBe(
+        'Installing dependencies...\n'
+      );
+    });
+
+    it('emits event even for empty content', async () => {
+      const events = await collectEvents(
+        mapSdkMessage(
+          {
+            type: 'tool_progress',
+            tool_use_id: 'tc-2',
+            content: '',
+          } as unknown,
+          makeSession(),
+          'session-1',
+          makeToolState()
+        )
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('tool_progress');
+      expect((events[0].data as Record<string, unknown>).content).toBe('');
+    });
+  });
+
   describe('result messages', () => {
     it('emits session_status + done', async () => {
       const events = await collectEvents(
@@ -302,6 +344,41 @@ describe('mapSdkMessage', () => {
       const statusEvent = events.find((e) => e.type === 'session_status');
       expect((statusEvent!.data as Record<string, unknown>).contextTokens).toBe(200);
       expect((statusEvent!.data as Record<string, unknown>).contextMaxTokens).toBe(200000);
+    });
+  });
+
+  describe('rate_limit_event messages', () => {
+    it('emits rate_limit with retryAfter when retry_after is present', async () => {
+      const events = await collectEvents(
+        mapSdkMessage(
+          {
+            type: 'rate_limit_event',
+            retry_after: 30,
+          } as unknown,
+          makeSession(),
+          'session-1',
+          makeToolState()
+        )
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('rate_limit');
+      expect((events[0].data as Record<string, unknown>).retryAfter).toBe(30);
+    });
+
+    it('emits rate_limit with undefined retryAfter when retry_after is absent', async () => {
+      const events = await collectEvents(
+        mapSdkMessage(
+          {
+            type: 'rate_limit_event',
+          } as unknown,
+          makeSession(),
+          'session-1',
+          makeToolState()
+        )
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('rate_limit');
+      expect((events[0].data as Record<string, unknown>).retryAfter).toBeUndefined();
     });
   });
 

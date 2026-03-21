@@ -28,6 +28,14 @@ export interface AgentHandlerConfig {
   defaultTimeoutMs: number;
 }
 
+/** Platform response context set by inbound chat adapters (Slack, Telegram, third-party). */
+interface ResponseContext {
+  platform?: string;
+  maxLength?: number;
+  supportedFormats?: string[];
+  formattingInstructions?: string;
+}
+
 /** StreamEvent types that are skipped to prevent infinite loops (Bug 1 guard). */
 const STREAM_EVENT_TYPES = new Set([
   'text_delta', 'tool_call_start', 'tool_call_end', 'tool_call_delta',
@@ -55,10 +63,16 @@ export async function handleAgentMessage(
     return { success: false, error: `Could not extract agentId from subject: ${subject}`, durationMs: Date.now() - startTime };
   }
 
+  const log = deps.logger ?? console;
+
+  if (!deps.agentSessionStore) {
+    log.warn('[CCA] agentSessionStore not provided — SDK session mapping will not persist across restarts');
+  }
+
   // Resolve canonical SDK session ID from persistent store
   const persistedSdkSessionId = deps.agentSessionStore?.get(agentId);
   const ccaSessionKey = persistedSdkSessionId ?? agentId;
-  const log = deps.logger ?? console;
+  log.debug?.(`[CCA] session lookup: agentId=${agentId}, persistedSdkSessionId=${persistedSdkSessionId ?? '(none)'}, hasStarted=${!!persistedSdkSessionId}`);
 
   // Record trace span as pending
   deps.traceStore.insertSpan({
@@ -70,19 +84,32 @@ export async function handleAgentMessage(
     sentAt: Date.now(), deliveredAt: null, processedAt: null, error: null,
   });
 
+  // Extract binding-enriched fields from payload
+  const payloadObj = typeof envelope.payload === 'object' && envelope.payload !== null
+    ? (envelope.payload as Record<string, unknown>) : null;
+  const bindingPerms = payloadObj?.__bindingPermissions as
+    { permissionMode?: string } | undefined;
+  const responseContext = payloadObj?.responseContext as
+    ResponseContext | undefined;
+
   // Resolve CWD: payload cwd > Mesh agent context directory > deferred
-  const payloadCwd = typeof envelope.payload === 'object' && envelope.payload !== null
-    ? ((envelope.payload as Record<string, unknown>).cwd as string | undefined)
-    : undefined;
+  const payloadCwd = payloadObj?.cwd as string | undefined;
   const effectiveCwd = payloadCwd ?? context?.agent?.directory;
+  const effectivePermissionMode = bindingPerms?.permissionMode ?? 'default';
   log.debug?.(
     `[CCA] handleAgentMessage agentId=${agentId} ccaSessionKey=${ccaSessionKey}, ` +
     `payloadCwd=${payloadCwd ?? '(none)'}, context.agent.directory=${context?.agent?.directory ?? '(none)'}, ` +
-    `resolvedCwd=${effectiveCwd ?? '(deferred to session)'}`,
+    `resolvedCwd=${effectiveCwd ?? '(deferred to session)'}, permissionMode=${effectivePermissionMode}`,
   );
 
+  // Only mark hasStarted when we have a real SDK session ID from the persistent
+  // store.  Without one, the runtime would attempt to resume using the DorkOS-
+  // generated UUID (which the SDK never assigned), causing a "No conversation
+  // found" error before the self-healing retry creates a fresh session.
   deps.agentManager.ensureSession(ccaSessionKey, {
-    permissionMode: 'default', hasStarted: true, ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+    permissionMode: effectivePermissionMode,
+    hasStarted: !!persistedSdkSessionId,
+    ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
   deps.traceStore.updateSpan(envelope.id, { status: 'delivered', deliveredAt: Date.now() });
 
@@ -91,8 +118,6 @@ export async function handleAgentMessage(
   }
 
   // Skip StreamEvent payloads to prevent infinite loops
-  const payloadObj = typeof envelope.payload === 'object' && envelope.payload !== null
-    ? (envelope.payload as Record<string, unknown>) : null;
   if (payloadObj?.type && STREAM_EVENT_TYPES.has(payloadObj.type as string)) {
     log.debug?.(`[CCA] skipping sendMessage for StreamEvent payload type=${String(payloadObj.type)}`);
     deps.traceStore.updateSpan(envelope.id, { status: 'processed', processedAt: Date.now() });
@@ -101,6 +126,7 @@ export async function handleAgentMessage(
 
   const correlationId = payloadObj?.correlationId as string | undefined;
   const prompt = formatPromptWithContext(extractPayloadContent(envelope.payload), envelope, agentId, ccaSessionKey);
+  const formatBlock = buildResponseFormatBlock(responseContext);
 
   // Set up timeout from TTL budget
   const ttlRemaining = envelope.budget.ttl - Date.now();
@@ -108,7 +134,9 @@ export async function handleAgentMessage(
   const timeout = setTimeout(() => controller.abort(), ttlRemaining > 0 ? ttlRemaining : config.defaultTimeoutMs);
   const isInboxReplyTo = envelope.replyTo?.startsWith('relay.inbox.');
   const eventStream = deps.agentManager.sendMessage(ccaSessionKey, prompt, {
+    permissionMode: effectivePermissionMode,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+    ...(formatBlock ? { systemPromptAppend: formatBlock } : {}),
   });
 
   let eventCount = 0, collectedText = '', stepCounter = 0, messageBuffer = '';
@@ -139,7 +167,7 @@ export async function handleAgentMessage(
               typeof data.content === 'string' ? data.content : JSON.stringify(data), ccaSessionKey, relay);
           }
         } else {
-          await publishResponseWithCorrelation(envelope, event, ccaSessionKey, relay, log, correlationId);
+          await publishResponseWithCorrelation(envelope, event, ccaSessionKey, relay, log, correlationId, { agentId });
         }
       }
     }
@@ -171,7 +199,10 @@ export async function handleAgentMessage(
     const actualSdkId = deps.agentManager.getSdkSessionId(ccaSessionKey);
     if (actualSdkId && actualSdkId !== agentId) {
       deps.agentSessionStore.set(agentId, actualSdkId);
-      log.debug?.(`[CCA] persisted session mapping: ${agentId} → ${actualSdkId}`);
+      log.info(`[CCA] persisted session mapping: ${agentId} → ${actualSdkId}`);
+    } else {
+      log.debug?.(`[CCA] no session mapping to persist: agentId=${agentId}, ` +
+        `ccaSessionKey=${ccaSessionKey}, actualSdkId=${actualSdkId ?? '(none)'}`);
     }
   }
 
@@ -201,6 +232,37 @@ function extractAgentId(subject: string): string | null {
   const segments = subject.split('.');
   if (segments.length < 3 || segments[0] !== 'relay' || segments[1] !== 'agent') return null;
   return segments[2] || null;
+}
+
+/**
+ * Build a `<response_format>` system prompt block from platform response context.
+ *
+ * The function is a thin wrapper: it adds a platform header and passes through
+ * whatever formatting instructions the adapter provided. When no adapter-supplied
+ * `formattingInstructions` are present, a generic fallback is used for platforms
+ * that don't support Markdown.
+ *
+ * Returns an empty string when no platform context is available, so the agent
+ * behaves identically to today for non-adapter message sources.
+ *
+ * @internal Exported for testing only.
+ */
+export function buildResponseFormatBlock(ctx: ResponseContext | undefined): string {
+  if (!ctx?.platform) return '';
+
+  const lines = [
+    `Platform: ${ctx.platform}`,
+    ctx.maxLength ? `Maximum response length: ${ctx.maxLength} characters` : '',
+  ];
+
+  if (ctx.formattingInstructions) {
+    lines.push('', ctx.formattingInstructions);
+  } else if (ctx.supportedFormats && !ctx.supportedFormats.includes('markdown')) {
+    lines.push('', 'FORMATTING RULES (you MUST follow these):');
+    lines.push('- Avoid complex Markdown formatting (tables, headings) — use plain text with bullet points.');
+  }
+
+  return `<response_format>\n${lines.filter(Boolean).join('\n')}\n</response_format>`;
 }
 
 /** Format the user prompt with a <relay_context> XML block. */

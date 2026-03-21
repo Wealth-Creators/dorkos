@@ -13,11 +13,18 @@ import type { Server } from 'node:http';
 import type { Signal, AdapterManifest, RelayEnvelope } from '@dorkos/shared/relay-schemas';
 import { BaseRelayAdapter } from '../../base-adapter.js';
 import type {
-  RelayPublisher, AdapterContext,
+  RelayPublisher, AdapterContext, PublishOptions,
   DeliveryResult, TelegramAdapterConfig, Unsubscribe,
 } from '../../types.js';
 import { SUBJECT_PREFIX, handleInboundMessage } from './inbound.js';
-import { deliverMessage, handleTypingSignal, clearAllTypingIntervals } from './outbound.js';
+import {
+  deliverMessage,
+  handleTypingSignal,
+  clearAllTypingIntervals,
+  clearApprovalTimeout,
+  createTelegramOutboundState,
+} from './outbound.js';
+import type { ResponseBuffer, TelegramOutboundState } from './outbound.js';
 import { startWebhookMode, stopWebhookServer } from './webhook.js';
 
 /** Static adapter manifest for the Telegram built-in adapter. */
@@ -83,6 +90,14 @@ For local development, use a tunnel service (e.g., ngrok, Cloudflare Tunnel).` }
       placeholder: 'Auto-generated if empty',
       description: 'Secret token for validating incoming webhook requests from Telegram.',
       showWhen: { field: 'mode', equals: 'webhook' } },
+    { key: 'streaming', label: 'Streaming', type: 'boolean', required: false,
+      description:
+        "Stream responses in real-time using Telegram's sendMessageDraft API (DMs only). Groups always use buffer-and-flush.",
+      visibleByDefault: true,
+      helpMarkdown:
+        'When enabled, recipients in DMs see text appearing in real-time (ChatGPT-style). ' +
+        'Group chats always use buffer-and-flush regardless of this setting. ' +
+        'Requires Telegram Bot API 9.5+.' },
   ],
 };
 
@@ -103,7 +118,9 @@ export class TelegramAdapter extends BaseRelayAdapter {
   private signalUnsub: Unsubscribe | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private responseBuffers = new Map<number, string>();
+  private responseBuffers = new Map<number, ResponseBuffer>();
+  /** Instance-scoped outbound state — prevents cross-adapter leakage when multiInstance: true. */
+  private readonly outboundState: TelegramOutboundState = createTelegramOutboundState();
 
   constructor(id: string, config: TelegramAdapterConfig, displayName = 'Telegram') {
     super(id, SUBJECT_PREFIX, displayName);
@@ -126,13 +143,54 @@ export class TelegramAdapter extends BaseRelayAdapter {
     const bot = new Bot(this.config.token);
     bot.api.config.use(autoRetry());
     bot.on('message', (ctx) =>
-      handleInboundMessage(ctx, relay, this.makeInboundCallbacks()),
+      handleInboundMessage(ctx, relay, this.makeInboundCallbacks(), this.logger),
     );
+
+    // Register callback query handler for tool approval inline keyboard buttons
+    bot.on('callback_query:data', async (ctx) => {
+      try {
+        const data = JSON.parse(ctx.callbackQuery.data) as { k: string; a: number };
+        const entry = this.outboundState.callbackIdMap.get(data.k);
+
+        if (!entry) {
+          await ctx.answerCallbackQuery({ text: 'This approval has expired.' });
+          return;
+        }
+
+        const approved = data.a === 1;
+        this.outboundState.callbackIdMap.delete(data.k);
+        clearApprovalTimeout(this.outboundState, data.k);
+
+        // Publish approval response to relay bus
+        const opts: PublishOptions = { from: `telegram:${ctx.from.id}` };
+        await relay.publish(`relay.system.approval.${entry.agentId}`, {
+          type: 'approval_response',
+          toolCallId: entry.toolCallId,
+          sessionId: entry.sessionId,
+          approved,
+          respondedBy: String(ctx.from.id),
+          platform: 'telegram',
+        }, opts);
+
+        // Edit message to show decision result
+        const decision = approved ? 'Approved' : 'Denied';
+        const emoji = approved ? '\u2705' : '\u274C';
+        await ctx.editMessageText(`${emoji} *Tool ${decision}*`, { parse_mode: 'Markdown' });
+        await ctx.answerCallbackQuery({ text: `Tool ${decision}` });
+
+        this.logger.debug?.(`[Telegram] tool ${approved ? 'approved' : 'denied'}: toolCallId=${entry.toolCallId}`);
+      } catch (err) {
+        this.logger.error('[Telegram] callback query handler error:', err);
+        this.recordError(err);
+        await ctx.answerCallbackQuery({ text: 'Error processing approval.' }).catch(() => {});
+      }
+    });
+
     bot.catch((err) => this.recordError(err));
     this.bot = bot;
 
     this.signalUnsub = relay.onSignal(`${SUBJECT_PREFIX}.>`, (subject: string, signal: Signal) => {
-      if (signal.type === 'typing') void handleTypingSignal(this.bot, subject, signal.state);
+      if (signal.type === 'typing') void handleTypingSignal(this.bot, subject, this.outboundState, signal.state);
     });
 
     if (this.config.mode === 'webhook') {
@@ -148,7 +206,12 @@ export class TelegramAdapter extends BaseRelayAdapter {
   protected async _stop(): Promise<void> {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.signalUnsub) { this.signalUnsub(); this.signalUnsub = null; }
-    clearAllTypingIntervals();
+    clearAllTypingIntervals(this.outboundState);
+
+    // Clear all pending approval timeouts to prevent dangling timers
+    for (const timer of this.outboundState.pendingApprovalTimeouts.values()) clearTimeout(timer);
+    this.outboundState.pendingApprovalTimeouts.clear();
+    this.outboundState.callbackIdMap.clear();
 
     if (this.bot) {
       if (this.config.mode === 'webhook') {
@@ -175,27 +238,14 @@ export class TelegramAdapter extends BaseRelayAdapter {
       envelope,
       bot: this.bot,
       responseBuffers: this.responseBuffers,
+      state: this.outboundState,
       callbacks: this.makeOutboundCallbacks(),
+      streaming: this.config.streaming ?? true,
+      logger: this.logger,
     });
   }
 
   // --- Private helpers ---
-
-  /** Build callbacks for inbound message handling. */
-  private makeInboundCallbacks() {
-    return {
-      trackInbound: () => this.trackInbound(),
-      recordError: (err: unknown) => this.recordError(err),
-    };
-  }
-
-  /** Build callbacks for outbound message delivery. */
-  private makeOutboundCallbacks() {
-    return {
-      trackOutbound: () => this.trackOutbound(),
-      recordError: (err: unknown) => this.recordError(err),
-    };
-  }
 
   /** Start grammy bot in long-polling mode with eager token validation. */
   private async startPollingMode(bot: Bot): Promise<void> {
@@ -224,7 +274,7 @@ export class TelegramAdapter extends BaseRelayAdapter {
       const newBot = new Bot(this.config.token);
       newBot.api.config.use(autoRetry());
       newBot.on('message', (ctx) =>
-        handleInboundMessage(ctx, this.relay!, this.makeInboundCallbacks()),
+        handleInboundMessage(ctx, this.relay!, this.makeInboundCallbacks(), this.logger),
       );
       newBot.catch((e) => this.recordError(e));
       this.bot = newBot;

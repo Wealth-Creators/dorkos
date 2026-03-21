@@ -4,6 +4,7 @@ import type {
   MessagePart,
   ToolCallPart,
   HistoryToolCall,
+  ErrorCategory,
 } from '@dorkos/shared/types';
 import { SDK_TOOL_NAMES } from '@dorkos/shared/constants';
 
@@ -36,11 +37,32 @@ export interface TranscriptLine {
 export interface ContentBlock {
   type: string;
   text?: string;
+  thinking?: string;
   name?: string;
   id?: string;
   input?: Record<string, unknown>;
   tool_use_id?: string;
   content?: string | ContentBlock[];
+  // Error block fields
+  error_type?: string;
+  message?: string;
+  category?: string;
+  details?: string;
+  // Subagent block fields
+  task_id?: string;
+  description?: string;
+  status?: string;
+  tool_uses?: number;
+  last_tool_name?: string;
+  duration_ms?: number;
+  summary?: string;
+  // Hook block fields
+  hook_id?: string;
+  hook_name?: string;
+  hook_event?: string;
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
 }
 
 /** Extract text from a tool_result content block. */
@@ -342,7 +364,9 @@ export function parseTranscript(lines: string[]): HistoryMessage[] {
       const toolCalls: HistoryToolCall[] = [];
 
       for (const block of contentBlocks) {
-        if (block.type === 'text' && block.text) {
+        if (block.type === 'thinking' && block.thinking) {
+          parts.push({ type: 'thinking', text: block.thinking, isStreaming: false });
+        } else if (block.type === 'text' && block.text) {
           const lastPart = parts[parts.length - 1];
           if (lastPart && lastPart.type === 'text') {
             lastPart.text += '\n' + block.text;
@@ -387,7 +411,29 @@ export function parseTranscript(lines: string[]): HistoryMessage[] {
           };
           parts.push(toolCallPart);
           toolCallPartMap.set(block.id, toolCallPart);
+        } else if (block.type === 'error') {
+          // Error blocks → ErrorPart (snake_case SDK fields → camelCase client fields)
+          parts.push({
+            type: 'error',
+            message: block.message ?? '',
+            category: (block.category as ErrorCategory) ?? undefined,
+            details: block.details ?? undefined,
+          });
+        } else if (block.type === 'subagent') {
+          // Subagent blocks → SubagentPart (snake_case SDK fields → camelCase client fields)
+          parts.push({
+            type: 'subagent',
+            taskId: block.task_id ?? block.id ?? '',
+            description: block.description ?? '',
+            status: (block.status as 'running' | 'complete' | 'error') ?? 'running',
+            toolUses: block.tool_uses,
+            lastToolName: block.last_tool_name,
+            durationMs: block.duration_ms,
+            summary: block.summary,
+          });
         }
+        // Note: hook blocks are not top-level MessageParts — hooks live inside
+        // ToolCallPart.hooks. No standalone hook part extraction is performed here.
       }
 
       if (parts.length === 0) continue;
@@ -409,5 +455,39 @@ export function parseTranscript(lines: string[]): HistoryMessage[] {
     }
   }
 
-  return messages;
+  return mergeConsecutiveAssistantMessages(messages);
+}
+
+/**
+ * Merge consecutive assistant messages into a single message per turn.
+ *
+ * The SDK may emit separate JSONL entries for thinking and text blocks within
+ * a single assistant turn. The client's streaming model treats these as one
+ * message with multiple parts, so the parser must do the same to prevent
+ * duplicates when history loads.
+ *
+ * Uses the last message's ID so that `getLastMessageIds()` returns the correct
+ * value for Phase 3 client-server ID reconciliation.
+ */
+function mergeConsecutiveAssistantMessages(messages: HistoryMessage[]): HistoryMessage[] {
+  const merged: HistoryMessage[] = [];
+  for (const msg of messages) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.role === 'assistant' && msg.role === 'assistant') {
+      prev.id = msg.id;
+      prev.parts = [...(prev.parts ?? []), ...(msg.parts ?? [])];
+      if (msg.content) {
+        prev.content = prev.content ? prev.content + '\n' + msg.content : msg.content;
+      }
+      if (msg.toolCalls) {
+        prev.toolCalls = [...(prev.toolCalls ?? []), ...msg.toolCalls];
+      }
+      if (msg.timestamp) prev.timestamp = msg.timestamp;
+    } else {
+      const copy = { ...msg };
+      if (copy.parts) copy.parts = [...copy.parts];
+      merged.push(copy);
+    }
+  }
+  return merged;
 }

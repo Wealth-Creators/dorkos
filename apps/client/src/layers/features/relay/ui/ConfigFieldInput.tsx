@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Input } from '@/layers/shared/ui/input';
 import { Switch } from '@/layers/shared/ui/switch';
 import { Textarea } from '@/layers/shared/ui/textarea';
@@ -14,9 +15,10 @@ import {
   CollapsibleTrigger,
   CollapsibleContent,
 } from '@/layers/shared/ui/collapsible';
-import { Label } from '@/layers/shared/ui/label';
-import { Button } from '@/layers/shared/ui/button';
-import { ChevronDown, Eye, EyeOff, HelpCircle } from 'lucide-react';
+import { Field, FieldContent, FieldLabel, FieldDescription, FieldError } from '@/layers/shared/ui/field';
+import { FieldCard, FieldCardContent } from '@/layers/shared/ui/field-card';
+import { PasswordInput } from '@/layers/shared/ui/password-input';
+import { ChevronDown, HelpCircle } from 'lucide-react';
 import { cn } from '@/layers/shared/lib';
 import { MarkdownContent } from '@/layers/shared/ui/markdown-content';
 import type { ConfigField } from '@dorkos/shared/relay-schemas';
@@ -42,7 +44,6 @@ export function ConfigFieldInput({
   error,
   allValues,
 }: ConfigFieldInputProps) {
-  const [showPassword, setShowPassword] = useState(() => field.visibleByDefault ?? false);
   const [patternError, setPatternError] = useState('');
 
   // Conditional visibility: hide this field when its dependency doesn't match.
@@ -75,6 +76,64 @@ export function ConfigFieldInput({
     setPatternError('');
   };
 
+  const displayError = error ?? patternError;
+
+  // Boolean fields render horizontally: label+description left, switch right.
+  if (field.type === 'boolean') {
+    return (
+      <div>
+        <Field orientation="horizontal" className="items-center justify-between gap-4">
+          <FieldContent className="min-w-0">
+            <FieldLabel
+              htmlFor={fieldId}
+              className={cn(
+                'text-sm font-medium',
+                field.required && 'after:ml-0.5 after:text-destructive after:content-["*"]',
+              )}
+            >
+              {field.label}
+            </FieldLabel>
+            {field.description && (
+              <FieldDescription className="text-xs">{field.description}</FieldDescription>
+            )}
+          </FieldContent>
+          <Switch
+            id={fieldId}
+            checked={Boolean(value)}
+            onCheckedChange={(checked) => onChange(field.key, checked)}
+          />
+        </Field>
+        {field.helpMarkdown && (
+          <Collapsible>
+            <CollapsibleTrigger className="mt-1 flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+              <HelpCircle className="size-3" />
+              Where do I find this?
+              <ChevronDown className="size-3 transition-transform [[data-state=open]_&]:rotate-180" />
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="mt-2 rounded-md border bg-muted/50 p-3">
+                <MarkdownContent content={field.helpMarkdown} className="text-xs" />
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+        <AnimatePresence>
+          {displayError && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.15 }}
+              className="overflow-hidden"
+            >
+              <FieldError className="mt-1.5">{displayError}</FieldError>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
   const renderControl = () => {
     switch (field.type) {
       case 'text':
@@ -86,6 +145,7 @@ export function ConfigFieldInput({
             value={stringValue}
             onChange={(e) => onChange(field.key, e.target.value)}
             placeholder={field.placeholder}
+            aria-invalid={!!displayError || undefined}
           />
         );
 
@@ -108,35 +168,20 @@ export function ConfigFieldInput({
           );
         }
         return (
-          <div className="relative">
-            <Input
-              id={fieldId}
-              type={showPassword ? 'text' : 'password'}
-              value={stringValue}
-              onChange={(e) => {
-                // Trim leading/trailing whitespace — tokens are always pasted and often include newlines.
-                onChange(field.key, e.target.value.trim());
-                if (patternError) setPatternError('');
-              }}
-              onBlur={handleBlur}
-              onPaste={() => setTimeout(handleBlur, 0)}
-              placeholder={field.placeholder}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="absolute right-0 top-0 h-full px-3"
-              onClick={() => setShowPassword(!showPassword)}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? (
-                <EyeOff className="size-4" />
-              ) : (
-                <Eye className="size-4" />
-              )}
-            </Button>
-          </div>
+          <PasswordInput
+            id={fieldId}
+            value={stringValue}
+            visibleByDefault={field.visibleByDefault ?? false}
+            onChange={(e) => {
+              // Trim leading/trailing whitespace — tokens are always pasted and often include newlines.
+              onChange(field.key, e.target.value.trim());
+              if (patternError) setPatternError('');
+            }}
+            onBlur={handleBlur}
+            onPaste={() => setTimeout(handleBlur, 0)}
+            placeholder={field.placeholder}
+            aria-invalid={!!displayError || undefined}
+          />
         );
       }
 
@@ -150,15 +195,7 @@ export function ConfigFieldInput({
               onChange(field.key, e.target.value ? Number(e.target.value) : undefined)
             }
             placeholder={field.placeholder}
-          />
-        );
-
-      case 'boolean':
-        return (
-          <Switch
-            id={fieldId}
-            checked={Boolean(value)}
-            onCheckedChange={(checked) => onChange(field.key, checked)}
+            aria-invalid={!!displayError || undefined}
           />
         );
 
@@ -189,7 +226,7 @@ export function ConfigFieldInput({
         }
         return (
           <Select value={stringValue} onValueChange={(v) => onChange(field.key, v)}>
-            <SelectTrigger id={fieldId}>
+            <SelectTrigger id={fieldId} aria-invalid={!!displayError || undefined}>
               <SelectValue placeholder={field.placeholder ?? 'Select...'} />
             </SelectTrigger>
             <SelectContent>
@@ -210,6 +247,7 @@ export function ConfigFieldInput({
             onChange={(e) => onChange(field.key, e.target.value)}
             placeholder={field.placeholder}
             rows={3}
+            aria-invalid={!!displayError || undefined}
           />
         );
 
@@ -219,18 +257,18 @@ export function ConfigFieldInput({
   };
 
   return (
-    <div className="space-y-2">
-      <Label
+    <Field>
+      <FieldLabel
         htmlFor={fieldId}
         className={cn(
-          field.required && !isSentinel && 'after:ml-0.5 after:text-red-500 after:content-["*"]',
+          field.required && !isSentinel && 'after:ml-0.5 after:text-destructive after:content-["*"]',
         )}
       >
         {field.label}
-      </Label>
+      </FieldLabel>
       {renderControl()}
       {field.description && (
-        <p className="text-xs text-muted-foreground">{field.description}</p>
+        <FieldDescription className="text-xs">{field.description}</FieldDescription>
       )}
       {field.helpMarkdown && (
         <Collapsible>
@@ -246,10 +284,20 @@ export function ConfigFieldInput({
           </CollapsibleContent>
         </Collapsible>
       )}
-      {(error ?? patternError) && (
-        <p className="text-xs text-red-500">{error ?? patternError}</p>
-      )}
-    </div>
+      <AnimatePresence>
+        {displayError && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden"
+          >
+            <FieldError>{displayError}</FieldError>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Field>
   );
 }
 
@@ -262,6 +310,12 @@ interface ConfigFieldGroupProps {
   onChange: (key: string, value: unknown) => void;
   /** Validation errors keyed by field key. */
   errors: Record<string, string>;
+}
+
+/** Check whether a field is visible given current form values. */
+function isFieldVisible(field: ConfigField, allValues: Record<string, unknown>): boolean {
+  if (!field.showWhen) return true;
+  return allValues[field.showWhen.field] === field.showWhen.equals;
 }
 
 /**
@@ -286,23 +340,33 @@ export function ConfigFieldGroup({
 
   return (
     <div className="space-y-6">
-      {Array.from(sections.entries()).map(([section, sectionFields]) => (
-        <div key={section ?? '__default'} className="space-y-4">
-          {section && (
-            <h4 className="text-sm font-medium text-muted-foreground">{section}</h4>
-          )}
-          {sectionFields.map((field) => (
-            <ConfigFieldInput
-              key={field.key}
-              field={field}
-              value={values[field.key]}
-              onChange={onChange}
-              error={errors[field.key]}
-              allValues={values}
-            />
-          ))}
-        </div>
-      ))}
+      {Array.from(sections.entries()).map(([section, sectionFields]) => {
+        // Filter to visible fields to avoid empty separator gaps from showWhen nulls.
+        const visibleFields = sectionFields.filter((f) => isFieldVisible(f, values));
+        if (visibleFields.length === 0) return null;
+
+        return (
+          <div key={section ?? '__default'} className="space-y-3">
+            {section && (
+              <h4 className="text-sm font-semibold">{section}</h4>
+            )}
+            <FieldCard>
+              <FieldCardContent>
+                {visibleFields.map((field) => (
+                  <ConfigFieldInput
+                    key={field.key}
+                    field={field}
+                    value={values[field.key]}
+                    onChange={onChange}
+                    error={errors[field.key]}
+                    allValues={values}
+                  />
+                ))}
+              </FieldCardContent>
+            </FieldCard>
+          </div>
+        );
+      })}
     </div>
   );
 }

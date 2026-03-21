@@ -290,7 +290,7 @@ Adapter configurations are persisted in `~/.dork/relay/adapters.json`:
 ```typescript
 interface AdapterConfig {
   id: string;                           // Unique adapter ID
-  type: 'telegram' | 'webhook' | 'claude-code' | 'plugin';  // Adapter type
+  type: 'telegram' | 'webhook' | 'slack' | 'claude-code' | 'plugin';  // Adapter type
   enabled: boolean;                     // Whether this adapter should be running
   plugin?: PluginSource;                // Required when type is 'plugin'
   config: TelegramAdapterConfig | WebhookAdapterConfig | Record<string, unknown>;  // Type-specific config
@@ -345,6 +345,7 @@ interface StandardPayload {
     maxLength: number;                   // 4096 for Telegram
     supportedFormats: string[];
     instructions: string;
+    formattingInstructions: string;      // Telegram-specific formatting rules for agent system prompts
   };
   platformData: {
     chatId: number;
@@ -379,6 +380,81 @@ Subscribes to `relay.human.telegram.>` signals and forwards typing actions to Te
   "config": {
     "token": "123456:ABC...",
     "mode": "polling"
+  }
+}
+```
+
+### SlackAdapter
+
+Bridges Slack workspaces into the Relay subject hierarchy using Socket Mode (no public URL required). Supports real-time streaming responses, threading, and typing indicators.
+
+**Subject Convention:**
+
+- DMs: `relay.human.slack.{channelId}` (D-prefix channels)
+- Groups/Channels: `relay.human.slack.group.{channelId}` (C/G-prefix channels)
+
+**Inbound:**
+
+Receives Slack messages via Socket Mode (`message` and `app_mention` events). Skips bot messages, file shares, and edits. Normalizes into `StandardPayload`:
+
+```typescript
+interface StandardPayload {
+  content: string;                    // Message text (capped at 32 KB)
+  senderName: string;                 // Display name (cached, 1h TTL)
+  channelName?: string;               // Channel name for groups (cached, 1h TTL)
+  channelType: 'dm' | 'group';
+  responseContext: {
+    platform: 'slack';
+    maxLength: number;                // 4000 for Slack
+    supportedFormats: string[];       // ['text', 'mrkdwn']
+    instructions: string;
+    formattingInstructions: string;   // Slack-specific formatting rules for agent system prompts
+  };
+  platformData: {
+    channelId: string;
+    userId: string;
+    ts: string;                       // Message timestamp (used for threading)
+    threadTs?: string;
+    teamId?: string;
+  };
+}
+```
+
+**Outbound:**
+
+Supports two delivery modes controlled by the `streaming` config field:
+
+| Mode | Behavior |
+|------|----------|
+| Streaming (`true`) | Posts initial message on first `text_delta`, then updates via `chat.update` every 1 second. Final update on `done`. |
+| Buffered (`false`) | Accumulates text in memory, posts once on `done`. Reduces API quota usage. |
+
+All bot responses thread under the original inbound message using `platformData.ts`. Messages are truncated to Slack's 4000-character limit.
+
+**Typing Indicators:**
+
+| Mode | Behavior |
+|------|----------|
+| `reaction` | Adds/removes `:hourglass_flowing_sand:` emoji reaction during processing |
+| `none` | No visual feedback |
+
+**Connection:**
+
+Uses `@slack/bolt` with `socketMode: true`. No public URL or ngrok required — connects outbound to Slack's WebSocket. Validates credentials via `testConnection()` before starting.
+
+**Example Configuration:**
+
+```json
+{
+  "id": "slack",
+  "type": "slack",
+  "enabled": true,
+  "config": {
+    "botToken": "xoxb-...",
+    "appToken": "xapp-...",
+    "signingSecret": "abc123...",
+    "streaming": true,
+    "typingIndicator": "reaction"
   }
 }
 ```
@@ -782,10 +858,13 @@ interface AdapterBinding {
   id: string;             // UUID, assigned on creation
   adapterId: string;      // Matches an adapter config id (e.g., 'my-telegram')
   agentId: string;        // Agent identity ID for display purposes
-  projectPath: string;    // Working directory passed to runtime.createSession()
   chatId?: string;        // Optional: restrict to a specific chat/user ID
   channelType?: 'dm' | 'group';  // Optional: restrict to a channel type
   sessionStrategy: 'per-chat' | 'per-user' | 'stateless';
+  permissionMode?: 'default' | 'plan' | 'bypassPermissions' | 'acceptEdits';  // Permission mode for sessions (default: 'acceptEdits')
+  canInitiate: boolean;   // Whether the adapter can start new conversations (default: false)
+  canReply: boolean;      // Whether the adapter can reply to messages (default: true)
+  canReceive: boolean;    // Whether the adapter can receive inbound messages (default: true)
   label: string;          // Human-readable label shown in the UI
   createdAt: string;      // ISO 8601 timestamp
   updatedAt: string;      // ISO 8601 timestamp
@@ -935,6 +1014,50 @@ class SlackAdapter extends BaseRelayAdapter {
 | `trackInbound()` | Increment inbound message count. Call when receiving from external channel. |
 | `recordError(err)` | Set state to `'error'`, increment `errorCount`, set `lastError` and `lastErrorAt`. Does not catch/swallow -- the host handles isolation. |
 | `this.relay` | Reference to the `RelayPublisher`, set by `start()`, cleared by `stop()`. |
+| `makeInboundCallbacks()` | Returns an `AdapterInboundCallbacks` object with `trackInbound` and `recordError` bound to this adapter's state. Pass this to standalone inbound handler functions. |
+| `makeOutboundCallbacks()` | Returns an `AdapterOutboundCallbacks` object with `trackOutbound` and `recordError` bound to this adapter's state. Pass this to standalone outbound delivery functions. |
+
+### Callback factories
+
+When splitting inbound and outbound logic into standalone functions (recommended for testability), those functions need a way to update the adapter's status counters and error state. Rather than passing the entire adapter instance, `BaseRelayAdapter` provides two callback factory methods:
+
+```typescript
+// In your adapter's _start():
+protected async _start(relay: RelayPublisher): Promise<void> {
+  this.bot.on('message', (ctx) =>
+    handleInboundMessage(ctx, relay, this.makeInboundCallbacks(), this.logger),
+  );
+}
+
+// In your adapter's deliver():
+const result = await deliverMessage(subject, envelope, {
+  callbacks: this.makeOutboundCallbacks(),
+  // ... other options
+});
+```
+
+The returned callback objects contain only the methods that each direction needs -- `trackInbound` + `recordError` for inbound, `trackOutbound` + `recordError` for outbound. This keeps standalone handler functions decoupled from the adapter class while maintaining accurate status tracking.
+
+### Shared utilities
+
+Common envelope-parsing logic lives in `packages/relay/src/lib/payload-utils.ts` and is exported from the `@dorkos/relay` barrel. Adapters should import these shared helpers rather than duplicating the logic:
+
+| Utility | Purpose |
+|---|---|
+| `extractAgentIdFromEnvelope(envelope)` | Extracts the agent ID from `envelope.metadata.agentId`. Returns `undefined` if absent. |
+| `extractSessionIdFromEnvelope(envelope)` | Extracts the session ID from `envelope.metadata.sessionId`. Returns `undefined` if absent. |
+| `extractApprovalData(payload)` | Parses an `approval_required` StreamEvent payload. Returns `ApprovalData` or `null`. |
+| `formatToolDescription(toolName, input)` | Returns a human-readable summary of a tool action for approval prompts. |
+
+```typescript
+import {
+  extractAgentIdFromEnvelope,
+  extractSessionIdFromEnvelope,
+} from '../../lib/payload-utils.js';
+
+const agentId = extractAgentIdFromEnvelope(envelope) ?? 'unknown';
+const sessionId = extractSessionIdFromEnvelope(envelope) ?? 'unknown';
+```
 
 ### Design notes
 
@@ -1079,158 +1202,255 @@ Package naming convention: `dorkos-relay-{channel}` (e.g., `dorkos-relay-slack`,
 
 ## Creating a Custom Adapter
 
-Here's a minimal example implementing a hypothetical Slack adapter:
+For a real-world example, see the built-in Slack adapter at `packages/relay/src/adapters/slack/`. It demonstrates:
+
+- Extending `BaseRelayAdapter` for boilerplate elimination
+- Splitting inbound/outbound into separate modules for testability
+- Streaming delivery with throttled updates
+- Name caching to reduce external API calls
+- `testConnection()` for lightweight credential validation
+
+Here's a minimal custom adapter using `BaseRelayAdapter`:
 
 ```typescript
-import type { RelayAdapter, RelayPublisher, AdapterStatus, AdapterContext, DeliveryResult } from '@dorkos/relay';
+import { BaseRelayAdapter } from '@dorkos/relay';
+import type { RelayPublisher, DeliveryResult, AdapterContext } from '@dorkos/relay';
 import type { RelayEnvelope } from '@dorkos/shared/relay-schemas';
 
-interface SlackAdapterConfig {
-  token: string;
-  signingSecret: string;
-}
+export class DiscordAdapter extends BaseRelayAdapter {
+  private client: DiscordClient | null = null;
 
-export class SlackAdapter implements RelayAdapter {
-  readonly id: string;
-  readonly subjectPrefix = 'relay.human.slack';
-  readonly displayName = 'Slack';
-
-  private readonly config: SlackAdapterConfig;
-  private relay: RelayPublisher | null = null;
-  private client: any = null; // Slack SDK client
-  private status: AdapterStatus = {
-    state: 'disconnected',
-    messageCount: { inbound: 0, outbound: 0 },
-    errorCount: 0,
-  };
-
-  constructor(id: string, config: SlackAdapterConfig) {
-    this.id = id;
-    this.config = config;
+  constructor(id: string, private readonly config: { token: string }) {
+    super(id, 'relay.human.discord', 'Discord');
   }
 
-  async start(relay: RelayPublisher): Promise<void> {
-    if (this.client !== null) return; // Already started
+  protected async _start(relay: RelayPublisher): Promise<void> {
+    this.client = new DiscordClient(this.config.token);
+    await this.client.connect();
 
-    this.relay = relay;
-    this.status.state = 'starting';
-
-    // Initialize Slack client
-    const { App } = await import('@slack/bolt');
-    this.client = new App({
-      token: this.config.token,
-      signingSecret: this.config.signingSecret,
+    this.client.on('message', async (msg) => {
+      this.trackInbound();
+      await relay.publish(`relay.human.discord.${msg.channelId}`, {
+        content: msg.content,
+        senderName: msg.author.username,
+        channelType: msg.isDM ? 'dm' : 'group',
+      }, { from: `relay.human.discord.${this.id}` });
     });
-
-    // Register message handler
-    this.client.message(async (args: any) => {
-      await this.handleInboundMessage(args);
-    });
-
-    // Start the client
-    await this.client.start();
-
-    this.status = { ...this.status, state: 'connected', startedAt: new Date().toISOString() };
   }
 
-  async stop(): Promise<void> {
-    if (this.client === null) return; // Already stopped
-
-    this.status = { ...this.status, state: 'stopping' };
-
-    try {
-      await this.client.stop();
-    } catch (err) {
-      this.recordError(err);
-    } finally {
-      this.client = null;
-      this.relay = null;
-      this.status = { ...this.status, state: 'disconnected' };
-    }
+  protected async _stop(): Promise<void> {
+    await this.client?.disconnect();
+    this.client = null;
   }
 
   async deliver(subject: string, envelope: RelayEnvelope, _context?: AdapterContext): Promise<DeliveryResult> {
-    if (!this.client) return { success: false, error: 'SlackAdapter: not started' };
+    if (!this.client) return { success: false, error: 'Not connected' };
 
-    const start = Date.now();
-    const userId = this.extractUserIdFromSubject(subject);
-    if (!userId) return { success: false, error: `Cannot extract user ID from subject: ${subject}` };
+    const channelId = subject.slice('relay.human.discord.'.length);
+    const content = typeof envelope.payload === 'object' && 'content' in envelope.payload
+      ? String(envelope.payload.content)
+      : JSON.stringify(envelope.payload);
 
-    const content = this.extractContent(envelope.payload);
-
-    try {
-      await this.client.client.chat.postMessage({
-        channel: userId,
-        text: content,
-      });
-      this.status.messageCount.outbound++;
-      return { success: true, durationMs: Date.now() - start };
-    } catch (err) {
-      this.recordError(err);
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, error: message, durationMs: Date.now() - start };
-    }
-  }
-
-  getStatus(): AdapterStatus {
-    return { ...this.status };
-  }
-
-  private async handleInboundMessage(args: any): Promise<void> {
-    if (!this.relay || !args.message.text) return;
-
-    const subject = `relay.human.slack.${args.message.user}`;
-    const payload = {
-      content: args.message.text,
-      senderName: args.message.user,
-      platform: 'slack',
-    };
-
-    try {
-      await this.relay.publish(subject, payload, {
-        from: 'relay.human.slack.bot',
-      });
-      this.status.messageCount.inbound++;
-    } catch (err) {
-      this.recordError(err);
-    }
-  }
-
-  private extractUserIdFromSubject(subject: string): string | null {
-    if (!subject.startsWith(this.subjectPrefix)) return null;
-    return subject.slice(this.subjectPrefix.length + 1);
-  }
-
-  private extractContent(payload: unknown): string {
-    if (typeof payload === 'string') return payload;
-    if (payload && typeof payload === 'object' && 'content' in payload) {
-      const obj = payload as any;
-      if (typeof obj.content === 'string') return obj.content;
-    }
-    return JSON.stringify(payload);
-  }
-
-  private recordError(err: unknown): void {
-    const message = err instanceof Error ? err.message : String(err);
-    this.status = {
-      ...this.status,
-      state: 'error',
-      errorCount: this.status.errorCount + 1,
-      lastError: message,
-      lastErrorAt: new Date().toISOString(),
-    };
+    await this.client.send(channelId, content);
+    this.trackOutbound();
+    return { success: true };
   }
 }
 ```
 
 **Key patterns:**
 
-1. **Constructor**: Store config, initialize ID and subject prefix
-2. **start()**: Connect to external service, set status to 'connected', return early if already started
-3. **stop()**: Gracefully shut down, set status to 'disconnected', catch errors locally
-4. **deliver()**: Extract recipient from subject, send message, return DeliveryResult
-5. **getStatus()**: Return a shallow copy of status
-6. **Error handling**: Always use `recordError()` to update status, never throw during stop
+1. **Extend `BaseRelayAdapter`**: Pass `id`, `subjectPrefix`, and `displayName` to `super()`
+2. **`_start()`**: Connect to external service — base class handles status transitions
+3. **`_stop()`**: Clean up resources — base class handles idempotency
+4. **`deliver()`**: Extract recipient from subject, send message, return `DeliveryResult`
+5. **`trackInbound()` / `trackOutbound()`**: Call base class helpers to increment message counts
+6. **Error handling**: Call `this.recordError(err)` to update status; never throw during `_stop()`
+
+### Platform Formatting Instructions
+
+When publishing inbound messages, adapters should include `formattingInstructions` in the `responseContext` to tell agents how to format their responses for the target platform. The Claude Code adapter passes these instructions through to the agent's system prompt without modification — it has no knowledge of specific platforms.
+
+```typescript
+responseContext: {
+  platform: 'discord',
+  maxLength: 2000,
+  supportedFormats: ['text', 'markdown'],
+  instructions: `Reply to subject ${subject} to respond.`,
+  formattingInstructions: [
+    'FORMATTING RULES (you MUST follow these):',
+    '- Use Discord-flavored markdown: **bold**, *italic*, `code`, ```code blocks```.',
+    '- Spoiler tags: ||text||. Block quotes: > text.',
+    '- Do NOT use tables or headings — Discord ignores them.',
+    '- Keep responses under 2000 characters.',
+  ].join('\n'),
+},
+```
+
+If `formattingInstructions` is omitted, the agent handler falls back to a generic hint when `supportedFormats` does not include `'markdown'`. For platforms that support standard Markdown, no fallback is applied.
+
+## Instance-Scoped State
+
+Adapters with `multiInstance: true` (where multiple instances of the same type can coexist) **must not** use module-level mutable state such as `Map`s, `Set`s, or plain objects at the top of a file. Module-level state is shared across all instances of the adapter, leading to cross-contamination when multiple instances run simultaneously.
+
+Instead, define a typed state container and create one per adapter instance:
+
+```typescript
+// outbound.ts
+export interface MyAdapterOutboundState {
+  activeStreams: Map<string, ActiveStream>;
+  approvalTimeouts: Map<string, ReturnType<typeof setTimeout>>;
+}
+
+export function createMyAdapterOutboundState(): MyAdapterOutboundState {
+  return {
+    activeStreams: new Map(),
+    approvalTimeouts: new Map(),
+  };
+}
+```
+
+The adapter class owns the state instance and passes it to standalone functions via an options object:
+
+```typescript
+// my-adapter.ts
+class MyAdapter extends BaseRelayAdapter {
+  private readonly outboundState = createMyAdapterOutboundState();
+
+  async deliver(subject: string, envelope: RelayEnvelope): Promise<DeliveryResult> {
+    return deliverMessage(subject, envelope, {
+      state: this.outboundState,
+      callbacks: this.makeOutboundCallbacks(),
+    });
+  }
+}
+```
+
+The built-in adapters demonstrate this pattern: `TelegramOutboundState` in `packages/relay/src/adapters/telegram/outbound.ts` and `SlackOutboundState` in `packages/relay/src/adapters/slack/approval.ts`.
+
+## Streaming API Wrappers
+
+When an external platform provides unofficial or untyped streaming APIs, isolate the type-unsafe code in a dedicated `stream-api.ts` file. This keeps `as unknown` casts and type assertions out of the main adapter logic, making it clear where the type boundary lies and limiting the blast radius of API changes.
+
+```
+adapters/slack/
+├── stream-api.ts       # Wraps Slack's streaming chat.update with typed interface
+├── stream.ts           # Streaming logic using the typed wrapper
+├── outbound.ts         # Delivery router (delegates to stream.ts or buffered path)
+└── ...
+```
+
+The wrapper exports a typed function that internally handles the cast:
+
+```typescript
+// stream-api.ts
+import type { WebClient } from '@slack/web-api';
+
+export async function streamingChatUpdate(
+  client: WebClient,
+  channel: string,
+  ts: string,
+  text: string,
+): Promise<void> {
+  // Slack's chat.update typing doesn't expose streaming params
+  await (client as unknown as StreamCapableClient).chat.update({
+    channel, ts, text,
+  });
+}
+```
+
+Both `packages/relay/src/adapters/telegram/stream-api.ts` and `packages/relay/src/adapters/slack/stream-api.ts` follow this pattern.
+
+## File Organization for Large Adapters
+
+As adapters grow to support streaming, tool approvals, and other features, a single file becomes unwieldy. Split by concern:
+
+| File | Responsibility |
+|---|---|
+| `{adapter}-adapter.ts` | Main adapter class, lifecycle (`_start` / `_stop`), wiring |
+| `inbound.ts` | Inbound message handling and normalization |
+| `outbound.ts` | Outbound delivery router, delegates to `stream.ts` or buffered delivery |
+| `stream.ts` | Streaming response handling (throttled updates, final flush) |
+| `stream-api.ts` | Typed wrappers for untyped streaming APIs (isolates `as unknown` casts) |
+| `approval.ts` | Tool approval state, timeout management, platform-native approval UI |
+| `index.ts` | Barrel export |
+
+The Slack adapter demonstrates the full split:
+
+```
+packages/relay/src/adapters/slack/
+├── index.ts              # Barrel
+├── slack-adapter.ts      # Main class, lifecycle
+├── inbound.ts            # Socket Mode message handling
+├── outbound.ts           # Delivery router
+├── stream.ts             # Streaming chat.update logic
+├── stream-api.ts         # Typed wrapper for Slack streaming API
+└── approval.ts           # Approval state, Block Kit buttons, timeouts
+```
+
+Each file receives its dependencies (state, callbacks, client) via function parameters rather than importing module-level singletons. This makes every function independently testable.
+
+## Tool Approval Events
+
+When an agent encounters a tool call requiring human approval (e.g., writing a file or running a command), the relay publishes an `approval_required` event. Chat adapters render platform-native approval UI -- Slack Block Kit buttons, Telegram inline keyboards -- and route user decisions back through the relay bus to the Claude Code adapter.
+
+### Event Flow
+
+1. The agent runtime emits an `approval_required` StreamEvent on the adapter's outbound subject (e.g., `relay.human.telegram.{chatId}`)
+2. The adapter's outbound module detects the event via `extractApprovalData()` from `payload-utils.ts`
+3. The adapter renders a platform-native approval prompt with Approve/Deny controls
+4. The user clicks Approve or Deny
+5. The adapter publishes an `approval_response` payload to `relay.system.approval.{agentId}`
+6. The CCA adapter's `approval-handler.ts` receives the response and calls `agentManager.approveTool(sessionId, toolCallId, approved)`
+
+### Key Utilities
+
+Three shared helpers in `packages/relay/src/lib/payload-utils.ts` handle the common parsing and formatting:
+
+```typescript
+import { extractApprovalData, formatToolDescription, type ApprovalData } from '../../lib/payload-utils.js';
+```
+
+| Utility | Purpose |
+|---|---|
+| `extractApprovalData(payload)` | Parses an `approval_required` StreamEvent payload and returns `ApprovalData` (with `toolCallId`, `toolName`, `input`, `timeoutMs`) or `null` if the payload is not an approval event. |
+| `formatToolDescription(toolName, input)` | Returns a human-readable summary of the tool action (e.g., ``wants to write to `src/index.ts` ``). Extracts context from common tool input patterns. |
+| `clearApprovalTimeout(id)` | Cancels a pending auto-deny timeout when the user responds before it fires. Each adapter's outbound module exports this. |
+
+### Approval Response Payload
+
+When the user clicks Approve or Deny, the adapter publishes this payload to `relay.system.approval.{agentId}`:
+
+```typescript
+{
+  type: 'approval_response',
+  toolCallId: string,    // From the original approval_required event
+  sessionId: string,     // The CCA session key
+  approved: boolean,     // true = Approve, false = Deny
+  respondedBy?: string,  // Platform user ID (e.g., Slack user ID)
+  platform?: string,     // 'slack', 'telegram', etc.
+}
+```
+
+### Platform Implementations
+
+**Slack** registers Bolt action handlers for `tool_approve` and `tool_deny` action IDs. Button clicks are acknowledged via `ack()`, the approval response is published, and the original message is updated to show the decision result with `chat.update`.
+
+**Telegram** registers a `callback_query:data` handler on the grammy bot. Inline keyboard button presses carry a compact JSON payload with a callback key that maps to the stored approval metadata via `callbackIdMap`. After publishing the response, the message is edited to show the result.
+
+### Implementing in a New Adapter
+
+To support tool approvals in a custom adapter:
+
+1. **Detect the event**: In your outbound delivery logic, use `extractApprovalData(envelope.payload)` to check if a message is an approval request. If it returns non-null, render approval UI instead of a plain text message.
+
+2. **Render approval controls**: Display the tool description (via `formatToolDescription`) and platform-native Approve/Deny buttons or controls. Store the `toolCallId`, `sessionId`, and `agentId` so you can reference them when the user responds.
+
+3. **Set a timeout**: Start a timer using `timeoutMs` from the `ApprovalData`. If the user does not respond before the timeout, the agent runtime auto-denies. You may want to update the UI to reflect expiry.
+
+4. **Handle the user response**: When the user clicks Approve or Deny, publish an `approval_response` payload (see schema above) to `relay.system.approval.{agentId}` and cancel the timeout. Update the approval UI to reflect the decision.
+
+5. **Clean up**: Remove any stored state for the approval (callback mappings, timers) after the response is published.
 
 ## Adapter Documentation
 

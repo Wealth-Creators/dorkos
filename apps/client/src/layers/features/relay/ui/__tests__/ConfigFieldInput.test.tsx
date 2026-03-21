@@ -189,7 +189,7 @@ describe('ConfigFieldInput', () => {
     renderField(textField, { error: 'This field is required' });
     const errorEl = screen.getByText('This field is required');
     expect(errorEl).toBeInTheDocument();
-    expect(errorEl).toHaveClass('text-red-500');
+    expect(errorEl).toHaveClass('text-destructive');
   });
 
   it('does not show an error message when error prop is absent', () => {
@@ -208,7 +208,7 @@ describe('ConfigFieldInput', () => {
   it('does not apply required asterisk class when field.required is false', () => {
     renderField(textField);
     const label = screen.getByText('Name');
-    expect(label.className).not.toMatch(/after:text-red-500/);
+    expect(label.className).not.toMatch(/after:text-destructive/);
   });
 
   // --- showWhen conditional visibility ----------------------------------------

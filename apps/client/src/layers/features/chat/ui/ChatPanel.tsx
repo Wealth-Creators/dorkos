@@ -23,6 +23,9 @@ import { TaskListPanel } from './TaskListPanel';
 import { CelebrationOverlay } from './CelebrationOverlay';
 import { useFiles } from '@/layers/features/files';
 import { useCelebrations } from '../model/use-celebrations';
+import { ErrorMessageBlock } from './ErrorMessageBlock';
+import { SystemStatusZone } from './SystemStatusZone';
+import { PromptSuggestionChips } from './PromptSuggestionChips';
 import type { TaskUpdateEvent } from '@dorkos/shared/types';
 
 interface ChatPanelProps {
@@ -111,6 +114,12 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
     waitingType,
     activeInteraction,
     markToolCallResponded,
+    isRateLimited,
+    rateLimitRetryAfter,
+    systemStatus,
+    promptSuggestions,
+    presenceInfo,
+    presencePulse,
   } = useChatSession(sessionId, {
     transformContent: fileTransformContent,
     onTaskEvent: handleTaskEventWithCelebrations,
@@ -189,6 +198,24 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
     messageQueue.cancelEditing();
     setInput(draftRef.current);
   }, [messageQueue, setInput]);
+
+  /** Re-send the last user message after an inline execution_error. */
+  const handleRetry = useCallback(() => {
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    if (lastUserMsg?.content) {
+      submitContent(lastUserMsg.content);
+    }
+  }, [messages, submitContent]);
+
+  const showSuggestions = status === 'idle' && promptSuggestions.length > 0 && input.length === 0;
+
+  const handleSuggestionClick = useCallback(
+    (suggestion: string) => {
+      setInput(suggestion);
+      chatInputRef.current?.focus();
+    },
+    [setInput]
+  );
 
   const handleQueueRemove = useCallback(
     (index: number) => {
@@ -278,10 +305,14 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
             permissionMode={permissionMode}
             isWaitingForUser={isWaitingForUser}
             waitingType={waitingType ?? undefined}
+            isRateLimited={isRateLimited}
+            rateLimitRetryAfter={rateLimitRetryAfter}
             activeToolCallId={activeInteraction?.toolCallId ?? null}
             onToolRef={handleToolRef}
             focusedOptionIndex={focusedOptionIndex}
             onToolDecided={markToolCallResponded}
+            onRetry={handleRetry}
+            inputZoneToolCallId={activeInteraction?.toolCallId ?? null}
           />
         )}
 
@@ -319,6 +350,17 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
         </AnimatePresence>
       </div>
 
+      <SystemStatusZone message={systemStatus} />
+
+      <AnimatePresence>
+        {showSuggestions && (
+          <PromptSuggestionChips
+            suggestions={promptSuggestions}
+            onChipClick={handleSuggestionClick}
+          />
+        )}
+      </AnimatePresence>
+
       <CelebrationOverlay
         celebration={celebrations.activeCelebration}
         onComplete={celebrations.clearCelebration}
@@ -334,8 +376,13 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
       />
 
       {error && (
-        <div className="mx-4 mb-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400">
-          {error}
+        <div className="mx-4 mb-2">
+          <ErrorMessageBlock
+            message={error.message}
+            heading={error.heading}
+            subtext={error.message}
+            onRetry={error.retryable ? handleRetry : undefined}
+          />
         </div>
       )}
 
@@ -363,6 +410,12 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
         onQueueCancelEdit={handleQueueCancelEdit}
         onQueueNavigateUp={handleQueueNavigateUp}
         onQueueNavigateDown={handleQueueNavigateDown}
+        presenceInfo={presenceInfo}
+        presencePulse={presencePulse}
+        activeInteraction={activeInteraction}
+        focusedOptionIndex={focusedOptionIndex}
+        onToolRef={handleToolRef}
+        onToolDecided={markToolCallResponded}
       />
     </div>
   );

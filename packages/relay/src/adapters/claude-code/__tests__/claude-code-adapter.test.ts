@@ -44,6 +44,7 @@ function createMockRelay(): RelayPublisher {
   return {
     publish: vi.fn().mockResolvedValue({ messageId: 'resp-1', deliveredTo: 1 }),
     onSignal: vi.fn().mockReturnValue(() => {}),
+    subscribe: vi.fn().mockReturnValue(() => {}),
   };
 }
 
@@ -278,12 +279,43 @@ describe('ClaudeCodeAdapter', () => {
     // takes precedence via AgentManager's fallback chain.
     const ensureCall = vi.mocked(agentManager.ensureSession).mock.calls[0];
     expect(ensureCall[0]).toBe('session-abc');
-    expect(ensureCall[1]).toEqual({ permissionMode: 'default', hasStarted: true });
+    // hasStarted is false because no agentSessionStore is provided, so there's
+    // no persisted SDK session ID to resume — avoids broken resume attempts.
+    expect(ensureCall[1]).toEqual({ permissionMode: 'default', hasStarted: false });
     expect(ensureCall[1]).not.toHaveProperty('cwd');
 
     const sendCall = vi.mocked(agentManager.sendMessage).mock.calls[0];
-    expect(sendCall[2]).toEqual({});
+    expect(sendCall[2]).toEqual({ permissionMode: 'default' });
     expect(sendCall[2]).not.toHaveProperty('cwd');
+  });
+
+  it('extracts permissionMode from __bindingPermissions payload enrichment', async () => {
+    // Purpose: Validates the fix for hardcoded permissionMode: 'default'. When BindingRouter
+    // enriches the payload with __bindingPermissions, the CCA must extract permissionMode
+    // and pass it to both ensureSession() and sendMessage().
+    await adapter.start(relay);
+    const envelope = createTestEnvelope({
+      payload: {
+        content: 'Run the report',
+        __bindingPermissions: {
+          canReply: true,
+          canInitiate: true,
+          permissionMode: 'bypassPermissions',
+        },
+      },
+    });
+
+    await adapter.deliver(envelope.subject, envelope);
+
+    const ensureCall = vi.mocked(agentManager.ensureSession).mock.calls[0];
+    expect(ensureCall[1]).toEqual(
+      expect.objectContaining({ permissionMode: 'bypassPermissions' }),
+    );
+
+    const sendCall = vi.mocked(agentManager.sendMessage).mock.calls[0];
+    expect(sendCall[2]).toEqual(
+      expect.objectContaining({ permissionMode: 'bypassPermissions' }),
+    );
   });
 
   it('uses context.agent.directory when Mesh context is provided', async () => {
@@ -547,10 +579,11 @@ describe('ClaudeCodeAdapter', () => {
       const envelope = createTestEnvelope({ subject: 'relay.agent.agent-ulid-002' });
       await adapterWithStore.deliver(envelope.subject, envelope);
 
-      // ensureSession and sendMessage must use the persisted SDK UUID, not 'agent-ulid-002'
+      // ensureSession and sendMessage must use the persisted SDK UUID, not 'agent-ulid-002'.
+      // hasStarted is true because the store has a real SDK session ID to resume.
       expect(agentManager.ensureSession).toHaveBeenCalledWith(
         sdkUUID,
-        expect.objectContaining({ permissionMode: 'default' }),
+        expect.objectContaining({ permissionMode: 'default', hasStarted: true }),
       );
       expect(agentManager.sendMessage).toHaveBeenCalledWith(
         sdkUUID,
@@ -853,6 +886,131 @@ describe('ClaudeCodeAdapter', () => {
         ([msg]: [string]) => msg.includes('delivered to 0'),
       );
       expect(warnCalls).toHaveLength(0);
+    });
+  });
+
+  // === Platform formatting awareness (responseContext → systemPromptAppend) ===
+
+  describe('platform formatting awareness', () => {
+    it('passes systemPromptAppend with Slack formatting rules when responseContext includes formattingInstructions', async () => {
+      await adapter.start(relay);
+      const envelope = createTestEnvelope({
+        payload: {
+          content: 'List programming languages',
+          responseContext: {
+            platform: 'slack',
+            maxLength: 4000,
+            supportedFormats: ['text', 'mrkdwn'],
+            formattingInstructions: 'FORMATTING RULES (you MUST follow these):\n- Do NOT use Markdown tables',
+          },
+        },
+      });
+
+      await adapter.deliver(envelope.subject, envelope);
+
+      const sendArgs = vi.mocked(agentManager.sendMessage).mock.calls[0];
+      const opts = sendArgs[2] as { systemPromptAppend?: string };
+      expect(opts.systemPromptAppend).toBeDefined();
+      expect(opts.systemPromptAppend).toContain('<response_format>');
+      expect(opts.systemPromptAppend).toContain('Platform: slack');
+      expect(opts.systemPromptAppend).toContain('Do NOT use Markdown tables');
+      expect(opts.systemPromptAppend).toContain('4000');
+    });
+
+    it('passes systemPromptAppend with Telegram formatting rules from formattingInstructions', async () => {
+      await adapter.start(relay);
+      const envelope = createTestEnvelope({
+        payload: {
+          content: 'List programming languages',
+          responseContext: {
+            platform: 'telegram',
+            maxLength: 4096,
+            supportedFormats: ['text', 'markdown'],
+            formattingInstructions: 'FORMATTING RULES (you MUST follow these):\n- Do NOT use Markdown tables',
+          },
+        },
+      });
+
+      await adapter.deliver(envelope.subject, envelope);
+
+      const sendArgs = vi.mocked(agentManager.sendMessage).mock.calls[0];
+      const opts = sendArgs[2] as { systemPromptAppend?: string };
+      expect(opts.systemPromptAppend).toBeDefined();
+      expect(opts.systemPromptAppend).toContain('Platform: telegram');
+      expect(opts.systemPromptAppend).toContain('Do NOT use Markdown tables');
+      expect(opts.systemPromptAppend).toContain('4096');
+    });
+
+    it('passes through third-party platform formattingInstructions without modification', async () => {
+      await adapter.start(relay);
+      const customRules = 'Use Discord-flavored markdown.\n- Spoiler tags: ||text||';
+      const envelope = createTestEnvelope({
+        payload: {
+          content: 'Hello',
+          responseContext: {
+            platform: 'discord',
+            maxLength: 2000,
+            formattingInstructions: customRules,
+          },
+        },
+      });
+
+      await adapter.deliver(envelope.subject, envelope);
+
+      const sendArgs = vi.mocked(agentManager.sendMessage).mock.calls[0];
+      const opts = sendArgs[2] as { systemPromptAppend?: string };
+      expect(opts.systemPromptAppend).toBeDefined();
+      expect(opts.systemPromptAppend).toContain('Platform: discord');
+      expect(opts.systemPromptAppend).toContain(customRules);
+      expect(opts.systemPromptAppend).toContain('2000');
+    });
+
+    it('falls back to generic hint when supportedFormats lacks markdown and no formattingInstructions', async () => {
+      await adapter.start(relay);
+      const envelope = createTestEnvelope({
+        payload: {
+          content: 'Hello',
+          responseContext: {
+            platform: 'sms',
+            supportedFormats: ['text'],
+          },
+        },
+      });
+
+      await adapter.deliver(envelope.subject, envelope);
+
+      const sendArgs = vi.mocked(agentManager.sendMessage).mock.calls[0];
+      const opts = sendArgs[2] as { systemPromptAppend?: string };
+      expect(opts.systemPromptAppend).toBeDefined();
+      expect(opts.systemPromptAppend).toContain('Platform: sms');
+      expect(opts.systemPromptAppend).toContain('Avoid complex Markdown formatting');
+    });
+
+    it('does not include systemPromptAppend when no responseContext is present', async () => {
+      await adapter.start(relay);
+      const envelope = createTestEnvelope(); // no responseContext
+
+      await adapter.deliver(envelope.subject, envelope);
+
+      const sendArgs = vi.mocked(agentManager.sendMessage).mock.calls[0];
+      const opts = sendArgs[2] as Record<string, unknown>;
+      expect(opts).not.toHaveProperty('systemPromptAppend');
+    });
+
+    it('does not include systemPromptAppend when responseContext has no platform', async () => {
+      await adapter.start(relay);
+      const envelope = createTestEnvelope({
+        payload: {
+          content: 'Hello',
+          responseContext: { maxLength: 4000 },
+        },
+      });
+
+      await adapter.deliver(envelope.subject, envelope);
+
+      const sendArgs = vi.mocked(agentManager.sendMessage).mock.calls[0];
+      const opts = sendArgs[2] as Record<string, unknown>;
+      expect(opts).not.toHaveProperty('systemPromptAppend');
     });
   });
 });

@@ -10,7 +10,6 @@
 
 // Main entry point
 export { RelayCore } from './relay-core.js';
-export type { PublishResult } from './relay-core.js';
 
 // API versioning
 export { RELAY_ADAPTER_API_VERSION } from './version.js';
@@ -92,6 +91,7 @@ export type { EndpointType } from './types.js';
 export type {
   RelayPublisher,
   RelayAdapter,
+  RelayLogger,
   AdapterStatus,
   AdapterConfig,
   AdapterContext,
@@ -101,10 +101,12 @@ export type {
   SlackAdapterConfig,
   SmsAdapterConfig,
   AdapterRegistryLike,
-  PublishResultLike,
+  PublishResult,
   AdapterInboundCallbacks,
   AdapterOutboundCallbacks,
 } from './types.js';
+
+export { noopLogger } from './types.js';
 
 // Base class (optional convenience for adapter authors)
 export { BaseRelayAdapter } from './base-adapter.js';
@@ -130,7 +132,11 @@ export type {
 } from './adapters/claude-code/index.js';
 
 // Payload utilities
-export { formatForPlatform } from './lib/payload-utils.js';
+export {
+  formatForPlatform,
+  extractAgentIdFromEnvelope,
+  extractSessionIdFromEnvelope,
+} from './lib/payload-utils.js';
 
 // Plugin loader
 export { loadAdapters, validateAdapterShape } from './adapter-plugin-loader.js';

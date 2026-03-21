@@ -8,20 +8,26 @@ import { createMockTransport } from '@dorkos/test-utils';
 import type { StreamEvent } from '@dorkos/shared/types';
 import { TransportProvider } from '@/layers/shared/model';
 
-// Mock app store (selectedCwd)
+// Mock app store (selectedCwd + debug toggles)
+let mockAppState: Record<string, unknown> = {
+  selectedCwd: '/test/cwd',
+  enableCrossClientSync: true,
+  enableMessagePolling: true,
+};
+
 vi.mock('@/layers/shared/model', async () => {
   const actual = await vi.importActual<Record<string, unknown>>('@/layers/shared/model');
   return {
     ...actual,
     useAppStore: (selector?: (s: Record<string, unknown>) => unknown) => {
-      const state = { selectedCwd: '/test/cwd' };
-      return selector ? selector(state) : state;
+      return selector ? selector(mockAppState) : mockAppState;
     },
   };
 });
 
 // Mock EventSource for SSE subscription tests
 class MockEventSource {
+  static instances: MockEventSource[] = [];
   url: string;
   listeners: Map<string, Array<(event: Event) => void>>;
   readyState: number;
@@ -30,6 +36,7 @@ class MockEventSource {
     this.url = url;
     this.listeners = new Map();
     this.readyState = 1; // OPEN
+    MockEventSource.instances.push(this);
   }
 
   addEventListener(type: string, listener: (event: Event) => void) {
@@ -99,6 +106,12 @@ describe('useChatSession', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     uuidCounter = 0;
+    MockEventSource.instances = [];
+    mockAppState = {
+      selectedCwd: '/test/cwd',
+      enableCrossClientSync: true,
+      enableMessagePolling: true,
+    };
   });
 
   it('initializes with empty messages and transitions to idle', async () => {
@@ -305,7 +318,7 @@ describe('useChatSession', () => {
       await result.current.handleSubmit();
     });
 
-    expect(result.current.error).toBe('Something went wrong');
+    expect(result.current.error).toMatchObject({ message: 'Something went wrong' });
   });
 
   it('returns to idle on done events', async () => {
@@ -390,7 +403,7 @@ describe('useChatSession', () => {
     });
 
     expect(result.current.status).toBe('error');
-    expect(result.current.error).toBe('HTTP 404');
+    expect(result.current.error).toMatchObject({ message: 'HTTP 404' });
     // Optimistic user message removed on error
     expect(result.current.messages.filter((m) => m.role === 'user')).toHaveLength(0);
   });
@@ -416,7 +429,7 @@ describe('useChatSession', () => {
 
     expect(result.current.sessionBusy).toBe(true);
     expect(result.current.input).toBe('test message'); // Input preserved
-    expect(result.current.error).toBeNull(); // No error message set for busy state
+    expect(result.current.error).toMatchObject({ heading: 'Session in use' }); // Structured error for busy state
     expect(result.current.status).toBe('error');
   });
 
@@ -444,7 +457,8 @@ describe('useChatSession', () => {
       'Hello',
       expect.any(Function),
       expect.any(AbortSignal),
-      '/test/cwd'
+      '/test/cwd',
+      expect.objectContaining({ clientMessageId: expect.any(String) })
     );
   });
 
@@ -874,6 +888,40 @@ describe('useChatSession', () => {
       expect(result.current.streamStartTime).toBeNull();
 
       vi.restoreAllMocks();
+    });
+  });
+
+  describe('data path debug toggles', () => {
+    it('does not create EventSource when enableCrossClientSync is false', async () => {
+      mockAppState = { ...mockAppState, enableCrossClientSync: false };
+
+      const transport = createMockTransport();
+      renderHook(() => useChatSession('s1'), {
+        wrapper: createWrapper(transport),
+      });
+
+      // Wait for effects to settle
+      await waitFor(() => {
+        // Verify no EventSource was created for the session stream URL
+        const streamInstances = MockEventSource.instances.filter((es) =>
+          es.url.includes('/api/sessions/s1/stream')
+        );
+        expect(streamInstances).toHaveLength(0);
+      });
+    });
+
+    it('creates EventSource when enableCrossClientSync is true (default)', async () => {
+      const transport = createMockTransport();
+      renderHook(() => useChatSession('s1'), {
+        wrapper: createWrapper(transport),
+      });
+
+      await waitFor(() => {
+        const streamInstances = MockEventSource.instances.filter((es) =>
+          es.url.includes('/api/sessions/s1/stream')
+        );
+        expect(streamInstances.length).toBeGreaterThan(0);
+      });
     });
   });
 });

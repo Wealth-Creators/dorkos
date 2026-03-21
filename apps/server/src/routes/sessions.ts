@@ -188,23 +188,34 @@ router.post('/:id/messages', async (req, res) => {
 
   try {
     for await (const event of runtime.sendMessage(sessionId, content, { cwd })) {
-      await sendSSEEvent(res, event);
-
-      // If the backend assigned a different internal session ID, track it
+      // Intercept the done event to enrich it with server-assigned message IDs
+      // and session ID remap info, rather than sending a second done event.
       if (event.type === 'done') {
         const actualInternalId = runtime.getInternalSessionId(sessionId);
+        const lookupId = actualInternalId ?? sessionId;
+        const lastMsgIds = await runtime.getLastMessageIds(lookupId);
+
+        const donePayload: Record<string, unknown> = {
+          ...(event.data && typeof event.data === 'object' ? event.data : {}),
+        };
+
         if (actualInternalId && actualInternalId !== sessionId) {
           logger.debug('[POST /messages] session ID remapped', {
             sessionId,
             internalId: actualInternalId,
           });
-          // Send a redirect hint so the client can update its session ID
-          await sendSSEEvent(res, {
-            type: 'done',
-            data: { sessionId: actualInternalId },
-          });
+          donePayload.sessionId = actualInternalId;
         }
+
+        if (lastMsgIds) {
+          donePayload.messageIds = lastMsgIds;
+        }
+
+        await sendSSEEvent(res, { type: 'done', data: donePayload });
+        continue;
       }
+
+      await sendSSEEvent(res, event);
     }
   } catch (err) {
     logger.warn('[POST /messages] SSE stream error', {
@@ -233,7 +244,12 @@ router.post('/:id/approve', async (req, res) => {
   const { toolCallId } = parsed.data;
   const runtime = runtimeRegistry.getDefault();
   const approved = runtime.approveTool(sessionId, toolCallId, true);
-  if (!approved) return sendError(res, 404, 'No pending approval', 'NO_PENDING_APPROVAL');
+  if (!approved) {
+    if (runtime.hasSession(sessionId)) {
+      return sendError(res, 409, 'Interaction already resolved', 'INTERACTION_ALREADY_RESOLVED');
+    }
+    return sendError(res, 404, 'No pending approval', 'NO_PENDING_APPROVAL');
+  }
   res.json({ ok: true });
 });
 
@@ -249,7 +265,12 @@ router.post('/:id/deny', async (req, res) => {
   const { toolCallId } = parsed.data;
   const runtime = runtimeRegistry.getDefault();
   const denied = runtime.approveTool(sessionId, toolCallId, false);
-  if (!denied) return sendError(res, 404, 'No pending approval', 'NO_PENDING_APPROVAL');
+  if (!denied) {
+    if (runtime.hasSession(sessionId)) {
+      return sendError(res, 409, 'Interaction already resolved', 'INTERACTION_ALREADY_RESOLVED');
+    }
+    return sendError(res, 404, 'No pending approval', 'NO_PENDING_APPROVAL');
+  }
   res.json({ ok: true });
 });
 
@@ -265,7 +286,12 @@ router.post('/:id/submit-answers', async (req, res) => {
   const { toolCallId, answers } = parsed.data;
   const runtime = runtimeRegistry.getDefault();
   const ok = runtime.submitAnswers(sessionId, toolCallId, answers);
-  if (!ok) return sendError(res, 404, 'No pending question', 'NO_PENDING_QUESTION');
+  if (!ok) {
+    if (runtime.hasSession(sessionId)) {
+      return sendError(res, 409, 'Interaction already resolved', 'INTERACTION_ALREADY_RESOLVED');
+    }
+    return sendError(res, 404, 'No pending question', 'NO_PENDING_QUESTION');
+  }
   res.json({ ok: true });
 });
 

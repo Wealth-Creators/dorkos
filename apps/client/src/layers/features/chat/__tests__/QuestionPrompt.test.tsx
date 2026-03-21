@@ -5,7 +5,103 @@ import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-libra
 import { QuestionPrompt, type QuestionPromptHandle } from '../ui/QuestionPrompt';
 import type { QuestionItem } from '@dorkos/shared/types';
 
-// Mock Radix Tabs with controlled state support for jsdom
+// Mock Radix RadioGroup for jsdom
+vi.mock('@radix-ui/react-radio-group', () => {
+  const React = require('react');
+  const RadioGroupContext = React.createContext({ value: '', onValueChange: (_v: string) => {} });
+
+  function Root({
+    children,
+    value,
+    onValueChange,
+    className,
+    ...props
+  }: Record<string, unknown> & {
+    children?: React.ReactNode;
+    value?: string;
+    onValueChange?: (v: string) => void;
+    className?: string;
+  }) {
+    return React.createElement(
+      RadioGroupContext.Provider,
+      { value: { value: value || '', onValueChange: onValueChange || (() => {}) } },
+      React.createElement('div', { role: 'radiogroup', className, ...props }, children)
+    );
+  }
+
+  function Item({
+    value,
+    id,
+    disabled,
+    className,
+    ...props
+  }: Record<string, unknown> & {
+    value?: string;
+    id?: string;
+    disabled?: boolean;
+    className?: string;
+  }) {
+    const ctx = React.useContext(RadioGroupContext);
+    const checked = ctx.value === value;
+    return React.createElement('button', {
+      role: 'radio',
+      'aria-checked': checked,
+      'data-state': checked ? 'checked' : 'unchecked',
+      id,
+      disabled,
+      className,
+      onClick: () => !disabled && ctx.onValueChange(value || ''),
+      ...props,
+    });
+  }
+
+  return { Root, Item };
+});
+
+// Mock Radix Checkbox for jsdom
+vi.mock('@radix-ui/react-checkbox', () => {
+  const React = require('react');
+
+  function Root({
+    checked,
+    onCheckedChange,
+    id,
+    disabled,
+    className,
+    ...props
+  }: Record<string, unknown> & {
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    id?: string;
+    disabled?: boolean;
+    className?: string;
+  }) {
+    return React.createElement('button', {
+      role: 'checkbox',
+      'aria-checked': !!checked,
+      'data-state': checked ? 'checked' : 'unchecked',
+      id,
+      disabled,
+      className,
+      onClick: () => !disabled && onCheckedChange?.(!checked),
+      ...props,
+    });
+  }
+
+  function Indicator({
+    children,
+    ...props
+  }: Record<string, unknown> & { children?: React.ReactNode }) {
+    return React.createElement('span', props, children);
+  }
+
+  return { Root, Indicator };
+});
+
+// Mock Radix Tabs with controlled state support for jsdom.
+// The mock components explicitly exclude `ref` from the props spread to avoid
+// React 19 warnings when `tabs.tsx` wraps them with `forwardRef` and passes
+// the forwarded ref down as a regular prop.
 vi.mock('@radix-ui/react-tabs', () => {
   const React = require('react');
   const TabsContext = React.createContext({ value: '', onValueChange: (_v: string) => {} });
@@ -20,20 +116,29 @@ vi.mock('@radix-ui/react-tabs', () => {
     value?: string;
     onValueChange?: (v: string) => void;
   }) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { ref: _ref, ...rest } = props as Record<string, unknown> & { ref?: unknown };
     return React.createElement(
       TabsContext.Provider,
       { value: { value: value || '', onValueChange: onValueChange || (() => {}) } },
-      React.createElement('div', props, children)
+      React.createElement('div', rest, children)
     );
   }
-  function List({ children, ...props }: Record<string, unknown> & { children?: React.ReactNode }) {
-    return React.createElement('div', { role: 'tablist', ...props }, children);
+  function List({
+    children,
+    ...props
+  }: Record<string, unknown> & { children?: React.ReactNode }) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { ref: _ref, ...rest } = props as Record<string, unknown> & { ref?: unknown };
+    return React.createElement('div', { role: 'tablist', ...rest }, children);
   }
   function Trigger({
     children,
     value,
     ...props
   }: Record<string, unknown> & { children?: React.ReactNode; value?: string }) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { ref: _ref, ...rest } = props as Record<string, unknown> & { ref?: unknown };
     const ctx = React.useContext(TabsContext);
     const isActive = ctx.value === value;
     return React.createElement(
@@ -43,7 +148,7 @@ vi.mock('@radix-ui/react-tabs', () => {
         'data-state': isActive ? 'active' : 'inactive',
         'data-value': value,
         onClick: () => ctx.onValueChange(value || ''),
-        ...props,
+        ...rest,
       },
       children
     );
@@ -53,11 +158,13 @@ vi.mock('@radix-ui/react-tabs', () => {
     value,
     ...props
   }: Record<string, unknown> & { children?: React.ReactNode; value?: string }) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { ref: _ref, ...rest } = props as Record<string, unknown> & { ref?: unknown };
     const ctx = React.useContext(TabsContext);
     if (ctx.value !== value) return null;
     return React.createElement(
       'div',
-      { role: 'tabpanel', 'data-state': 'active', ...props },
+      { role: 'tabpanel', 'data-state': 'active', ...rest },
       children
     );
   }
@@ -103,9 +210,10 @@ const baseProps = {
 };
 
 describe('QuestionPrompt', () => {
-  it('renders question text and header', () => {
+  it('renders question text without header row', () => {
     render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
-    expect(screen.getByText('Approach')).toBeDefined();
+    // Header row is removed in the redesign — question text is the primary element
+    expect(screen.queryByText('Approach')).toBeNull();
     expect(screen.getByText('How should I handle the conflicting meeting times?')).toBeDefined();
   });
 
@@ -211,7 +319,7 @@ describe('QuestionPrompt', () => {
     });
   });
 
-  it('collapses to compact summary after successful submission (shows emerald styling)', async () => {
+  it('collapses to compact single-row summary after successful submission', async () => {
     render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
     // Select and submit
     const radio = screen.getAllByRole('radio')[0];
@@ -221,15 +329,34 @@ describe('QuestionPrompt', () => {
     await waitFor(() => {
       // After submission, the form should collapse
       expect(screen.queryByRole('radio')).toBeNull();
-      // Header should still be visible in summary (vertical layout, no colon)
-      expect(screen.getByText('Approach')).toBeDefined();
-      // Selected value should be displayed
-      expect(screen.getByText('Reschedule the internal meeting')).toBeDefined();
+      // Single-question submitted shows "header: value" format on one line
+      expect(screen.getByText('Approach: Reschedule the internal meeting')).toBeDefined();
     });
 
-    // Check emerald styling on the container
-    const container = screen.getByText('Approach').closest('div[class*="emerald"]');
+    // Container uses neutral bg-muted/50 with shadow-msg-tool (ToolCallCard pattern)
+    const container = screen.getByTestId('question-prompt-submitted');
     expect(container).not.toBeNull();
+    expect(container.className).toContain('shadow-msg-tool');
+    expect(container.className).toContain('bg-muted/50');
+  });
+
+  it('treats INTERACTION_ALREADY_RESOLVED error as successful submission', async () => {
+    const alreadyResolvedError = Object.assign(new Error('Interaction already resolved'), {
+      code: 'INTERACTION_ALREADY_RESOLVED',
+      status: 409,
+    });
+    mockSubmitAnswers.mockRejectedValueOnce(alreadyResolvedError);
+
+    render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
+    const radio = screen.getAllByRole('radio')[0];
+    fireEvent.click(radio);
+    fireEvent.click(screen.getByRole('button', { name: /submit/i }));
+
+    await waitFor(() => {
+      // Should collapse to submitted state, not show an error
+      expect(screen.queryByRole('radio')).toBeNull();
+      expect(screen.getByTestId('question-prompt-submitted')).toBeDefined();
+    });
   });
 
   it('shows error text when submission fails', async () => {
@@ -285,93 +412,133 @@ describe('QuestionPrompt', () => {
     expect(submitButton.hasAttribute('disabled')).toBe(true);
   });
 
-  it('renders option descriptions when provided', () => {
+  it('renders option descriptions inline when provided', () => {
     render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
-    expect(screen.getByText('External meetings are harder to move.')).toBeDefined();
+    // Descriptions are rendered inline after label text with " — " separator
+    expect(screen.getByText(/External meetings are harder to move\./)).toBeDefined();
   });
 });
 
-describe('Multi-question tabs', () => {
-  // Verifies tab bar renders with correct question headers
-  it('renders tab bar when multiple questions provided', () => {
+describe('Multi-question Back/Next navigation', () => {
+  // Verifies step indicator shows the current question header
+  it('renders step indicator with question header for multiple questions', () => {
     render(
       <QuestionPrompt {...baseProps} questions={[singleSelectQuestion, multiSelectQuestion]} />
     );
-    expect(screen.getByRole('tablist')).toBeDefined();
-    expect(screen.getByRole('tab', { name: /Approach/i })).toBeDefined();
-    expect(screen.getByRole('tab', { name: /Features/i })).toBeDefined();
+    // Step indicator shows the header of the active question
+    expect(screen.getByText('Approach')).toBeDefined();
   });
 
-  // Verifies single question has no tab overhead
-  it('does not render tab bar for single question', () => {
+  // Verifies single question has no Back/Next overhead
+  it('does not render Back/Next buttons for single question', () => {
     render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
-    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('button', { name: /back/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /next/i })).toBeNull();
   });
 
-  // Verifies only active tab's content is visible
-  it('shows only active tab content', () => {
+  // Verifies Back is disabled on first question
+  it('Back button is disabled on the first question', () => {
     render(
       <QuestionPrompt {...baseProps} questions={[singleSelectQuestion, multiSelectQuestion]} />
     );
-    // First tab active by default — its question text should be visible
+    const backBtn = screen.getByRole('button', { name: /back/i });
+    expect(backBtn.hasAttribute('disabled')).toBe(true);
+  });
+
+  // Verifies Next appears on non-last questions, Submit on last
+  it('renders Next button on non-last question and Submit on last', () => {
+    const ref = createRef<QuestionPromptHandle>();
+    render(
+      <QuestionPrompt
+        ref={ref}
+        {...baseProps}
+        questions={[singleSelectQuestion, multiSelectQuestion]}
+        isActive
+      />
+    );
+    // First question: Next visible, no Submit
+    expect(screen.getByRole('button', { name: /next/i })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /submit/i })).toBeNull();
+
+    // Navigate to last question
+    act(() => {
+      ref.current!.navigateQuestion('next');
+    });
+    // Last question: Submit visible, no Next
+    expect(screen.queryByRole('button', { name: /next/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /submit/i })).toBeDefined();
+  });
+
+  // Verifies Next button navigates to next question
+  it('Next button navigates to next question and shows its content', () => {
+    render(
+      <QuestionPrompt {...baseProps} questions={[singleSelectQuestion, multiSelectQuestion]} />
+    );
+    // First question visible
     expect(screen.getByText(singleSelectQuestion.question)).toBeDefined();
-    // Second tab's question text should not be in the DOM (Radix lazy mounts)
     expect(screen.queryByText(multiSelectQuestion.question)).toBeNull();
-  });
 
-  // Verifies tab switching activates the clicked tab and shows its content
-  it('switches content when tab is clicked', () => {
-    render(
-      <QuestionPrompt {...baseProps} questions={[singleSelectQuestion, multiSelectQuestion]} />
-    );
-    const featuresTab = screen.getByRole('tab', { name: /Features/i });
-    expect(featuresTab.getAttribute('data-state')).toBe('inactive');
-    fireEvent.click(featuresTab);
-    expect(featuresTab.getAttribute('data-state')).toBe('active');
-    // Second tab's content should now be visible
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+
+    // Second question now visible
     expect(screen.getByText(multiSelectQuestion.question)).toBeDefined();
-    // First tab's content should be hidden
     expect(screen.queryByText(singleSelectQuestion.question)).toBeNull();
   });
 
-  // Verifies submit requires ALL questions answered across tabs
-  it('submit disabled until all questions answered across tabs', () => {
+  // Verifies submit requires ALL questions answered
+  it('submit disabled until all questions answered', () => {
+    const ref = createRef<QuestionPromptHandle>();
     render(
-      <QuestionPrompt {...baseProps} questions={[singleSelectQuestion, multiSelectQuestion]} />
+      <QuestionPrompt
+        ref={ref}
+        {...baseProps}
+        questions={[singleSelectQuestion, multiSelectQuestion]}
+        isActive
+      />
     );
     // Answer first question only
     fireEvent.click(screen.getAllByRole('radio')[0]);
+    // Navigate to last question
+    act(() => {
+      ref.current!.navigateQuestion('next');
+    });
     expect(screen.getByRole('button', { name: /submit/i }).hasAttribute('disabled')).toBe(true);
   });
 
-  // Verifies checkmark appears on answered tabs
-  it('shows checkmark on answered tabs', () => {
+  // Verifies step indicator updates on navigation
+  it('step indicator updates to show current question header', () => {
+    const ref = createRef<QuestionPromptHandle>();
     render(
-      <QuestionPrompt {...baseProps} questions={[singleSelectQuestion, multiSelectQuestion]} />
+      <QuestionPrompt
+        ref={ref}
+        {...baseProps}
+        questions={[singleSelectQuestion, multiSelectQuestion]}
+      />
     );
-    fireEvent.click(screen.getAllByRole('radio')[0]);
-    // First tab should now have a check icon (svg)
-    const firstTab = screen.getByRole('tab', { name: /Approach/i });
-    expect(firstTab.querySelector('svg')).not.toBeNull();
+    expect(screen.getByText('Approach')).toBeDefined();
+
+    act(() => {
+      ref.current!.navigateQuestion('next');
+    });
+    expect(screen.getByText('Features')).toBeDefined();
   });
 });
 
 describe('Answer summary layout', () => {
-  // Verifies vertical layout renders header and value on separate elements
-  it('renders vertical stacked summary after submission', async () => {
+  // Verifies compact single-row layout renders "header: value" on one line
+  it('renders compact single-row summary after submission', async () => {
     render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
     fireEvent.click(screen.getAllByRole('radio')[0]);
     fireEvent.click(screen.getByRole('button', { name: /submit/i }));
 
     await waitFor(() => {
-      // Header as label, value as separate text
-      expect(screen.getByText('Approach')).toBeDefined();
-      expect(screen.getByText('Reschedule the internal meeting')).toBeDefined();
+      // Single-question: "header: value" on one line
+      expect(screen.getByText('Approach: Reschedule the internal meeting')).toBeDefined();
     });
   });
 
-  // Verifies pre-answered questions (from history) use vertical layout
-  it('renders vertical summary for pre-answered questions', () => {
+  // Verifies multi-question pre-answered shows "N questions answered"
+  it('renders compact summary for pre-answered questions (multi-question)', () => {
     render(
       <QuestionPrompt
         {...baseProps}
@@ -382,10 +549,21 @@ describe('Answer summary layout', () => {
         }}
       />
     );
-    expect(screen.getByText('Approach')).toBeDefined();
-    expect(screen.getByText('Reschedule the internal meeting')).toBeDefined();
-    expect(screen.getByText('Features')).toBeDefined();
-    expect(screen.getByText('Dark mode, Search')).toBeDefined();
+    // Multi-question: shows "N questions answered" (not individual answers)
+    expect(screen.getByText('2 questions answered')).toBeDefined();
+  });
+
+  // Verifies single pre-answered question shows "header: value"
+  it('renders compact summary for pre-answered single question', () => {
+    render(
+      <QuestionPrompt
+        {...baseProps}
+        questions={[singleSelectQuestion]}
+        answers={{ '0': 'Reschedule the internal meeting' }}
+      />
+    );
+    // Single-question: "header: value"
+    expect(screen.getByText('Approach: Reschedule the internal meeting')).toBeDefined();
   });
 });
 
@@ -397,7 +575,7 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
       );
       const wrapper = container.firstElementChild as HTMLElement;
       expect(wrapper.className).toContain('ring-2');
-      expect(wrapper.className).toContain('ring-amber-500/30');
+      expect(wrapper.className).toContain('ring-ring/30');
     });
 
     it('does not have ring-2 class when isActive is false', () => {
@@ -421,10 +599,11 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
       expect(kbds[2].textContent).toBe('3'); // Other option
     });
 
-    it('hides Kbd hints when isActive is false', () => {
+    it('shows Kbd hints even when isActive is false (always visible for right-aligned hints)', () => {
       render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} isActive={false} />);
       const kbds = document.querySelectorAll('kbd');
-      expect(kbds.length).toBe(0);
+      // Kbd number hints on options are always visible (no isActive conditional per Task 3.4)
+      expect(kbds.length).toBeGreaterThanOrEqual(3);
     });
 
     it('shows Enter Kbd on submit button when isActive is true', () => {
@@ -446,13 +625,13 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
           focusedOptionIndex={1}
         />
       );
-      // Get all option labels (including "Other")
-      const labels = document.querySelectorAll('label');
+      // Query option wrapper divs with data-selected attribute
+      const optionDivs = document.querySelectorAll('[data-selected]');
       // Index 1 should have the ring-1 class
-      expect(labels[1].className).toContain('ring-1');
-      expect(labels[1].className).toContain('ring-amber-500/50');
+      expect(optionDivs[1].className).toContain('ring-1');
+      expect(optionDivs[1].className).toContain('ring-status-info/50');
       // Index 0 should not
-      expect(labels[0].className).not.toContain('ring-1');
+      expect(optionDivs[0].className).not.toContain('ring-1');
     });
 
     it('adds ring-1 to the "Other" option when focused', () => {
@@ -464,9 +643,9 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
           focusedOptionIndex={2}
         />
       );
-      const labels = document.querySelectorAll('label');
+      const optionDivs = document.querySelectorAll('[data-selected]');
       // "Other" is at index 2 (after 2 regular options)
-      expect(labels[2].className).toContain('ring-1');
+      expect(optionDivs[2].className).toContain('ring-1');
     });
 
     it('does not add ring-1 when isActive is false', () => {
@@ -478,37 +657,8 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
           focusedOptionIndex={0}
         />
       );
-      const labels = document.querySelectorAll('label');
-      expect(labels[0].className).not.toContain('ring-1');
-    });
-  });
-
-  describe('navigation hints for multi-question tabs', () => {
-    it('shows arrow navigation hints when isActive and multiple questions', () => {
-      render(
-        <QuestionPrompt
-          {...baseProps}
-          questions={[singleSelectQuestion, multiSelectQuestion]}
-          isActive={true}
-        />
-      );
-      expect(screen.getByText('navigate questions')).toBeDefined();
-    });
-
-    it('does not show arrow navigation hints when isActive is false', () => {
-      render(
-        <QuestionPrompt
-          {...baseProps}
-          questions={[singleSelectQuestion, multiSelectQuestion]}
-          isActive={false}
-        />
-      );
-      expect(screen.queryByText('navigate questions')).toBeNull();
-    });
-
-    it('does not show arrow navigation hints for single question', () => {
-      render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} isActive={true} />);
-      expect(screen.queryByText('navigate questions')).toBeNull();
+      const optionDivs = document.querySelectorAll('[data-selected]');
+      expect(optionDivs[0].className).not.toContain('ring-1');
     });
   });
 
@@ -521,9 +671,9 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
         ref.current!.toggleOption(0);
       });
 
-      // First radio should now be checked
-      const radios = screen.getAllByRole('radio') as HTMLInputElement[];
-      expect(radios[0].checked).toBe(true);
+      // First radio should now be aria-checked (Radix renders as button role="radio")
+      const radios = screen.getAllByRole('radio');
+      expect(radios[0].getAttribute('aria-checked')).toBe('true');
     });
 
     it('toggleOption toggles a checkbox (multi-select)', () => {
@@ -537,10 +687,10 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
         ref.current!.toggleOption(2);
       }); // Select Search
 
-      const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
-      expect(checkboxes[0].checked).toBe(true);
-      expect(checkboxes[1].checked).toBe(false); // Notifications
-      expect(checkboxes[2].checked).toBe(true);
+      const checkboxes = screen.getAllByRole('checkbox');
+      expect(checkboxes[0].getAttribute('aria-checked')).toBe('true');
+      expect(checkboxes[1].getAttribute('aria-checked')).toBe('false'); // Notifications
+      expect(checkboxes[2].getAttribute('aria-checked')).toBe('true');
     });
 
     it('toggleOption untoggle works for multi-select', () => {
@@ -554,8 +704,8 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
         ref.current!.toggleOption(0);
       }); // Deselect Dark mode
 
-      const checkboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
-      expect(checkboxes[0].checked).toBe(false);
+      const checkboxes = screen.getAllByRole('checkbox');
+      expect(checkboxes[0].getAttribute('aria-checked')).toBe('false');
     });
 
     it('toggleOption selects "Other" when index equals options.length', () => {
@@ -567,9 +717,9 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
         ref.current!.toggleOption(2);
       });
 
-      const radios = screen.getAllByRole('radio') as HTMLInputElement[];
+      const radios = screen.getAllByRole('radio');
       // "Other" radio is the last one
-      expect(radios[2].checked).toBe(true);
+      expect(radios[2].getAttribute('aria-checked')).toBe('true');
     });
 
     it('navigateQuestion switches active tab', () => {
@@ -692,6 +842,80 @@ describe('QuestionPrompt interactive UX (Phase 2)', () => {
       });
       // Second tab: 3 options + Other = 4
       expect(ref.current!.getOptionCount()).toBe(4);
+    });
+  });
+
+  describe('stale question opacity', () => {
+    it('applies opacity-60 when isActive is false and not submitted', () => {
+      const { container } = render(
+        <QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} isActive={false} />
+      );
+      const wrapper = container.firstElementChild as HTMLElement;
+      expect(wrapper.className).toContain('opacity-60');
+    });
+
+    it('does not apply opacity-60 when isActive is true', () => {
+      const { container } = render(
+        <QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} isActive={true} />
+      );
+      const wrapper = container.firstElementChild as HTMLElement;
+      expect(wrapper.className).not.toContain('opacity-60');
+    });
+
+    it('uses border-status-info on pending container', () => {
+      const { container } = render(
+        <QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />
+      );
+      const wrapper = container.firstElementChild as HTMLElement;
+      expect(wrapper.className).toContain('border-status-info');
+    });
+  });
+});
+
+describe('ARIA roles', () => {
+  it('renders radiogroup role for single-select questions', () => {
+    render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
+    expect(screen.getByRole('radiogroup')).toBeDefined();
+  });
+
+  it('renders group role for multi-select questions', () => {
+    render(<QuestionPrompt {...baseProps} questions={[multiSelectQuestion]} />);
+    expect(screen.getByRole('group')).toBeDefined();
+  });
+
+  it('sets aria-label on options container to the question text', () => {
+    render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
+    const radiogroup = screen.getByRole('radiogroup');
+    expect(radiogroup.getAttribute('aria-label')).toBe(
+      'How should I handle the conflicting meeting times?'
+    );
+  });
+});
+
+describe('submitted state tokens', () => {
+  it('uses neutral bg-muted/50 with shadow-msg-tool in submitted state', async () => {
+    render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
+    fireEvent.click(screen.getAllByRole('radio')[0]);
+    fireEvent.click(screen.getByRole('button', { name: /submit/i }));
+
+    await waitFor(() => {
+      const container = screen.getByTestId('question-prompt-submitted');
+      expect(container.className).toContain('bg-muted/50');
+      expect(container.className).toContain('shadow-msg-tool');
+      expect(container.className).toContain('py-1');
+    });
+  });
+
+  it('renders status-success check icon in submitted state', async () => {
+    render(<QuestionPrompt {...baseProps} questions={[singleSelectQuestion]} />);
+    fireEvent.click(screen.getAllByRole('radio')[0]);
+    fireEvent.click(screen.getByRole('button', { name: /submit/i }));
+
+    await waitFor(() => {
+      const container = screen.getByTestId('question-prompt-submitted');
+      const svg = container.querySelector('svg');
+      expect(svg).not.toBeNull();
+      expect(svg!.classList.toString()).toContain('text-status-success');
     });
   });
 });

@@ -4,8 +4,8 @@
 
 Start the server and visit:
 
-- **Scalar UI**: [http://localhost:4242/api/docs](http://localhost:4242/api/docs) - interactive API explorer
-- **Raw spec**: [http://localhost:4242/api/openapi.json](http://localhost:4242/api/openapi.json) - OpenAPI 3.1 JSON
+- **Scalar UI**: [http://localhost:6242/api/docs](http://localhost:6242/api/docs) - interactive API explorer
+- **Raw spec**: [http://localhost:6242/api/openapi.json](http://localhost:6242/api/openapi.json) - OpenAPI 3.1 JSON
 
 ## How Schemas Work
 
@@ -59,7 +59,7 @@ Event types are documented in the `StreamEventType` enum in the OpenAPI spec. Th
 
 **Responses:**
 
-- `200` - SSE stream. Event types: `text_delta`, `tool_call_start`, `tool_call_delta`, `tool_call_end`, `tool_result`, `approval_required`, `question_prompt`, `error`, `done`, `session_status`, `task_update`
+- `200` - SSE stream. Event types: `text_delta`, `thinking_delta`, `tool_call_start`, `tool_call_delta`, `tool_call_end`, `tool_result`, `tool_progress`, `approval_required`, `question_prompt`, `error`, `done`, `session_status`, `task_update`, `subagent_started`, `subagent_progress`, `subagent_done`, `rate_limit`, `system_status`, `compact_boundary`, `prompt_suggestion`
 - `409` - Session locked by another client. Response body: `{ error: 'Session locked', code: 'SESSION_LOCKED', lockedBy: string, lockedAt: string }`
 
 ### GET /api/sessions/:id/stream
@@ -226,7 +226,7 @@ Other relevant environment variables:
 
 | Variable              | Default | Description                                                  |
 | --------------------- | ------- | ------------------------------------------------------------ |
-| `DORKOS_PORT`         | `4242`  | Express server port                                          |
+| `DORKOS_PORT`         | `4242` (dev: `6242`)  | Express server port                                          |
 | `DORKOS_CORS_ORIGIN`  | `*`     | CORS `Access-Control-Allow-Origin` value. Set to a specific origin (e.g. `https://app.example.com`) to restrict cross-origin requests. |
 | `DORKOS_PULSE_ENABLED`| `false` | `/api/schedules/*` and `/api/runs/*` routes                  |
 
@@ -700,7 +700,7 @@ Create a new adapter-agent binding. Zod-validated via `CreateBindingRequestSchem
 }
 ```
 
-`adapterId`, `agentId`, and `projectPath` are required. `sessionStrategy` defaults to `per-chat`. `chatId`, `channelType`, and `label` are optional.
+`adapterId`, `agentId`, and `projectPath` are required. `sessionStrategy` defaults to `per-chat`. `permissionMode` defaults to `acceptEdits` (controls the Claude Code permission mode for sessions created by this binding). `chatId`, `channelType`, and `label` are optional.
 
 **Responses:**
 
@@ -1166,7 +1166,7 @@ All DorkOS tools are registered on the external MCP server: core tools (ping, se
   "mcpServers": {
     "dorkos": {
       "type": "http",
-      "url": "http://localhost:4242/mcp"
+      "url": "http://localhost:6242/mcp"
     }
   }
 }
@@ -1179,7 +1179,7 @@ With API key:
   "mcpServers": {
     "dorkos": {
       "type": "http",
-      "url": "http://localhost:4242/mcp",
+      "url": "http://localhost:6242/mcp",
       "headers": {
         "Authorization": "Bearer your-api-key-here"
       }
@@ -1204,4 +1204,4 @@ Via ngrok tunnel:
 }
 ```
 
-**Cursor / Windsurf:** Add an MCP server in settings with URL `http://localhost:4242/mcp` and type `http`. If using an API key, configure the `Authorization: Bearer <key>` header in the MCP server settings.
+**Cursor / Windsurf:** Add an MCP server in settings with URL `http://localhost:6242/mcp` and type `http`. If using an API key, configure the `Authorization: Bearer <key>` header in the MCP server settings.

@@ -33,9 +33,11 @@ export const StreamEventTypeSchema = z
     'tool_call_delta',
     'tool_call_end',
     'tool_result',
+    'tool_progress',
     'approval_required',
     'question_prompt',
     'error',
+    'rate_limit',
     'done',
     'session_status',
     'task_update',
@@ -44,6 +46,17 @@ export const StreamEventTypeSchema = z
     'relay_receipt',
     'message_delivered',
     'relay_message',
+    'thinking_delta',
+    'subagent_started',
+    'subagent_progress',
+    'subagent_done',
+    'system_status',
+    'compact_boundary',
+    'prompt_suggestion',
+    'hook_started',
+    'hook_progress',
+    'hook_response',
+    'presence_update',
   ])
   .openapi('StreamEventType');
 
@@ -112,6 +125,7 @@ export const SendMessageRequestSchema = z
     content: z.string().min(1, 'content is required'),
     cwd: z.string().optional(),
     correlationId: z.string().uuid().optional(),
+    clientMessageId: z.string().optional(),
   })
   .openapi('SendMessageRequest');
 
@@ -162,6 +176,14 @@ export const TextDeltaSchema = z
 
 export type TextDelta = z.infer<typeof TextDeltaSchema>;
 
+export const ThinkingDeltaSchema = z
+  .object({
+    text: z.string(),
+  })
+  .openapi('ThinkingDelta');
+
+export type ThinkingDelta = z.infer<typeof ThinkingDeltaSchema>;
+
 const ToolCallStatusSchema = z.enum(['pending', 'running', 'complete', 'error']);
 
 export const ToolCallEventSchema = z
@@ -176,11 +198,21 @@ export const ToolCallEventSchema = z
 
 export type ToolCallEvent = z.infer<typeof ToolCallEventSchema>;
 
+export const ToolProgressEventSchema = z
+  .object({
+    toolCallId: z.string(),
+    content: z.string(),
+  })
+  .openapi('ToolProgressEvent');
+
+export type ToolProgressEvent = z.infer<typeof ToolProgressEventSchema>;
+
 export const ApprovalEventSchema = z
   .object({
     toolCallId: z.string(),
     toolName: z.string(),
     input: z.string(),
+    timeoutMs: z.number().describe('Server-side approval timeout in milliseconds'),
   })
   .openapi('ApprovalEvent');
 
@@ -195,14 +227,30 @@ export const QuestionPromptEventSchema = z
 
 export type QuestionPromptEvent = z.infer<typeof QuestionPromptEventSchema>;
 
+export const ErrorCategorySchema = z
+  .enum(['max_turns', 'execution_error', 'budget_exceeded', 'output_format_error'])
+  .openapi('ErrorCategory');
+
+export type ErrorCategory = z.infer<typeof ErrorCategorySchema>;
+
 export const ErrorEventSchema = z
   .object({
     message: z.string(),
     code: z.string().optional(),
+    category: ErrorCategorySchema.optional(),
+    details: z.string().optional(),
   })
   .openapi('ErrorEvent');
 
 export type ErrorEvent = z.infer<typeof ErrorEventSchema>;
+
+export const RateLimitEventSchema = z
+  .object({
+    retryAfter: z.number().optional(),
+  })
+  .openapi('RateLimitEvent');
+
+export type RateLimitEvent = z.infer<typeof RateLimitEventSchema>;
 
 export const DoneEventSchema = z
   .object({
@@ -219,6 +267,7 @@ export const SessionStatusEventSchema = z
     costUsd: z.number().optional(),
     contextTokens: z.number().int().optional(),
     contextMaxTokens: z.number().int().optional(),
+    outputTokens: z.number().int().optional(),
   })
   .openapi('SessionStatusEvent');
 
@@ -295,15 +344,135 @@ export const RelayMessageEventSchema = z
 
 export type RelayMessageEvent = z.infer<typeof RelayMessageEventSchema>;
 
+// === Subagent Lifecycle Events ===
+
+export const SubagentStartedEventSchema = z
+  .object({
+    taskId: z.string(),
+    subagentSessionId: z.string(),
+    toolUseId: z.string().optional(),
+    description: z.string(),
+  })
+  .openapi('SubagentStartedEvent');
+
+export type SubagentStartedEvent = z.infer<typeof SubagentStartedEventSchema>;
+
+export const SubagentProgressEventSchema = z
+  .object({
+    taskId: z.string(),
+    toolUses: z.number().int(),
+    lastToolName: z.string().optional(),
+    durationMs: z.number().int(),
+  })
+  .openapi('SubagentProgressEvent');
+
+export type SubagentProgressEvent = z.infer<typeof SubagentProgressEventSchema>;
+
+export const SubagentDoneEventSchema = z
+  .object({
+    taskId: z.string(),
+    status: z.enum(['completed', 'failed', 'stopped']),
+    summary: z.string().optional(),
+    toolUses: z.number().int().optional(),
+    durationMs: z.number().int().optional(),
+  })
+  .openapi('SubagentDoneEvent');
+
+export type SubagentDoneEvent = z.infer<typeof SubagentDoneEventSchema>;
+
+export const SystemStatusEventSchema = z
+  .object({
+    message: z.string(),
+  })
+  .openapi('SystemStatusEvent');
+
+export type SystemStatusEvent = z.infer<typeof SystemStatusEventSchema>;
+
+export const CompactBoundaryEventSchema = z
+  .object({})
+  .openapi('CompactBoundaryEvent');
+
+export type CompactBoundaryEvent = z.infer<typeof CompactBoundaryEventSchema>;
+
+export const PromptSuggestionEventSchema = z
+  .object({
+    suggestions: z.array(z.string()),
+  })
+  .openapi('PromptSuggestionEvent');
+
+export type PromptSuggestionEvent = z.infer<typeof PromptSuggestionEventSchema>;
+
+export const HookStartedEventSchema = z
+  .object({
+    hookId: z.string(),
+    hookName: z.string(),
+    hookEvent: z.string(),
+    toolCallId: z.string().nullable(),
+  })
+  .openapi('HookStartedEvent');
+
+export type HookStartedEvent = z.infer<typeof HookStartedEventSchema>;
+
+export const HookProgressEventSchema = z
+  .object({
+    hookId: z.string(),
+    stdout: z.string(),
+    stderr: z.string(),
+  })
+  .openapi('HookProgressEvent');
+
+export type HookProgressEvent = z.infer<typeof HookProgressEventSchema>;
+
+export const HookResponseEventSchema = z
+  .object({
+    hookId: z.string(),
+    hookName: z.string(),
+    exitCode: z.number().optional(),
+    outcome: z.enum(['success', 'error', 'cancelled']),
+    stdout: z.string(),
+    stderr: z.string(),
+  })
+  .openapi('HookResponseEvent');
+
+export type HookResponseEvent = z.infer<typeof HookResponseEventSchema>;
+
+// === Presence Types ===
+
+export const PresenceClientSchema = z.object({
+  type: z.enum(['web', 'obsidian', 'mcp', 'unknown']),
+  connectedAt: z.string(),
+});
+
+export type PresenceClient = z.infer<typeof PresenceClientSchema>;
+
+export const PresenceUpdateEventSchema = z
+  .object({
+    sessionId: z.string(),
+    clientCount: z.number().int(),
+    clients: z.array(PresenceClientSchema),
+    lockInfo: z
+      .object({
+        clientId: z.string(),
+        acquiredAt: z.string(),
+      })
+      .nullable(),
+  })
+  .openapi('PresenceUpdateEvent');
+
+export type PresenceUpdateEvent = z.infer<typeof PresenceUpdateEventSchema>;
+
 export const StreamEventSchema = z
   .object({
     type: StreamEventTypeSchema,
     data: z.union([
       TextDeltaSchema,
+      ThinkingDeltaSchema,
       ToolCallEventSchema,
+      ToolProgressEventSchema,
       ApprovalEventSchema,
       QuestionPromptEventSchema,
       ErrorEventSchema,
+      RateLimitEventSchema,
       DoneEventSchema,
       SessionStatusEventSchema,
       TaskUpdateEventSchema,
@@ -312,6 +481,16 @@ export const StreamEventSchema = z
       RelayReceiptEventSchema,
       MessageDeliveredEventSchema,
       RelayMessageEventSchema,
+      SubagentStartedEventSchema,
+      SubagentProgressEventSchema,
+      SubagentDoneEventSchema,
+      SystemStatusEventSchema,
+      CompactBoundaryEventSchema,
+      PromptSuggestionEventSchema,
+      HookStartedEventSchema,
+      HookProgressEventSchema,
+      HookResponseEventSchema,
+      PresenceUpdateEventSchema,
     ]),
   })
   .openapi('StreamEvent');
@@ -329,6 +508,20 @@ export const TextPartSchema = z
 
 export type TextPart = z.infer<typeof TextPartSchema>;
 
+const HookStatusSchema = z.enum(['running', 'success', 'error', 'cancelled']);
+
+export const HookPartSchema = z.object({
+  hookId: z.string(),
+  hookName: z.string(),
+  hookEvent: z.string(),
+  status: HookStatusSchema,
+  stdout: z.string(),
+  stderr: z.string(),
+  exitCode: z.number().optional(),
+});
+
+export type HookPart = z.infer<typeof HookPartSchema>;
+
 export const ToolCallPartSchema = z
   .object({
     type: z.literal('tool_call'),
@@ -336,16 +529,64 @@ export const ToolCallPartSchema = z
     toolName: z.string(),
     input: z.string().optional(),
     result: z.string().optional(),
+    progressOutput: z.string().optional(),
     status: ToolCallStatusSchema,
     interactiveType: z.enum(['approval', 'question']).optional(),
     questions: z.array(QuestionItemSchema).optional(),
     answers: z.record(z.string(), z.string()).optional(),
+    timeoutMs: z.number().optional().describe('Approval timeout duration in milliseconds'),
+    hooks: z.array(HookPartSchema).optional(),
   })
   .openapi('ToolCallPart');
 
 export type ToolCallPart = z.infer<typeof ToolCallPartSchema>;
 
-export const MessagePartSchema = z.discriminatedUnion('type', [TextPartSchema, ToolCallPartSchema]);
+const SubagentStatusSchema = z.enum(['running', 'complete', 'error']);
+
+export const SubagentPartSchema = z
+  .object({
+    type: z.literal('subagent'),
+    taskId: z.string(),
+    description: z.string(),
+    status: SubagentStatusSchema,
+    toolUses: z.number().int().optional(),
+    lastToolName: z.string().optional(),
+    durationMs: z.number().int().optional(),
+    summary: z.string().optional(),
+  })
+  .openapi('SubagentPart');
+
+export type SubagentPart = z.infer<typeof SubagentPartSchema>;
+
+export const ThinkingPartSchema = z
+  .object({
+    type: z.literal('thinking'),
+    text: z.string(),
+    isStreaming: z.boolean().optional(),
+    elapsedMs: z.number().int().optional(),
+  })
+  .openapi('ThinkingPart');
+
+export type ThinkingPart = z.infer<typeof ThinkingPartSchema>;
+
+export const ErrorPartSchema = z
+  .object({
+    type: z.literal('error'),
+    message: z.string(),
+    category: ErrorCategorySchema.optional(),
+    details: z.string().optional(),
+  })
+  .openapi('ErrorPart');
+
+export type ErrorPart = z.infer<typeof ErrorPartSchema>;
+
+export const MessagePartSchema = z.discriminatedUnion('type', [
+  TextPartSchema,
+  ToolCallPartSchema,
+  SubagentPartSchema,
+  ThinkingPartSchema,
+  ErrorPartSchema,
+]);
 
 export type MessagePart = z.infer<typeof MessagePartSchema>;
 
@@ -363,6 +604,7 @@ export const HistoryToolCallSchema = z
     toolName: z.string(),
     input: z.string().optional(),
     result: z.string().optional(),
+    progressOutput: z.string().optional(),
     status: z.literal('complete'),
     questions: z.array(QuestionItemSchema).optional(),
     answers: z.record(z.string(), z.string()).optional(),

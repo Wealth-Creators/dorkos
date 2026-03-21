@@ -1,8 +1,13 @@
 import { ButtonShowcases } from '../showcases/ButtonShowcases';
-import { FormShowcases } from '../showcases/FormShowcases';
 import { FeedbackShowcases } from '../showcases/FeedbackShowcases';
 import { NavigationShowcases } from '../showcases/NavigationShowcases';
+import { SidebarShowcases } from '../showcases/SidebarShowcases';
 import { OverlayShowcases } from '../showcases/OverlayShowcases';
+import { DataDisplayShowcases } from '../showcases/DataDisplayShowcases';
+import { DrawerShowcases } from '../showcases/DrawerShowcases';
+import { ChatPrimitivesShowcases } from '../showcases/ChatPrimitivesShowcases';
+import { TocSidebar } from '../TocSidebar';
+import { COMPONENTS_SECTIONS } from '../playground-registry';
 
 /** UI component gallery page for the dev playground. */
 export function ComponentsPage() {
@@ -15,13 +20,19 @@ export function ComponentsPage() {
         </p>
       </header>
 
-      <main className="mx-auto max-w-4xl space-y-8 p-6">
-        <ButtonShowcases />
-        <FormShowcases />
-        <FeedbackShowcases />
-        <NavigationShowcases />
-        <OverlayShowcases />
-      </main>
+      <div className="flex gap-8 p-6">
+        <main className="min-w-0 flex-1 space-y-8">
+          <ButtonShowcases />
+          <FeedbackShowcases />
+          <NavigationShowcases />
+          <SidebarShowcases />
+          <OverlayShowcases />
+          <DrawerShowcases />
+          <DataDisplayShowcases />
+          <ChatPrimitivesShowcases />
+        </main>
+        <TocSidebar sections={COMPONENTS_SECTIONS} />
+      </div>
     </>
   );
 }

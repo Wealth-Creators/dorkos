@@ -79,16 +79,3 @@ export const toolStatus = tv({
   },
 });
 
-/**
- * Variant for tool approval state styling.
- * Maps approval lifecycle state to semantic border/background/text classes.
- */
-export const approvalState = tv({
-  variants: {
-    state: {
-      pending: 'border-status-warning-border bg-status-warning-bg',
-      approved: 'border-status-success-border bg-status-success-bg text-status-success-fg',
-      denied: 'border-status-error-border bg-status-error-bg text-status-error-fg',
-    },
-  },
-});

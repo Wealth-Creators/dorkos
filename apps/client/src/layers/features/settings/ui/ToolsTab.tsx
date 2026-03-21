@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useRelayEnabled } from '@/layers/entities/relay';
 import { usePulseEnabled } from '@/layers/entities/pulse';
-import { Badge, Label, Switch } from '@/layers/shared/ui';
+import { Badge, FieldCard, FieldCardContent, SettingRow, Switch } from '@/layers/shared/ui';
 import { useAgentContextConfig } from '@/layers/features/agent-settings/model/use-agent-context-config';
 
 const PULSE_PREVIEW = `DorkOS Pulse lets you create and manage scheduled agent runs.
@@ -91,11 +91,7 @@ function ToolBlockSection({
 
   return (
     <section className="space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <Label className="text-sm font-medium">{label}</Label>
-          <p className="text-muted-foreground text-xs">{description}</p>
-        </div>
+      <SettingRow label={label} description={description}>
         <div className="flex items-center gap-2">
           {!available && (
             <Badge variant="secondary" className="text-xs">
@@ -109,7 +105,7 @@ function ToolBlockSection({
             aria-label={`Toggle ${label} context`}
           />
         </div>
-      </div>
+      </SettingRow>
       {effective && (
         <pre className="bg-muted max-h-40 overflow-y-auto rounded-md p-3 text-xs leading-relaxed">
           {preview}
@@ -139,50 +135,54 @@ export function ToolsTab() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <p className="text-muted-foreground text-sm">
         Control which tool usage instructions are injected into agent system prompts by default.
         These are global defaults — individual agents can override them in their Capabilities tab.
       </p>
 
-      <ToolBlockSection
-        label="Pulse Tools"
-        description="Scheduling tools for creating and managing scheduled agent runs."
-        enabled={config.pulseTools}
-        available={pulseEnabled}
-        unavailableReason="Pulse is disabled"
-        onToggle={(v) => handleToggle('pulseTools', v)}
-        preview={PULSE_PREVIEW}
-      />
+      <FieldCard>
+        <FieldCardContent>
+          <ToolBlockSection
+            label="Pulse Tools"
+            description="Scheduling tools for creating and managing scheduled agent runs."
+            enabled={config.pulseTools}
+            available={pulseEnabled}
+            unavailableReason="Pulse is disabled"
+            onToggle={(v) => handleToggle('pulseTools', v)}
+            preview={PULSE_PREVIEW}
+          />
 
-      <ToolBlockSection
-        label="Relay Tools"
-        description="Subject hierarchy, messaging workflows, and error codes for the Relay message bus."
-        enabled={config.relayTools}
-        available={relayEnabled}
-        unavailableReason="Relay is disabled"
-        onToggle={(v) => handleToggle('relayTools', v)}
-        preview={RELAY_PREVIEW}
-      />
+          <ToolBlockSection
+            label="Relay Tools"
+            description="Subject hierarchy, messaging workflows, and error codes for the Relay message bus."
+            enabled={config.relayTools}
+            available={relayEnabled}
+            unavailableReason="Relay is disabled"
+            onToggle={(v) => handleToggle('relayTools', v)}
+            preview={RELAY_PREVIEW}
+          />
 
-      <ToolBlockSection
-        label="Mesh Tools"
-        description="Agent lifecycle, discovery workflow, and cross-tool orchestration with Relay."
-        enabled={config.meshTools}
-        available={true}
-        onToggle={(v) => handleToggle('meshTools', v)}
-        preview={MESH_PREVIEW}
-      />
+          <ToolBlockSection
+            label="Mesh Tools"
+            description="Agent lifecycle, discovery workflow, and cross-tool orchestration with Relay."
+            enabled={config.meshTools}
+            available={true}
+            onToggle={(v) => handleToggle('meshTools', v)}
+            preview={MESH_PREVIEW}
+          />
 
-      <ToolBlockSection
-        label="Adapter Tools"
-        description="External platform subjects, adapter management, and binding routing conventions."
-        enabled={config.adapterTools}
-        available={relayEnabled}
-        unavailableReason="Relay is disabled"
-        onToggle={(v) => handleToggle('adapterTools', v)}
-        preview={ADAPTER_PREVIEW}
-      />
+          <ToolBlockSection
+            label="Adapter Tools"
+            description="External platform subjects, adapter management, and binding routing conventions."
+            enabled={config.adapterTools}
+            available={relayEnabled}
+            unavailableReason="Relay is disabled"
+            onToggle={(v) => handleToggle('adapterTools', v)}
+            preview={ADAPTER_PREVIEW}
+          />
+        </FieldCardContent>
+      </FieldCard>
     </div>
   );
 }

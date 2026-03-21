@@ -4,7 +4,7 @@ import request from 'supertest';
 import { createPulseRouter } from '../pulse.js';
 import { PulseStore } from '../../services/pulse/pulse-store.js';
 import type { SchedulerService } from '../../services/pulse/scheduler-service.js';
-import { createTestDb } from '@dorkos/test-utils';
+import { createTestDb } from '@dorkos/test-utils/db';
 import type { Db } from '@dorkos/db';
 
 vi.mock('../../lib/boundary.js', () => ({
@@ -35,7 +35,7 @@ describe('Pulse routes', () => {
     scheduler = createMockScheduler();
     app = express();
     app.use(express.json());
-    app.use('/api/pulse', createPulseRouter(store, scheduler));
+    app.use('/api/pulse', createPulseRouter(store, scheduler, '/tmp/dork-test'));
     // Error handler to surface errors instead of hanging
     app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
       res.status(500).json({ error: err.message });

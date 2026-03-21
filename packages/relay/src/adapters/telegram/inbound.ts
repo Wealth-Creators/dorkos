@@ -10,7 +10,8 @@
  */
 import type { Context as GrammyContext } from 'grammy';
 import type { StandardPayload } from '@dorkos/shared/relay-schemas';
-import type { RelayPublisher, AdapterInboundCallbacks } from '../../types.js';
+import type { RelayPublisher, AdapterInboundCallbacks, RelayLogger } from '../../types.js';
+import { noopLogger } from '../../types.js';
 
 // === Constants ===
 
@@ -28,6 +29,16 @@ const UNKNOWN_SENDER = 'unknown';
 
 /** Maximum inbound message content length (32 KB). */
 export const MAX_CONTENT_LENGTH = 32_768;
+
+/** Telegram-specific formatting rules injected into agent system prompts via responseContext. */
+const TELEGRAM_FORMATTING_RULES = [
+  'FORMATTING RULES (you MUST follow these):',
+  '- Do NOT use Markdown tables. Telegram cannot render them.',
+  '- For structured data: use bullet points or bold key-value pairs.',
+  '- Use **bold**, _italic_, `code`, ```code blocks```, and [links](url).',
+  '- Telegram supports HTML subset: headings are not supported, use bold instead.',
+  `- Keep responses concise. Messages over ${MAX_MESSAGE_LENGTH} characters are split.`,
+].join('\n');
 
 // === Helpers ===
 
@@ -109,17 +120,27 @@ export async function handleInboundMessage(
   ctx: GrammyContext,
   relay: RelayPublisher,
   callbacks: AdapterInboundCallbacks,
+  logger: RelayLogger = noopLogger,
 ): Promise<void> {
-  if (!ctx.message) return;
+  if (!ctx.message) {
+    logger.debug('inbound skipped: no message in context');
+    return;
+  }
 
   const { chat, from, message } = ctx;
-  if (!chat || !message) return;
+  if (!chat || !message) {
+    logger.debug('inbound skipped: missing chat or message');
+    return;
+  }
 
   const isGroup = isGroupChat(chat.type);
   const subject = buildSubject(chat.id, isGroup);
 
   const rawText = message.text ?? message.caption ?? '';
-  if (!rawText) return; // Skip non-text messages (photos, stickers, etc.) without caption
+  if (!rawText) {
+    logger.debug(`inbound skipped: no text content in chat ${chat.id}`);
+    return;
+  }
 
   // Cap inbound content to prevent oversized payloads from reaching the relay
   const text = rawText.slice(0, MAX_CONTENT_LENGTH);
@@ -140,6 +161,7 @@ export async function handleInboundMessage(
       maxLength: MAX_MESSAGE_LENGTH,
       supportedFormats: ['text', 'markdown'],
       instructions: `Reply to subject ${subject} to respond to this Telegram message.`,
+      formattingInstructions: TELEGRAM_FORMATTING_RULES,
     },
     platformData: {
       chatId: chat.id,
@@ -151,12 +173,23 @@ export async function handleInboundMessage(
   };
 
   try {
-    await relay.publish(subject, payload, {
+    const result = await relay.publish(subject, payload, {
       from: `${SUBJECT_PREFIX}.bot`,
       replyTo: subject,
     });
+
+    // Check for rejected publishes (e.g. rate-limited) before tracking
+    if (result.deliveredTo === 0 && result.rejected?.length) {
+      const reason = result.rejected[0]?.reason ?? 'unknown';
+      callbacks.recordError(new Error(`Publish rejected: ${reason}`));
+      logger.warn(`inbound publish rejected for chat ${chat.id}: ${reason}`);
+      return;
+    }
+
     callbacks.trackInbound();
+    logger.debug(`inbound from ${senderName} in chat ${chat.id}: "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}" (${text.length} chars) → ${subject}`);
   } catch (err) {
     callbacks.recordError(err);
+    logger.warn(`inbound publish failed for chat ${chat.id}:`, err instanceof Error ? err.message : String(err));
   }
 }
