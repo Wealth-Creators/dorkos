@@ -24,7 +24,7 @@ import { extractPhoneNumber, SUBJECT_PREFIX, MAX_MESSAGE_LENGTH } from './inboun
 
 /** Minimal Twilio messages.create interface (avoids importing the full type). */
 interface TwilioMessagesClient {
-  create(opts: { to: string; from: string; body: string }): Promise<{ sid: string }>;
+  create(opts: { to: string; from?: string; messagingServiceSid?: string; body: string }): Promise<{ sid: string }>;
 }
 
 /** Minimal Twilio client interface used by the outbound module. */
@@ -39,6 +39,7 @@ export interface SmsDeliverOptions {
   envelope: RelayEnvelope;
   client: TwilioClientLike | null;
   fromNumber: string;
+  messagingServiceSid?: string;
   responseBuffers: Map<string, string>;
   callbacks: AdapterOutboundCallbacks;
 }
@@ -58,7 +59,7 @@ export interface SmsDeliverOptions {
  * @param opts - Delivery options
  */
 export async function deliverMessage(opts: SmsDeliverOptions): Promise<DeliveryResult> {
-  const { adapterId, subject, envelope, client, fromNumber, responseBuffers, callbacks } = opts;
+  const { adapterId, subject, envelope, client, fromNumber, messagingServiceSid, responseBuffers, callbacks } = opts;
   const startTime = Date.now();
 
   // Guard: skip messages that originated from this adapter (echo prevention).
@@ -103,7 +104,7 @@ export async function deliverMessage(opts: SmsDeliverOptions): Promise<DeliveryR
       const text = buffered
         ? truncateText(`${buffered}\n\n[Error: ${errorMsg}]`, MAX_MESSAGE_LENGTH)
         : truncateText(`[Error: ${errorMsg}]`, MAX_MESSAGE_LENGTH);
-      return sendAndTrack(client, to, fromNumber, text, startTime, callbacks);
+      return sendAndTrack(client, to, fromNumber, messagingServiceSid, text, startTime, callbacks);
     }
 
     // done: flush accumulated buffer as a single SMS
@@ -112,21 +113,19 @@ export async function deliverMessage(opts: SmsDeliverOptions): Promise<DeliveryR
       responseBuffers.delete(subject);
       if (buffered) {
         const text = truncateText(formatForPlatform(buffered, 'plain'), MAX_MESSAGE_LENGTH);
-        return sendAndTrack(client, to, fromNumber, text, startTime, callbacks);
+        return sendAndTrack(client, to, fromNumber, messagingServiceSid, text, startTime, callbacks);
       }
       return { success: true, durationMs: Date.now() - startTime };
     }
 
-    // All other StreamEvent types: silently skip
-    if (SILENT_EVENT_TYPES.has(eventType)) {
-      return { success: true, durationMs: Date.now() - startTime };
-    }
+    // All other StreamEvent types (thinking_delta, system_status, tool_result, etc.): silently skip
+    return { success: true, durationMs: Date.now() - startTime };
   }
 
   // --- Standard payload (non-StreamEvent) ---
   const raw = extractPayloadContent(envelope.payload);
   const text = truncateText(formatForPlatform(raw, 'plain'), MAX_MESSAGE_LENGTH);
-  return sendAndTrack(client, to, fromNumber, text, startTime, callbacks);
+  return sendAndTrack(client, to, fromNumber, messagingServiceSid, text, startTime, callbacks);
 }
 
 // === Helpers ===
@@ -134,9 +133,13 @@ export async function deliverMessage(opts: SmsDeliverOptions): Promise<DeliveryR
 /**
  * Send an SMS via Twilio and record the delivery outcome.
  *
+ * When messagingServiceSid is provided, messages are sent through the Messaging
+ * Service (applying A2P campaign compliance) instead of directly from fromNumber.
+ *
  * @param client - Twilio client instance
  * @param to - Recipient E.164 phone number
  * @param from - Sender (Twilio) E.164 phone number
+ * @param messagingServiceSid - Optional Messaging Service SID for A2P compliance
  * @param body - Message body (already truncated)
  * @param startTime - Timestamp (ms) for duration calculation
  * @param callbacks - Callbacks to mutate adapter state
@@ -145,12 +148,15 @@ async function sendAndTrack(
   client: TwilioClientLike,
   to: string,
   from: string,
+  messagingServiceSid: string | undefined,
   body: string,
   startTime: number,
   callbacks: AdapterOutboundCallbacks,
 ): Promise<DeliveryResult> {
   try {
-    await client.messages.create({ to, from, body });
+    await client.messages.create(
+      messagingServiceSid ? { to, messagingServiceSid, body } : { to, from, body },
+    );
     callbacks.trackOutbound();
     return { success: true, durationMs: Date.now() - startTime };
   } catch (err) {

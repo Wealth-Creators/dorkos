@@ -202,6 +202,7 @@ export class SmsAdapter extends BaseRelayAdapter {
       envelope,
       client: this.twilioClient,
       fromNumber: this.config.fromNumber,
+      messagingServiceSid: this.config.messagingServiceSid,
       responseBuffers: this.responseBuffers,
       callbacks: this.makeOutboundCallbacks(),
     });

@@ -6,10 +6,11 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "default": "./dist/index.js"
     }
   },
   "scripts": {
+    "build": "tsc",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:check": "drizzle-kit generate --config drizzle.config.ts && git diff --exit-code drizzle/",
     "test": "vitest",

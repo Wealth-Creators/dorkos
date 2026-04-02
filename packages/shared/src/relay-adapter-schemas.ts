@@ -109,6 +109,13 @@ export const SmsAdapterConfigSchema = z
      * When set, Twilio request signature validation is enforced.
      */
     webhookUrl: z.string().url().optional(),
+    /**
+     * Twilio Messaging Service SID (starts with MG).
+     * When set, outbound messages are sent via the Messaging Service so that
+     * the attached A2P 10DLC campaign is applied. Overrides fromNumber for
+     * outbound delivery.
+     */
+    messagingServiceSid: z.string().optional(),
   })
   .openapi('SmsAdapterConfig');
 
