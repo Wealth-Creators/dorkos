@@ -5,7 +5,7 @@ import {
   handlePing,
   handleGetServerInfo,
   createGetSessionCountHandler,
-  createGetCurrentAgentHandler,
+  createGetAgentHandler,
 } from '../runtimes/claude-code/mcp-tools/core-tools.js';
 import {
   createListSchedulesHandler,
@@ -13,7 +13,7 @@ import {
   createUpdateScheduleHandler,
   createDeleteScheduleHandler,
   createGetRunHistoryHandler,
-} from '../runtimes/claude-code/mcp-tools/pulse-tools.js';
+} from '../runtimes/claude-code/mcp-tools/task-tools.js';
 import {
   createRelaySendHandler,
   createRelayInboxHandler,
@@ -38,6 +38,7 @@ import {
   createRelayGetTraceHandler,
   createRelayGetMetricsHandler,
 } from '../runtimes/claude-code/mcp-tools/trace-tools.js';
+import { createCreateAgentHandler } from '../runtimes/claude-code/mcp-tools/agent-tools.js';
 import {
   createMeshDiscoverHandler,
   createMeshRegisterHandler,
@@ -48,6 +49,14 @@ import {
   createMeshInspectHandler,
   createMeshQueryTopologyHandler,
 } from '../runtimes/claude-code/mcp-tools/mesh-tools.js';
+import {
+  createListExtensionsHandler,
+  createGetExtensionErrorsHandler,
+  createGetExtensionApiHandler,
+  createCreateExtensionHandler,
+  createReloadExtensionsHandler,
+  createTestExtensionHandler,
+} from '../runtimes/claude-code/mcp-tools/extension-tools.js';
 
 /**
  * Create the external MCP server instance with all DorkOS tools registered.
@@ -72,7 +81,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     'ping',
     'Check that the DorkOS server is running. Returns pong with a timestamp.',
     {},
-    handlePing,
+    handlePing
   );
   server.tool(
     'get_server_info',
@@ -80,33 +89,37 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       include_uptime: z.boolean().optional().describe('Include server uptime in seconds'),
     },
-    handleGetServerInfo,
+    handleGetServerInfo
   );
+  const agentScopeSchema = {
+    agent_id: z.string().optional().describe('Agent ULID to scope the query to'),
+    cwd: z.string().optional().describe('Working directory path to scope the query to'),
+  };
   server.tool(
     'get_session_count',
-    'Returns the number of sessions visible in the SDK transcript directory.',
-    {},
-    createGetSessionCountHandler(deps),
+    'Returns the number of sessions for a specific agent. Provide either agent_id (ULID) or cwd (working directory path).',
+    agentScopeSchema,
+    createGetSessionCountHandler(deps)
   );
   server.tool(
-    'get_current_agent',
-    'Get the agent identity for the current working directory. Returns the agent manifest from .dork/agent.json if one exists, or null if no agent is registered.',
-    {},
-    createGetCurrentAgentHandler(deps),
+    'get_agent',
+    'Get the agent manifest for a specific agent. Provide either agent_id (ULID) or cwd (working directory path). Returns the agent manifest from .dork/agent.json if one exists, or null if no agent is registered.',
+    agentScopeSchema,
+    createGetAgentHandler(deps)
   );
 
-  // ── Pulse tools ─────────────────────────────────────────────────────────
+  // ── Tasks tools ─────────────────────────────────────────────────────────
   server.tool(
-    'pulse_list_schedules',
-    'List all Pulse scheduled jobs. Returns schedule definitions with status and configuration.',
+    'tasks_list',
+    'List all Tasks scheduled jobs. Returns schedule definitions with status and configuration.',
     {
       enabled_only: z.boolean().optional().describe('Only return enabled schedules'),
     },
-    createListSchedulesHandler(deps),
+    createListSchedulesHandler(deps)
   );
   server.tool(
-    'pulse_create_schedule',
-    'Create a new Pulse scheduled job. The schedule will be created with pending_approval status and must be approved by the user before it can run.',
+    'tasks_create',
+    'Create a new Tasks scheduled job. The schedule will be created with pending_approval status and must be approved by the user before it can run.',
     {
       name: z.string().describe('Name for the scheduled job'),
       prompt: z.string().describe('The prompt to send to the agent on each run'),
@@ -119,11 +132,11 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
         .optional()
         .describe('Permission mode: acceptEdits or bypassPermissions'),
     },
-    createCreateScheduleHandler(deps),
+    createCreateScheduleHandler(deps)
   );
   server.tool(
-    'pulse_update_schedule',
-    'Update an existing Pulse schedule. Only provided fields are updated.',
+    'tasks_update',
+    'Update an existing Tasks schedule. Only provided fields are updated.',
     {
       id: z.string().describe('Schedule ID to update'),
       name: z.string().optional().describe('New name'),
@@ -134,24 +147,24 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
       maxRuntime: z.number().optional().describe('New max runtime in ms'),
       permissionMode: z.string().optional().describe('New permission mode'),
     },
-    createUpdateScheduleHandler(deps),
+    createUpdateScheduleHandler(deps)
   );
   server.tool(
-    'pulse_delete_schedule',
-    'Delete a Pulse schedule permanently.',
+    'tasks_delete',
+    'Delete a Tasks schedule permanently.',
     {
       id: z.string().describe('Schedule ID to delete'),
     },
-    createDeleteScheduleHandler(deps),
+    createDeleteScheduleHandler(deps)
   );
   server.tool(
-    'pulse_get_run_history',
-    'Get recent run history for a Pulse schedule.',
+    'tasks_get_run_history',
+    'Get recent run history for a Tasks schedule.',
     {
       schedule_id: z.string().describe('Schedule ID to get runs for'),
       limit: z.number().optional().describe('Max runs to return (default 20)'),
     },
-    createGetRunHistoryHandler(deps),
+    createGetRunHistoryHandler(deps)
   );
 
   // ── Relay tools ─────────────────────────────────────────────────────────
@@ -167,17 +180,12 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
         .object({
           maxHops: z.number().int().min(1).optional().describe('Max hop count'),
           ttl: z.number().int().optional().describe('Unix timestamp (ms) expiry'),
-          callBudgetRemaining: z
-            .number()
-            .int()
-            .min(0)
-            .optional()
-            .describe('Remaining call budget'),
+          callBudgetRemaining: z.number().int().min(0).optional().describe('Remaining call budget'),
         })
         .optional()
         .describe('Optional budget constraints'),
     },
-    createRelaySendHandler(deps),
+    createRelaySendHandler(deps)
   );
   server.tool(
     'relay_inbox',
@@ -189,10 +197,10 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
         .string()
         .optional()
         .describe(
-          'Filter by status. Use "unread" (or "new"/"pending") for unread messages, "read" (or "cur"/"delivered") for processed messages, "failed" for delivery failures. Omit to return all.',
+          'Filter by status. Use "unread" (or "new"/"pending") for unread messages, "read" (or "cur"/"delivered") for processed messages, "failed" for delivery failures. Omit to return all.'
         ),
     },
-    createRelayInboxHandler(deps),
+    createRelayInboxHandler(deps)
   );
   server.tool(
     'relay_list_endpoints',
@@ -200,7 +208,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
       "registeredAt, type ('dispatch'|'query'|'persistent'|'agent'|'unknown'), and expiresAt " +
       '(ISO timestamp for dispatch endpoints indicating 30-min TTL expiry; null for others).',
     {},
-    createRelayListEndpointsHandler(deps),
+    createRelayListEndpointsHandler(deps)
   );
   server.tool(
     'relay_register_endpoint',
@@ -209,10 +217,10 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
       subject: z.string().describe('Subject for the new endpoint (e.g., "relay.agent.mybot")'),
       description: z.string().optional().describe('Human-readable description of the endpoint'),
     },
-    createRelayRegisterEndpointHandler(deps),
+    createRelayRegisterEndpointHandler(deps)
   );
   server.tool(
-    'relay_query',
+    'relay_send_and_wait',
     'Send a message to an agent and WAIT for the reply in a single call. Preferred over relay_send + relay_inbox polling for request/reply patterns. Internally registers an ephemeral inbox, sends the message with replyTo set, and blocks until the target agent replies or the timeout elapses. ' +
       'Response shape: { reply, progress, from, replyMessageId, sentMessageId }. ' +
       'progress: array of intermediate steps emitted before the final reply (empty [] for quick replies; populated for multi-step CCA tasks). ' +
@@ -231,28 +239,23 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
         .max(600000)
         .optional()
         .describe(
-          'Max milliseconds to wait for a reply (default: 60000, max: 600000). For tasks longer than 10 min, use relay_dispatch instead.',
+          'Max milliseconds to wait for a reply (default: 60000, max: 600000). For tasks longer than 10 min, use relay_send_async instead.'
         ),
       budget: z
         .object({
           maxHops: z.number().int().min(1).optional().describe('Max hop count'),
           ttl: z.number().int().optional().describe('Unix timestamp (ms) expiry'),
-          callBudgetRemaining: z
-            .number()
-            .int()
-            .min(0)
-            .optional()
-            .describe('Remaining call budget'),
+          callBudgetRemaining: z.number().int().min(0).optional().describe('Remaining call budget'),
         })
         .optional()
         .describe('Optional budget constraints'),
     },
-    createRelayQueryHandler(deps),
+    createRelayQueryHandler(deps)
   );
   server.tool(
-    'relay_dispatch',
+    'relay_send_async',
     'Dispatch a message to an agent and return IMMEDIATELY with a dispatch inbox subject. ' +
-      'Unlike relay_query (which blocks), relay_dispatch returns { messageId, inboxSubject } at once. ' +
+      'Unlike relay_send_and_wait (which blocks), relay_send_async returns { messageId, inboxSubject } at once. ' +
       'Agent B runs asynchronously; CCA publishes incremental progress events and a final agent_result ' +
       'to the inbox. Poll relay_inbox(endpoint_subject=inboxSubject) for updates. ' +
       'When you receive a message with done:true, call relay_unregister_endpoint(inboxSubject) to clean up.',
@@ -268,15 +271,15 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
         })
         .optional(),
     },
-    createRelayDispatchHandler(deps),
+    createRelayDispatchHandler(deps)
   );
   server.tool(
     'relay_unregister_endpoint',
-    'Unregister a Relay endpoint. Use to clean up dispatch inboxes after relay_dispatch completes (when done:true received).',
+    'Unregister a Relay endpoint. Use to clean up dispatch inboxes after relay_send_async completes (when done:true received).',
     {
       subject: z.string().describe('Subject of the endpoint to unregister'),
     },
-    createRelayUnregisterEndpointHandler(deps),
+    createRelayUnregisterEndpointHandler(deps)
   );
 
   // ── Adapter tools ───────────────────────────────────────────────────────
@@ -284,7 +287,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     'relay_list_adapters',
     'List all Relay external adapters with their current status (connected, disconnected, error).',
     {},
-    createRelayListAdaptersHandler(deps),
+    createRelayListAdaptersHandler(deps)
   );
   server.tool(
     'relay_enable_adapter',
@@ -292,7 +295,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       id: z.string().describe('Adapter ID to enable'),
     },
-    createRelayEnableAdapterHandler(deps),
+    createRelayEnableAdapterHandler(deps)
   );
   server.tool(
     'relay_disable_adapter',
@@ -300,13 +303,13 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       id: z.string().describe('Adapter ID to disable'),
     },
-    createRelayDisableAdapterHandler(deps),
+    createRelayDisableAdapterHandler(deps)
   );
   server.tool(
     'relay_reload_adapters',
     'Reload Relay adapter configuration from disk. Hot-reloads adapter state without server restart.',
     {},
-    createRelayReloadAdaptersHandler(deps),
+    createRelayReloadAdaptersHandler(deps)
   );
 
   // ── Binding tools ───────────────────────────────────────────────────────
@@ -314,7 +317,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     'binding_list',
     'List all adapter-to-agent bindings.',
     {},
-    createBindingListHandler(deps),
+    createBindingListHandler(deps)
   );
   server.tool(
     'binding_create',
@@ -333,7 +336,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
         .describe('Optional channel type filter: dm, group, channel, or thread'),
       label: z.string().optional().describe('Optional human-readable label for this binding'),
     },
-    createBindingCreateHandler(deps),
+    createBindingCreateHandler(deps)
   );
   server.tool(
     'binding_delete',
@@ -341,7 +344,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       id: z.string().describe('Binding UUID to delete'),
     },
-    createBindingDeleteHandler(deps),
+    createBindingDeleteHandler(deps)
   );
 
   // ── Trace tools ─────────────────────────────────────────────────────────
@@ -351,13 +354,13 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       messageId: z.string().describe('Message ID to look up the trace for'),
     },
-    createRelayGetTraceHandler(deps),
+    createRelayGetTraceHandler(deps)
   );
   server.tool(
     'relay_get_metrics',
     'Get aggregate delivery metrics for the Relay message bus. Includes counts, latency stats, and budget rejections.',
     {},
-    createRelayGetMetricsHandler(deps),
+    createRelayGetMetricsHandler(deps)
   );
 
   // ── Mesh tools ──────────────────────────────────────────────────────────
@@ -368,7 +371,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
       roots: z.array(z.string()).describe('Root directories to scan for agents'),
       maxDepth: z.number().int().min(1).optional().describe('Maximum directory depth (default 3)'),
     },
-    createMeshDiscoverHandler(deps),
+    createMeshDiscoverHandler(deps)
   );
   server.tool(
     'mesh_register',
@@ -380,7 +383,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
       runtime: z.string().optional().describe('Runtime: claude-code, cursor, codex, or other'),
       capabilities: z.array(z.string()).optional().describe('Agent capabilities'),
     },
-    createMeshRegisterHandler(deps),
+    createMeshRegisterHandler(deps)
   );
   server.tool(
     'mesh_list',
@@ -390,7 +393,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
       capability: z.string().optional().describe('Filter by capability'),
       callerNamespace: z.string().optional().describe('Filter by namespace visibility'),
     },
-    createMeshListHandler(deps),
+    createMeshListHandler(deps)
   );
   server.tool(
     'mesh_deny',
@@ -399,7 +402,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
       path: z.string().describe('Path to deny'),
       reason: z.string().optional().describe('Reason for denial'),
     },
-    createMeshDenyHandler(deps),
+    createMeshDenyHandler(deps)
   );
   server.tool(
     'mesh_unregister',
@@ -407,13 +410,13 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       agentId: z.string().describe('Agent ID to unregister'),
     },
-    createMeshUnregisterHandler(deps),
+    createMeshUnregisterHandler(deps)
   );
   server.tool(
     'mesh_status',
     'Get aggregate mesh health status — total agents, active/inactive/stale counts, by runtime, by project.',
     {},
-    createMeshStatusHandler(deps),
+    createMeshStatusHandler(deps)
   );
   server.tool(
     'mesh_inspect',
@@ -421,7 +424,7 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       agentId: z.string().describe('The agent ULID to inspect'),
     },
-    createMeshInspectHandler(deps),
+    createMeshInspectHandler(deps)
   );
   server.tool(
     'mesh_query_topology',
@@ -429,7 +432,75 @@ export function createExternalMcpServer(deps: McpToolDeps): McpServer {
     {
       namespace: z.string().optional().describe('Caller namespace (omit for admin view)'),
     },
-    createMeshQueryTopologyHandler(deps),
+    createMeshQueryTopologyHandler(deps)
+  );
+
+  // ── Agent tools ────────────────────────────────────────────────────────
+  server.tool(
+    'create_agent',
+    'Create a new DorkOS agent workspace with scaffolded config files',
+    {
+      name: z.string().describe('Agent name (kebab-case, e.g. my-agent)'),
+      directory: z.string().optional().describe('Optional workspace directory path'),
+      description: z.string().optional().describe('Optional agent description'),
+      runtime: z.string().optional().describe('Agent runtime (default: claude-code)'),
+    },
+    createCreateAgentHandler(deps)
+  );
+
+  // ── Extension tools ──────────────────────────────────────────────────
+  server.tool(
+    'get_extension_api',
+    'Get the full ExtensionAPI type definitions and usage examples. Call this when writing or debugging an extension to understand the available API surface. Returns TypeScript interface definitions for ExtensionAPI, ExtensionPointId, ExtensionReadableState, and ExtensionModule.',
+    {},
+    createGetExtensionApiHandler(deps)
+  );
+  server.tool(
+    'list_extensions',
+    'List all discovered DorkOS extensions with their status, scope, and errors. Returns both global (~/.dork/extensions/) and local (.dork/extensions/ in active CWD) extensions.',
+    {},
+    createListExtensionsHandler(deps)
+  );
+  server.tool(
+    'get_extension_errors',
+    'Get only extensions in an error state (invalid manifest, incompatible version, compile error, or activation failure). Returns error details for diagnosis.',
+    {},
+    createGetExtensionErrorsHandler(deps)
+  );
+  server.tool(
+    'create_extension',
+    'Scaffold a new DorkOS extension with manifest and starter code. Creates the directory, writes extension.json and index.ts, compiles, and enables the extension in one step.',
+    {
+      name: z.string().describe('Extension name (kebab-case, e.g. my-dashboard-widget)'),
+      description: z.string().optional().describe('Short description shown in settings UI'),
+      template: z
+        .enum(['dashboard-card', 'command', 'settings-panel'])
+        .optional()
+        .describe('Starter template (default: dashboard-card)'),
+      scope: z
+        .enum(['global', 'local'])
+        .optional()
+        .describe(
+          'Install scope: global (~/.dork/extensions/) or local (.dork/extensions/ in CWD). Default: global'
+        ),
+    },
+    createCreateExtensionHandler(deps)
+  );
+  server.tool(
+    'reload_extensions',
+    'Re-scan the filesystem for extensions and recompile any that changed. When id is provided, performs a targeted hot-reload of a single extension (recompile only). When omitted, runs a full discovery + recompile cycle.',
+    {
+      id: z.string().optional().describe('Extension ID for targeted reload. Omit to reload all.'),
+    },
+    createReloadExtensionsHandler(deps)
+  );
+  server.tool(
+    'test_extension',
+    'Compile an extension and activate it against a mock API to verify it loads without errors. Returns contribution counts per UI slot on success, or detailed error information on failure.',
+    {
+      id: z.string().describe('Extension ID to test'),
+    },
+    createTestExtensionHandler(deps)
   );
 
   return server;

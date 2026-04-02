@@ -17,8 +17,8 @@ import {
   truncateText,
 } from '../../lib/payload-utils.js';
 import type { ApprovalData } from '../../lib/payload-utils.js';
-import { MAX_MESSAGE_LENGTH } from './inbound.js';
 import { wrapSlackCall } from './stream.js';
+import type { ThreadParticipationTracker } from './thread-tracker.js';
 
 // === Approval timeout state ===
 
@@ -94,6 +94,7 @@ export async function handleApprovalRequired(
   callbacks: AdapterOutboundCallbacks,
   startTime: number,
   state: SlackOutboundState,
+  threadTracker?: ThreadParticipationTracker
 ): Promise<DeliveryResult> {
   const agentId = extractAgentIdFromEnvelope(envelope) ?? 'unknown';
   const sessionId = extractSessionIdFromEnvelope(envelope) ?? 'unknown';
@@ -154,8 +155,13 @@ export async function handleApprovalRequired(
     },
     callbacks,
     startTime,
-    true,
+    true
   );
+
+  // Mark thread participation after successful approval card post
+  if (result.success && threadTracker && threadTs) {
+    threadTracker.markParticipating(channelId, threadTs);
+  }
 
   // Register timeout to update message when approval expires
   if (result.success && postedTs && data.timeoutMs > 0) {
@@ -170,11 +176,16 @@ export async function handleApprovalRequired(
           blocks: [
             {
               type: 'section',
-              text: { type: 'mrkdwn', text: ':hourglass: *Tool Approval Timed Out*\n~`' + data.toolName + '`~' },
+              text: {
+                type: 'mrkdwn',
+                text: ':hourglass: *Tool Approval Timed Out*\n~`' + data.toolName + '`~',
+              },
             },
           ],
         });
-      } catch { /* best-effort — message may have been deleted */ }
+      } catch {
+        /* best-effort — message may have been deleted */
+      }
     }, data.timeoutMs);
     state.pendingApprovalTimeouts.set(data.toolCallId, {
       timer,

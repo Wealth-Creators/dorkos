@@ -1,14 +1,10 @@
 import { lazy, Suspense, useState, useCallback } from 'react';
-import { Loader2, Network, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { Loader2, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/layers/shared/ui';
 import { Badge } from '@/layers/shared/ui/badge';
-import {
-  useRegisteredAgents,
-  useDeniedAgents,
-  useUnregisterAgent,
-} from '@/layers/entities/mesh';
-import type { AgentManifest, DenialRecord } from '@dorkos/shared/mesh-schemas';
+import { useRegisteredAgents, useDeniedAgents } from '@/layers/entities/mesh';
+import type { DenialRecord } from '@dorkos/shared/mesh-schemas';
 import { useDirectoryState } from '@/layers/entities/session';
 import { AgentDialog } from '@/layers/features/agent-settings';
 import { MeshStatsHeader } from './MeshStatsHeader';
@@ -18,80 +14,8 @@ import { DiscoveryView } from './DiscoveryView';
 import { MeshEmptyState } from './MeshEmptyState';
 
 const LazyTopologyGraph = lazy(() =>
-  import('./TopologyGraph').then((m) => ({ default: m.TopologyGraph })),
+  import('./TopologyGraph').then((m) => ({ default: m.TopologyGraph }))
 );
-
-// -- Agents Tab --
-
-interface AgentsTabProps {
-  agents: AgentManifest[];
-  isLoading: boolean;
-  onGoToDiscovery: () => void;
-}
-
-function AgentsTab({ agents, isLoading, onGoToDiscovery }: AgentsTabProps) {
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
-  if (agents.length === 0) {
-    return (
-      <MeshEmptyState
-        icon={Network}
-        headline="No agents registered yet"
-        description="Discover agents in your filesystem and register them to the mesh."
-        action={{ label: 'Go to Discovery', onClick: onGoToDiscovery }}
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-2 p-4">
-      {agents.map((agent) => (
-        <AgentCard key={agent.id} agent={agent} />
-      ))}
-    </div>
-  );
-}
-
-function AgentCard({ agent }: { agent: AgentManifest }) {
-  const { mutate: unregister } = useUnregisterAgent();
-
-  return (
-    <div className="space-y-1 rounded-xl border p-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <p className="text-sm font-medium">{agent.name}</p>
-          <Badge variant="secondary">{agent.runtime}</Badge>
-        </div>
-        <button
-          type="button"
-          onClick={() => unregister(agent.id)}
-          className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          aria-label={`Unregister ${agent.name}`}
-        >
-          <X className="size-3.5" />
-        </button>
-      </div>
-      {agent.description && (
-        <p className="text-xs text-muted-foreground">{agent.description}</p>
-      )}
-      {agent.capabilities.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {agent.capabilities.map((cap) => (
-            <Badge key={cap} variant="outline" className="text-xs">
-              {cap}
-            </Badge>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // -- Denied Tab --
 
@@ -104,7 +28,7 @@ function DeniedTab({ denied, isLoading }: DeniedTabProps) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-8">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        <Loader2 className="text-muted-foreground size-5 animate-spin" />
       </div>
     );
   }
@@ -125,10 +49,10 @@ function DeniedTab({ denied, isLoading }: DeniedTabProps) {
         <div key={d.path} className="flex items-center justify-between rounded-xl border px-4 py-3">
           <div>
             <p className="font-mono text-sm">{d.path}</p>
-            {d.reason && <p className="text-xs text-muted-foreground">{d.reason}</p>}
+            {d.reason && <p className="text-muted-foreground text-xs">{d.reason}</p>}
           </div>
           <Badge variant="outline" className="text-xs">
-            {d.strategy}
+            {d.deniedBy}
           </Badge>
         </div>
       ))}
@@ -140,7 +64,12 @@ function DeniedTab({ denied, isLoading }: DeniedTabProps) {
 
 /** Main Mesh panel — progressive disclosure with Mode A (empty) and Mode B (populated). */
 export function MeshPanel() {
-  const { data: agentsResult, isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useRegisteredAgents();
+  const {
+    data: agentsResult,
+    isLoading: agentsLoading,
+    isError: agentsError,
+    refetch: refetchAgents,
+  } = useRegisteredAgents();
   const agents = agentsResult?.agents ?? [];
   const { data: deniedResult, isLoading: deniedLoading } = useDeniedAgents();
   const denied = deniedResult?.denied ?? [];
@@ -159,26 +88,20 @@ export function MeshPanel() {
     (projectPath: string) => {
       setDir(projectPath);
     },
-    [setDir],
+    [setDir]
   );
 
   /** Track selected agent and its project path from topology clicks. */
-  const handleSelectAgent = useCallback(
-    (agentId: string, projectPath: string) => {
-      setSelectedAgentId(agentId);
-      setSelectedProjectPath(projectPath);
-    },
-    [],
-  );
+  const handleSelectAgent = useCallback((agentId: string, projectPath: string) => {
+    setSelectedAgentId(agentId);
+    setSelectedProjectPath(projectPath);
+  }, []);
 
   /** Open agent settings dialog from topology toolbar. */
-  const handleOpenSettings = useCallback(
-    (_agentId: string, projectPath: string) => {
-      setSettingsProjectPath(projectPath);
-      setSettingsOpen(true);
-    },
-    [],
-  );
+  const handleOpenSettings = useCallback((_agentId: string, projectPath: string) => {
+    setSettingsProjectPath(projectPath);
+    setSettingsOpen(true);
+  }, []);
 
   const hasAgents = agents.length > 0;
   // Only show Mode A (discovery flow) when we *know* there are no agents.
@@ -189,19 +112,19 @@ export function MeshPanel() {
   if (agentsError) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
-        <div className="rounded-xl bg-destructive/10 p-3">
-          <TriangleAlert className="size-6 text-destructive" />
+        <div className="bg-destructive/10 rounded-xl p-3">
+          <TriangleAlert className="text-destructive size-6" />
         </div>
         <div className="space-y-1">
           <p className="text-sm font-medium">Could not load agents</p>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="text-muted-foreground mt-1 text-xs">
             The mesh API is unreachable. Check that the server is running correctly.
           </p>
         </div>
         <button
           type="button"
           onClick={() => void refetchAgents()}
-          className="mt-1 inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 mt-1 inline-flex items-center rounded-md px-3 py-1.5 text-xs font-medium"
         >
           Retry
         </button>
@@ -213,100 +136,99 @@ export function MeshPanel() {
 
   return (
     <>
-    <AnimatePresence mode="wait" initial={false}>
-      {isModeA ? (
-        <motion.div
-          key="mode-a"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="flex h-full flex-col"
-        >
-          <DiscoveryView fullBleed />
-        </motion.div>
-      ) : (
-        <motion.div
-          key="mode-b"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="flex h-full flex-col"
-        >
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col">
-            <MeshStatsHeader />
+      <AnimatePresence mode="wait" initial={false}>
+        {isModeA ? (
+          <motion.div
+            key="mode-a"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="flex h-full flex-col"
+          >
+            <DiscoveryView fullBleed />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="mode-b"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="flex h-full flex-col"
+          >
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex h-full flex-col">
+              <MeshStatsHeader />
 
-            <TabsList className="mx-4 mt-3 shrink-0">
-              <TabsTrigger value="topology">Topology</TabsTrigger>
-              <TabsTrigger value="discovery">Discovery</TabsTrigger>
-              <TabsTrigger value="agents">Agents</TabsTrigger>
-              <TabsTrigger value="denied">Denied</TabsTrigger>
-              <TabsTrigger value="access">Access</TabsTrigger>
-            </TabsList>
+              <TabsList className="mx-4 mt-3 shrink-0">
+                <TabsTrigger value="topology">Topology</TabsTrigger>
+                <TabsTrigger value="discovery">Discovery</TabsTrigger>
+                <TabsTrigger value="denied">Denied</TabsTrigger>
+                <TabsTrigger value="access">Access</TabsTrigger>
+              </TabsList>
 
-            <TabsContent value="topology" className="relative flex-1 overflow-hidden">
-              <div className="absolute inset-0">
-                <Suspense
-                  fallback={
-                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                      Loading topology...
-                    </div>
-                  }
-                >
-                  <LazyTopologyGraph
-                    onSelectAgent={handleSelectAgent}
-                    onOpenSettings={handleOpenSettings}
-                    onOpenChat={handleOpenChat}
-                  />
-                </Suspense>
-              </div>
-              <AnimatePresence>
-                {selectedAgentId && (
-                  <motion.div
-                    key={selectedAgentId}
-                    initial={{ x: 64, opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: 64, opacity: 0 }}
-                    transition={{ duration: 0.2, ease: 'easeOut' }}
-                    className="absolute right-0 top-0 bottom-0"
+              <TabsContent value="topology" className="relative flex-1 overflow-hidden">
+                <div className="absolute inset-0">
+                  <Suspense
+                    fallback={
+                      <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
+                        Loading topology...
+                      </div>
+                    }
                   >
-                    <AgentHealthDetail
-                      agentId={selectedAgentId}
-                      onClose={() => setSelectedAgentId(null)}
-                      onOpenSettings={selectedProjectPath ? () => handleOpenSettings(selectedAgentId, selectedProjectPath) : undefined}
+                    <LazyTopologyGraph
+                      onSelectAgent={handleSelectAgent}
+                      onOpenSettings={handleOpenSettings}
+                      onOpenChat={handleOpenChat}
                     />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </TabsContent>
+                  </Suspense>
+                </div>
+                <AnimatePresence>
+                  {selectedAgentId && (
+                    <motion.div
+                      key={selectedAgentId}
+                      initial={{ x: 64, opacity: 0 }}
+                      animate={{ x: 0, opacity: 1 }}
+                      exit={{ x: 64, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: 'easeOut' }}
+                      className="absolute top-0 right-0 bottom-0"
+                    >
+                      <AgentHealthDetail
+                        agentId={selectedAgentId}
+                        onClose={() => setSelectedAgentId(null)}
+                        onOpenSettings={
+                          selectedProjectPath
+                            ? () => handleOpenSettings(selectedAgentId, selectedProjectPath)
+                            : undefined
+                        }
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </TabsContent>
 
-            <TabsContent value="discovery" className="min-h-0 flex-1 overflow-y-auto">
-              <DiscoveryView />
-            </TabsContent>
+              <TabsContent value="discovery" className="min-h-0 flex-1 overflow-y-auto">
+                <DiscoveryView />
+              </TabsContent>
 
-            <TabsContent value="agents" className="min-h-0 flex-1 overflow-y-auto">
-              <AgentsTab agents={agents} isLoading={agentsLoading} onGoToDiscovery={switchToDiscovery} />
-            </TabsContent>
+              <TabsContent value="denied" className="min-h-0 flex-1 overflow-y-auto">
+                <DeniedTab denied={denied} isLoading={deniedLoading} />
+              </TabsContent>
 
-            <TabsContent value="denied" className="min-h-0 flex-1 overflow-y-auto">
-              <DeniedTab denied={denied} isLoading={deniedLoading} />
-            </TabsContent>
-
-            <TabsContent value="access" className="min-h-0 flex-1 overflow-y-auto">
-              <TopologyPanel onGoToDiscovery={switchToDiscovery} />
-            </TabsContent>
-          </Tabs>
-        </motion.div>
+              <TabsContent value="access" className="min-h-0 flex-1 overflow-y-auto">
+                <TopologyPanel onGoToDiscovery={switchToDiscovery} />
+              </TabsContent>
+            </Tabs>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {settingsProjectPath && (
+        <AgentDialog
+          projectPath={settingsProjectPath}
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+        />
       )}
-    </AnimatePresence>
-    {settingsProjectPath && (
-      <AgentDialog
-        projectPath={settingsProjectPath}
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-      />
-    )}
     </>
   );
 }

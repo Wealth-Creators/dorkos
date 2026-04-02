@@ -13,21 +13,21 @@ import type {
   TelegramAdapterConfig,
   WebhookAdapterConfig,
   SlackAdapterConfig,
-  SmsAdapterConfig,
   AdapterStatus,
+  ChatSdkTelegramAdapterConfig,
 } from '@dorkos/relay';
 import {
   TelegramAdapter,
   WebhookAdapter,
   SlackAdapter,
-  SmsAdapter,
   ClaudeCodeAdapter,
+  ChatSdkTelegramAdapter,
   loadAdapters,
 } from '@dorkos/relay';
 import type {
   ClaudeCodeAgentRuntimeLike,
   TraceStoreLike,
-  PulseStoreLike,
+  TasksStoreLike,
   AgentSessionStoreLike,
 } from '@dorkos/relay';
 import type { AdapterManifest } from '@dorkos/shared/relay-schemas';
@@ -37,7 +37,7 @@ import { logger, createTaggedLogger } from '../../lib/logger.js';
 export interface AdapterFactoryDeps {
   agentManager: ClaudeCodeAgentRuntimeLike;
   traceStore: TraceStoreLike;
-  pulseStore?: PulseStoreLike;
+  taskStore?: TasksStoreLike;
   /** Optional persistent store for agent key → SDK session UUID mappings. */
   agentSessionStore?: AgentSessionStoreLike;
 }
@@ -67,47 +67,37 @@ export async function createAdapter(
   config: AdapterConfig,
   deps: AdapterFactoryDeps,
   configPath: string,
-  onPluginManifest?: (type: string, manifest: AdapterManifest) => void,
+  onPluginManifest?: (type: string, manifest: AdapterManifest) => void
 ): Promise<RelayAdapter | null> {
   switch (config.type) {
     case 'telegram': {
-      const adapter = new TelegramAdapter(
-        config.id,
-        config.config as TelegramAdapterConfig,
-      );
+      const adapter = new TelegramAdapter(config.id, config.config as TelegramAdapterConfig);
       adapter.setLogger(createTaggedLogger(`telegram:${config.id}`));
       return adapter;
     }
     case 'webhook':
-      return new WebhookAdapter(
-        config.id,
-        config.config as WebhookAdapterConfig,
-      );
+      return new WebhookAdapter(config.id, config.config as WebhookAdapterConfig);
     case 'slack': {
-      const adapter = new SlackAdapter(
-        config.id,
-        config.config as SlackAdapterConfig,
-      );
+      const adapter = new SlackAdapter(config.id, config.config as SlackAdapterConfig);
       adapter.setLogger(createTaggedLogger(`slack:${config.id}`));
       return adapter;
     }
-    case 'sms':
-      return new SmsAdapter(
-        config.id,
-        config.config as SmsAdapterConfig,
-      );
     case 'claude-code':
-      return new ClaudeCodeAdapter(
+      return new ClaudeCodeAdapter(config.id, config.config as Record<string, unknown>, {
+        agentManager: deps.agentManager,
+        traceStore: deps.traceStore,
+        taskStore: deps.taskStore,
+        agentSessionStore: deps.agentSessionStore,
+        logger,
+      });
+    case 'telegram-chatsdk': {
+      const adapter = new ChatSdkTelegramAdapter(
         config.id,
-        config.config as Record<string, unknown>,
-        {
-          agentManager: deps.agentManager,
-          traceStore: deps.traceStore,
-          pulseStore: deps.pulseStore,
-          agentSessionStore: deps.agentSessionStore,
-          logger,
-        },
+        config.config as ChatSdkTelegramAdapterConfig
       );
+      adapter.setLogger(createTaggedLogger(`telegram-chatsdk:${config.id}`));
+      return adapter;
+    }
     case 'plugin':
       return loadPluginAdapter(config, configPath, onPluginManifest);
     default:
@@ -129,7 +119,7 @@ const CONNECTION_TEST_TIMEOUT_MS = 15_000;
  * @returns Result indicating success or failure with an error message
  */
 export async function testAdapterConnection(
-  adapter: RelayAdapter,
+  adapter: RelayAdapter
 ): Promise<{ ok: boolean; error?: string; botUsername?: string }> {
   try {
     // Prefer lightweight testConnection() -- avoids starting polling loops,
@@ -143,7 +133,7 @@ export async function testAdapterConnection(
           new Promise<never>((_, reject) => {
             timer = setTimeout(
               () => reject(new Error('Connection test timed out')),
-              CONNECTION_TEST_TIMEOUT_MS,
+              CONNECTION_TEST_TIMEOUT_MS
             );
           }),
         ]);
@@ -166,7 +156,7 @@ export async function testAdapterConnection(
         new Promise<never>((_, reject) => {
           fallbackTimer = setTimeout(
             () => reject(new Error('Connection test timed out')),
-            CONNECTION_TEST_TIMEOUT_MS,
+            CONNECTION_TEST_TIMEOUT_MS
           );
         }),
       ]);
@@ -198,7 +188,7 @@ export async function testAdapterConnection(
 async function loadPluginAdapter(
   config: AdapterConfig,
   configPath: string,
-  onPluginManifest?: (type: string, manifest: AdapterManifest) => void,
+  onPluginManifest?: (type: string, manifest: AdapterManifest) => void
 ): Promise<RelayAdapter | null> {
   if (!config.plugin) {
     logger.warn(`[AdapterFactory] Plugin adapter '${config.id}' missing plugin source config`);
@@ -218,7 +208,7 @@ async function loadPluginAdapter(
       },
     ],
     builtinMap,
-    configDir,
+    configDir
   );
 
   const result = results[0];

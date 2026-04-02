@@ -16,8 +16,14 @@ export function useDiscoveryScan() {
   const transport = useTransport();
   const abortRef = useRef<AbortController | null>(null);
 
-  const { startScan: storeStartScan, addCandidate, setProgress, completeScan, setError } =
-    useDiscoveryStore();
+  const {
+    startScan: storeStartScan,
+    addCandidate,
+    addExistingAgent,
+    setProgress,
+    completeScan,
+    setError,
+  } = useDiscoveryStore();
 
   const startScan = useCallback(
     (options: TransportScanOptions = { roots: [] }) => {
@@ -37,6 +43,9 @@ export function useDiscoveryScan() {
               case 'candidate':
                 addCandidate(event.data);
                 break;
+              case 'existing-agent':
+                addExistingAgent(event.data);
+                break;
               case 'progress':
                 setProgress(event.data);
                 break;
@@ -48,7 +57,7 @@ export function useDiscoveryScan() {
                 break;
             }
           },
-          controller.signal,
+          controller.signal
         )
         .catch((err: unknown) => {
           if (err instanceof Error && err.name !== 'AbortError') {
@@ -56,7 +65,7 @@ export function useDiscoveryScan() {
           }
         });
     },
-    [transport, storeStartScan, addCandidate, setProgress, completeScan, setError],
+    [transport, storeStartScan, addCandidate, addExistingAgent, setProgress, completeScan, setError]
   );
 
   const stopScan = useCallback(() => {

@@ -27,8 +27,8 @@ vi.mock('@/layers/entities/session', () => ({
   useSessions: () => mockUseSessions(),
 }));
 
-vi.mock('@/layers/entities/pulse', () => ({
-  useActiveRunCount: () => mockUseActiveRunCount(),
+vi.mock('@/layers/entities/tasks', () => ({
+  useActiveTaskRunCount: () => mockUseActiveRunCount(),
 }));
 
 vi.mock('@/layers/shared/model', () => ({
@@ -36,6 +36,89 @@ vi.mock('@/layers/shared/model', () => ({
     const state = mockUseAppStore();
     return selector ? selector(state) : state;
   },
+  useNow: () => Date.now(),
+  useSlotContributions: () => [
+    {
+      id: 'tasks',
+      label: 'Tasks Scheduler',
+      icon: 'Clock',
+      action: 'openTasks',
+      category: 'feature',
+      priority: 1,
+    },
+    {
+      id: 'relay',
+      label: 'Relay Messaging',
+      icon: 'Radio',
+      action: 'openRelay',
+      category: 'feature',
+      priority: 2,
+    },
+    {
+      id: 'mesh',
+      label: 'Mesh Network',
+      icon: 'Globe',
+      action: 'openMesh',
+      category: 'feature',
+      priority: 3,
+    },
+    {
+      id: 'settings',
+      label: 'Settings',
+      icon: 'Settings',
+      action: 'openSettings',
+      category: 'feature',
+      priority: 4,
+    },
+    {
+      id: 'dashboard',
+      label: 'Go to Dashboard',
+      icon: 'Home',
+      action: 'navigateDashboard',
+      category: 'quick-action',
+      priority: 1,
+    },
+    {
+      id: 'new-session',
+      label: 'New Session',
+      icon: 'Plus',
+      action: 'newSession',
+      category: 'quick-action',
+      priority: 2,
+    },
+    {
+      id: 'create-agent',
+      label: 'Create Agent',
+      icon: 'Plus',
+      action: 'createAgent',
+      category: 'quick-action',
+      priority: 3,
+    },
+    {
+      id: 'discover',
+      label: 'Discover Agents',
+      icon: 'Search',
+      action: 'discoverAgents',
+      category: 'quick-action',
+      priority: 4,
+    },
+    {
+      id: 'browse',
+      label: 'Browse Filesystem',
+      icon: 'FolderOpen',
+      action: 'browseFilesystem',
+      category: 'quick-action',
+      priority: 5,
+    },
+    {
+      id: 'theme',
+      label: 'Toggle Theme',
+      icon: 'Moon',
+      action: 'toggleTheme',
+      category: 'quick-action',
+      priority: 6,
+    },
+  ],
 }));
 
 vi.mock('../use-agent-frecency', () => ({
@@ -93,17 +176,19 @@ describe('usePaletteItems', () => {
     const { result } = renderHook(() => usePaletteItems(null));
     expect(result.current.features).toHaveLength(4);
     const ids = result.current.features.map((f) => f.id);
-    expect(ids).toContain('pulse');
+    expect(ids).toContain('tasks');
     expect(ids).toContain('relay');
     expect(ids).toContain('mesh');
     expect(ids).toContain('settings');
   });
 
-  it('quickActions is a static list of 4 items', () => {
+  it('quickActions is a static list of 6 items', () => {
     const { result } = renderHook(() => usePaletteItems(null));
-    expect(result.current.quickActions).toHaveLength(4);
+    expect(result.current.quickActions).toHaveLength(6);
     const ids = result.current.quickActions.map((q) => q.id);
+    expect(ids).toContain('dashboard');
     expect(ids).toContain('new-session');
+    expect(ids).toContain('create-agent');
     expect(ids).toContain('discover');
     expect(ids).toContain('browse');
     expect(ids).toContain('theme');
@@ -157,7 +242,7 @@ describe('usePaletteItems', () => {
     const agents = [agentA, agentB, agentC, agentD, agentE, agentF];
     mockUseMeshAgentPaths.mockReturnValue({ data: { agents }, isLoading: false });
     mockUseAgentFrecency.mockReturnValue(
-      makeFrecency(['agent-a', 'agent-b', 'agent-c', 'agent-d', 'agent-e', 'agent-f']),
+      makeFrecency(['agent-a', 'agent-b', 'agent-c', 'agent-d', 'agent-e', 'agent-f'])
     );
 
     const { result } = renderHook(() => usePaletteItems(null));
@@ -334,7 +419,13 @@ describe('usePaletteItems', () => {
     const recentTime = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min ago
     mockUseSessions.mockReturnValue({
       sessions: [
-        { id: 's1', title: 'Fix bug', cwd: '/projects/a', updatedAt: recentTime, createdAt: recentTime },
+        {
+          id: 's1',
+          title: 'Fix bug',
+          cwd: '/projects/a',
+          updatedAt: recentTime,
+          createdAt: recentTime,
+        },
       ],
     });
     const { result } = renderHook(() => usePaletteItems('/projects/a'));
@@ -348,27 +439,33 @@ describe('usePaletteItems', () => {
     const oldTime = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2h ago
     mockUseSessions.mockReturnValue({
       sessions: [
-        { id: 's1', title: 'Old session', cwd: '/projects/a', updatedAt: oldTime, createdAt: oldTime },
+        {
+          id: 's1',
+          title: 'Old session',
+          cwd: '/projects/a',
+          updatedAt: oldTime,
+          createdAt: oldTime,
+        },
       ],
     });
     const { result } = renderHook(() => usePaletteItems('/projects/a'));
     expect(result.current.suggestions.find((s) => s.id === 'suggestion-continue')).toBeUndefined();
   });
 
-  it('suggests active Pulse runs when activeRunCount > 0', () => {
+  it('suggests active Tasks runs when activeRunCount > 0', () => {
     mockUseActiveRunCount.mockReturnValue({ data: 3 });
     const { result } = renderHook(() => usePaletteItems(null));
-    const suggestion = result.current.suggestions.find((s) => s.id === 'suggestion-pulse');
+    const suggestion = result.current.suggestions.find((s) => s.id === 'suggestion-tasks');
     expect(suggestion).toBeDefined();
-    expect(suggestion?.label).toBe('3 active Pulse runs');
-    expect(suggestion?.action).toBe('openPulse');
+    expect(suggestion?.label).toBe('3 active Tasks runs');
+    expect(suggestion?.action).toBe('openTasks');
   });
 
   it('uses singular "run" when activeRunCount is 1', () => {
     mockUseActiveRunCount.mockReturnValue({ data: 1 });
     const { result } = renderHook(() => usePaletteItems(null));
-    const suggestion = result.current.suggestions.find((s) => s.id === 'suggestion-pulse');
-    expect(suggestion?.label).toBe('1 active Pulse run');
+    const suggestion = result.current.suggestions.find((s) => s.id === 'suggestion-tasks');
+    expect(suggestion?.label).toBe('1 active Tasks run');
   });
 
   it('suggests switch back to previous agent when previousCwd is set', () => {
@@ -390,13 +487,23 @@ describe('usePaletteItems', () => {
     mockUseMeshAgentPaths.mockReturnValue({ data: { agents: [agentA] }, isLoading: false });
     mockUseAgentFrecency.mockReturnValue(makeFrecency(['agent-a']));
     const { result } = renderHook(() => usePaletteItems('/projects/a'));
-    expect(result.current.suggestions.find((s) => s.id === 'suggestion-switchback')).toBeUndefined();
+    expect(
+      result.current.suggestions.find((s) => s.id === 'suggestion-switchback')
+    ).toBeUndefined();
   });
 
   it('caps suggestions at 3 items', () => {
     const recentTime = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     mockUseSessions.mockReturnValue({
-      sessions: [{ id: 's1', title: 'Session', cwd: '/projects/a', updatedAt: recentTime, createdAt: recentTime }],
+      sessions: [
+        {
+          id: 's1',
+          title: 'Session',
+          cwd: '/projects/a',
+          updatedAt: recentTime,
+          createdAt: recentTime,
+        },
+      ],
     });
     mockUseActiveRunCount.mockReturnValue({ data: 2 });
     mockUseAppStore.mockReturnValue({ previousCwd: '/projects/b' });

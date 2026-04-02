@@ -1,7 +1,17 @@
 import { useCallback } from 'react';
 import { Play, Pause, SkipForward, RotateCcw } from 'lucide-react';
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Slider } from '@/layers/shared/ui';
+import {
+  Button,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Slider,
+  Switch,
+} from '@/layers/shared/ui';
 import { cn } from '@/layers/shared/lib';
+import type { TextEffectMode } from '@/layers/shared/lib';
 import type { SimScenario } from './sim-types';
 import type { SimulatorResult } from './use-simulator';
 import { SPEED_PRESETS } from './use-simulator';
@@ -11,6 +21,10 @@ interface SimulatorControlsProps {
   selectedScenarioId: string;
   onScenarioChange: (id: string) => void;
   sim: SimulatorResult;
+  textEffectMode: TextEffectMode;
+  onTextEffectModeChange: (mode: TextEffectMode) => void;
+  animationEnabled: boolean;
+  onAnimationEnabledChange: (enabled: boolean) => void;
 }
 
 /** Transport-style control bar for the chat simulator. */
@@ -19,6 +33,10 @@ export function SimulatorControls({
   selectedScenarioId,
   onScenarioChange,
   sim,
+  textEffectMode,
+  onTextEffectModeChange,
+  animationEnabled,
+  onAnimationEnabledChange,
 }: SimulatorControlsProps) {
   const isPlaying = sim.phase === 'playing';
   const isDone = sim.phase === 'done';
@@ -29,7 +47,7 @@ export function SimulatorControls({
     (value: number[]) => {
       sim.seekTo(value[0]);
     },
-    [sim],
+    [sim]
   );
 
   return (
@@ -52,21 +70,11 @@ export function SimulatorControls({
 
         {/* Transport buttons */}
         <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="icon-sm"
-            onClick={sim.reset}
-            aria-label="Reset"
-          >
+          <Button variant="outline" size="icon-sm" onClick={sim.reset} aria-label="Reset">
             <RotateCcw className="size-3.5" />
           </Button>
           {isPlaying ? (
-            <Button
-              variant="outline"
-              size="icon-sm"
-              onClick={sim.pause}
-              aria-label="Pause"
-            >
+            <Button variant="outline" size="icon-sm" onClick={sim.pause} aria-label="Pause">
               <Pause className="size-3.5" />
             </Button>
           ) : (
@@ -130,11 +138,40 @@ export function SimulatorControls({
             sim.phase === 'idle' && 'bg-muted text-muted-foreground',
             sim.phase === 'playing' && 'bg-green-500/15 text-green-600 dark:text-green-400',
             sim.phase === 'paused' && 'bg-yellow-500/15 text-yellow-600 dark:text-yellow-400',
-            sim.phase === 'done' && 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+            sim.phase === 'done' && 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
           )}
         >
           {sim.phase}
         </span>
+      </div>
+
+      {/* Effect controls row */}
+      <div className="mt-2 flex items-center gap-3 border-t border-dashed pt-2">
+        <span className="text-muted-foreground text-xs">Text Effect</span>
+        <Select
+          value={textEffectMode}
+          onValueChange={(v) => onTextEffectModeChange(v as TextEffectMode)}
+        >
+          <SelectTrigger className="h-7 w-32 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">None</SelectItem>
+            <SelectItem value="fade">Fade In</SelectItem>
+            <SelectItem value="blur-in">Blur In</SelectItem>
+            <SelectItem value="slide-up">Slide Up</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
+          <Switch
+            size="sm"
+            checked={animationEnabled}
+            onCheckedChange={onAnimationEnabledChange}
+            aria-label="Toggle text animation"
+          />
+          Animation
+        </div>
       </div>
     </div>
   );

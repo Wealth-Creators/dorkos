@@ -14,9 +14,10 @@ import type { DiscoveryCandidate } from '@dorkos/shared/mesh-schemas';
 
 // Human-readable descriptions for known detection strategies
 const STRATEGY_DESCRIPTIONS: Record<string, string> = {
-  manifest: 'Found a .dork/agent.json manifest file in this directory.',
-  heuristic: 'Inferred from project file structure and naming conventions.',
-  'package.json': 'Detected agent configuration inside package.json.',
+  'claude-code': 'Detected a CLAUDE.md file — this is a Claude Code project.',
+  cursor: 'Detected a .cursor/ directory — this is a Cursor project.',
+  codex: 'Detected a .codex/ directory — this is a Codex project.',
+  'dork-manifest': 'Found an existing .dork/agent.json — already configured as a DorkOS agent.',
 };
 
 function strategyDescription(strategy: string): string {
@@ -50,7 +51,13 @@ interface CandidateCardProps {
 }
 
 /** Displays a discovered agent candidate with approve, deny, and optional skip actions. */
-export function CandidateCard({ candidate, onApprove, onDeny, onSkip, className }: CandidateCardProps) {
+export function CandidateCard({
+  candidate,
+  onApprove,
+  onDeny,
+  onSkip,
+  className,
+}: CandidateCardProps) {
   const { path, strategy, hints } = candidate;
 
   return (
@@ -65,35 +72,38 @@ export function CandidateCard({ candidate, onApprove, onDeny, onSkip, className 
     >
       <div className="min-w-0 flex-1 space-y-2">
         {/* Name */}
-        <p className="text-sm font-semibold leading-tight">
+        <p className="text-sm leading-tight font-semibold">
           {hints.suggestedName || path.split('/').pop() || path}
         </p>
 
         {/* Path */}
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
           <Folder className="size-3 shrink-0" />
           <span className="truncate font-mono">{path}</span>
         </div>
+
+        {/* Description (extracted from CLAUDE.md or similar) */}
+        {hints.description && (
+          <p className="text-muted-foreground line-clamp-2 text-xs">{hints.description}</p>
+        )}
 
         {/* Runtime with HoverCard showing detection strategy */}
         <div className="flex flex-wrap items-center gap-1.5">
           <HoverCard openDelay={300}>
             <HoverCardTrigger asChild>
-              <Badge
-                variant="secondary"
-                className="cursor-default text-xs hover:bg-secondary/80"
-              >
+              <Badge variant="secondary" className="hover:bg-secondary/80 cursor-default text-xs">
                 {hints.detectedRuntime}
               </Badge>
             </HoverCardTrigger>
             <HoverCardContent className="w-56 space-y-1.5 p-3" side="top" align="start">
               <p className="text-xs font-medium">Detected runtime</p>
-              <p className="text-xs text-muted-foreground">{strategyDescription(strategy)}</p>
+              <p className="text-muted-foreground text-xs">{strategyDescription(strategy)}</p>
             </HoverCardContent>
           </HoverCard>
 
           {/* Inferred capabilities with per-badge tooltips */}
-          {hints.inferredCapabilities && hints.inferredCapabilities.length > 0 &&
+          {hints.inferredCapabilities &&
+            hints.inferredCapabilities.length > 0 &&
             hints.inferredCapabilities.map((cap) => (
               <Tooltip key={cap}>
                 <TooltipTrigger asChild>
@@ -105,8 +115,7 @@ export function CandidateCard({ candidate, onApprove, onDeny, onSkip, className 
                   {capabilityDescription(cap)}
                 </TooltipContent>
               </Tooltip>
-            ))
-          }
+            ))}
         </div>
       </div>
 
@@ -115,7 +124,7 @@ export function CandidateCard({ candidate, onApprove, onDeny, onSkip, className 
         <button
           type="button"
           onClick={() => onApprove(candidate)}
-          className="rounded-md bg-green-600/10 px-2.5 py-1 text-xs font-medium text-green-700 hover:bg-green-600/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:text-green-400"
+          className="focus-visible:ring-ring rounded-md bg-green-600/10 px-2.5 py-1 text-xs font-medium text-green-700 hover:bg-green-600/20 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-green-400"
         >
           Approve
         </button>
@@ -123,7 +132,7 @@ export function CandidateCard({ candidate, onApprove, onDeny, onSkip, className 
           <button
             type="button"
             onClick={() => onSkip(candidate)}
-            className="rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="text-muted-foreground hover:bg-muted focus-visible:ring-ring rounded-md px-2.5 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
           >
             Skip
           </button>
@@ -132,7 +141,7 @@ export function CandidateCard({ candidate, onApprove, onDeny, onSkip, className 
           <button
             type="button"
             onClick={() => onDeny(candidate)}
-            className="rounded-md bg-red-600/10 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-600/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:text-red-400"
+            className="focus-visible:ring-ring rounded-md bg-red-600/10 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-600/20 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none dark:text-red-400"
           >
             Deny
           </button>

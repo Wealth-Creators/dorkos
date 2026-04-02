@@ -12,8 +12,11 @@ import type {
   HistoryMessage,
   TaskItem,
   ModelOption,
+  SubagentInfo,
   CommandRegistry,
   PermissionMode,
+  ReloadPluginsResult,
+  UiState,
 } from './types.js';
 
 /** Minimal response interface for session locking — only needs close event detection. */
@@ -82,6 +85,8 @@ export interface MessageOpts {
   permissionMode?: PermissionMode;
   cwd?: string;
   systemPromptAppend?: string;
+  /** Client UI state snapshot for agent situational awareness. */
+  uiState?: UiState;
 }
 
 /**
@@ -103,14 +108,39 @@ export interface AgentRuntime {
   /** Return true if the session is currently tracked in memory. */
   hasSession(sessionId: string): boolean;
 
+  /**
+   * Fork a session, creating a new independent copy of the conversation.
+   *
+   * @param projectDir - Project directory for transcript lookup
+   * @param sessionId - Session to fork
+   * @param opts - Optional fork parameters (upToMessageId, title)
+   * @returns The new forked session, or null if the source session was not found
+   */
+  forkSession(
+    projectDir: string,
+    sessionId: string,
+    opts?: { upToMessageId?: string; title?: string }
+  ): Promise<Session | null>;
+
   /** Update mutable session fields. Returns false if the session does not exist. */
   updateSession(
     sessionId: string,
     opts: {
       permissionMode?: PermissionMode;
       model?: string;
+      effort?: 'low' | 'medium' | 'high' | 'max';
     }
   ): boolean;
+
+  /**
+   * Rename a session by setting a custom title.
+   * Persists to the SDK's JSONL via `renameSession()`.
+   *
+   * @param sessionId - Session to rename
+   * @param title - New display title
+   * @param projectDir - Project directory for JSONL resolution
+   */
+  renameSession(sessionId: string, title: string, projectDir: string): Promise<void>;
 
   // --- Messaging ---
 
@@ -121,11 +151,7 @@ export interface AgentRuntime {
    * @param content - User message text
    * @param opts - Optional overrides for permission mode, cwd, and system prompt
    */
-  sendMessage(
-    sessionId: string,
-    content: string,
-    opts?: MessageOpts
-  ): AsyncGenerator<StreamEvent>;
+  sendMessage(sessionId: string, content: string, opts?: MessageOpts): AsyncGenerator<StreamEvent>;
 
   // --- Interactive flows ---
 
@@ -147,11 +173,32 @@ export interface AgentRuntime {
    * @param answers - Map of question key → answer value
    * @returns false if the session or interaction was not found
    */
-  submitAnswers(
+  submitAnswers(sessionId: string, toolCallId: string, answers: Record<string, string>): boolean;
+
+  /**
+   * Submit a response to an MCP elicitation prompt.
+   *
+   * @param sessionId - Target session
+   * @param interactionId - The elicitation interaction to respond to
+   * @param action - Accept, decline, or cancel the elicitation
+   * @param content - Form field values (form mode only)
+   * @returns false if the session or interaction was not found
+   */
+  submitElicitation(
     sessionId: string,
-    toolCallId: string,
-    answers: Record<string, string>
+    interactionId: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, unknown>
   ): boolean;
+
+  /**
+   * Stop a running background task (agent or bash command).
+   *
+   * @param sessionId - Target session
+   * @param taskId - The background task to stop
+   * @returns true if the task was found and stopped, false otherwise
+   */
+  stopTask(sessionId: string, taskId: string): Promise<boolean>;
 
   // --- Session queries (storage) ---
 
@@ -177,9 +224,7 @@ export interface AgentRuntime {
    * @param sessionId - Session to query
    * @returns ID pair or null if not available
    */
-  getLastMessageIds(
-    sessionId: string,
-  ): Promise<{ user: string; assistant: string } | null>;
+  getLastMessageIds(sessionId: string): Promise<{ user: string; assistant: string } | null>;
 
   /**
    * Read new content from a session transcript starting at a byte offset.
@@ -244,6 +289,9 @@ export interface AgentRuntime {
   /** Return available models for this runtime. */
   getSupportedModels(): Promise<ModelOption[]>;
 
+  /** Return available subagents reported by the SDK. */
+  getSupportedSubagents(): Promise<SubagentInfo[]>;
+
   /** Return static capability flags for this runtime. */
   getCapabilities(): RuntimeCapabilities;
 
@@ -268,6 +316,23 @@ export interface AgentRuntime {
    */
   getInternalSessionId(sessionId: string): string | undefined;
 
+  // --- Conventions (optional) ---
+
+  /**
+   * Apply personality and safety convention content to an agent session.
+   * Called by the server before session start. Each runtime implements
+   * its own injection mechanism.
+   *
+   * @param persona - Rendered SOUL.md content (traits + custom prose), or null if disabled
+   * @param safetyBoundaries - NOPE.md content, or null if disabled
+   * @param agentPath - Absolute path to the agent's working directory
+   */
+  applyConventions?(
+    persona: string | null,
+    safetyBoundaries: string | null,
+    agentPath: string
+  ): Promise<void>;
+
   // --- Tool server (optional) ---
 
   /** Return the MCP tool server config, if this runtime supports it. */
@@ -285,6 +350,16 @@ export interface AgentRuntime {
    * @param cwd - Absolute project directory path
    */
   getMcpStatus?(cwd: string): import('./transport.js').McpServerEntry[] | null;
+
+  /**
+   * Reload plugins from disk for a given session and return refreshed status.
+   *
+   * Requires a Query object from a prior SDK session. Returns null if no query is available
+   * (e.g. no message has been sent yet in this session).
+   *
+   * @param sessionId - Session with an existing SDK query
+   */
+  reloadPlugins?(sessionId: string): Promise<ReloadPluginsResult | null>;
 
   // --- Dependency injection (optional) ---
 

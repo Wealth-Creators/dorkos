@@ -14,7 +14,7 @@ extendZodWithOpenApi(z);
 // === Adapter Configuration Schemas ===
 
 export const AdapterTypeSchema = z
-  .enum(['telegram', 'webhook', 'claude-code', 'slack', 'sms', 'plugin'])
+  .enum(['telegram', 'webhook', 'claude-code', 'slack', 'sms', 'plugin', 'telegram-chatsdk'])
   .openapi('AdapterType');
 
 export type AdapterType = z.infer<typeof AdapterTypeSchema>;
@@ -26,10 +26,9 @@ export const PluginSourceSchema = z
     /** Local file path (absolute or relative to config dir) */
     path: z.string().optional(),
   })
-  .refine(
-    (data) => data.package || data.path,
-    { message: 'Plugin source must specify either package or path' },
-  )
+  .refine((data) => data.package || data.path, {
+    message: 'Plugin source must specify either package or path',
+  })
   .openapi('PluginSource');
 
 export type PluginSource = z.infer<typeof PluginSourceSchema>;
@@ -80,20 +79,6 @@ export type WebhookAdapterConfig = z.infer<typeof WebhookAdapterConfigSchema>;
 /** @deprecated Use {@link WebhookAdapterConfig} */
 export type WebhookAdapterConfigZ = WebhookAdapterConfig;
 
-export const SlackAdapterConfigSchema = z
-  .object({
-    botToken: z.string().min(1),
-    appToken: z.string().min(1),
-    signingSecret: z.string().min(1),
-    streaming: z.boolean().default(true),
-    nativeStreaming: z.boolean().default(true),
-    typingIndicator: z.enum(['none', 'reaction']).default('none'),
-    requireMention: z.boolean().default(false),
-  })
-  .openapi('SlackAdapterConfig');
-
-export type SlackAdapterConfig = z.infer<typeof SlackAdapterConfigSchema>;
-
 export const SmsAdapterConfigSchema = z
   .object({
     /** Twilio Account SID (starts with AC). */
@@ -120,6 +105,31 @@ export const SmsAdapterConfigSchema = z
   .openapi('SmsAdapterConfig');
 
 export type SmsAdapterConfig = z.infer<typeof SmsAdapterConfigSchema>;
+
+export const SlackAdapterConfigSchema = z
+  .object({
+    botToken: z.string().min(1),
+    appToken: z.string().min(1),
+    signingSecret: z.string().min(1),
+    streaming: z.boolean().default(true),
+    nativeStreaming: z.boolean().default(true),
+    typingIndicator: z.enum(['none', 'reaction']).default('reaction'),
+    respondMode: z.enum(['always', 'mention-only', 'thread-aware']).default('thread-aware'),
+    dmPolicy: z.enum(['open', 'allowlist']).default('open'),
+    dmAllowlist: z.array(z.string()).default([]),
+    channelOverrides: z
+      .record(
+        z.string(),
+        z.object({
+          enabled: z.boolean().optional(),
+          respondMode: z.enum(['always', 'mention-only', 'thread-aware']).optional(),
+        })
+      )
+      .default({}),
+  })
+  .openapi('SlackAdapterConfig');
+
+export type SlackAdapterConfig = z.infer<typeof SlackAdapterConfigSchema>;
 
 export const AdapterConfigSchema = z
   .object({
@@ -252,7 +262,7 @@ export const AdapterManifestSchema = z
     type: z.string(),
     displayName: z.string(),
     description: z.string(),
-    iconEmoji: z.string().optional(),
+    iconId: z.string().optional(),
     category: AdapterCategorySchema,
     docsUrl: z.string().url().optional(),
     builtin: z.boolean(),
@@ -260,6 +270,11 @@ export const AdapterManifestSchema = z
     setupSteps: z.array(AdapterSetupStepSchema).optional(),
     setupInstructions: z.string().optional(),
     multiInstance: z.boolean().default(false),
+    /**
+     * When true, the adapter is hidden from the "Add Adapter" catalog.
+     * Existing configured instances continue to function normally.
+     */
+    deprecated: z.boolean().optional(),
     /** Relay adapter API version this adapter targets (e.g., '0.1.0'). */
     apiVersion: z.string().optional(),
     /** Deep-link button shown in the Configure step banner (e.g. to open @BotFather). */
@@ -304,8 +319,8 @@ export type SessionStrategy = z.infer<typeof SessionStrategySchema>;
 export const AdapterBindingSchema = z
   .object({
     id: z.string().uuid(),
-    adapterId: z.string(),
-    agentId: z.string(),
+    adapterId: z.string().min(1),
+    agentId: z.string().min(1),
     chatId: z.string().optional(),
     channelType: ChannelTypeSchema.optional(),
     sessionStrategy: SessionStrategySchema.default('per-chat'),

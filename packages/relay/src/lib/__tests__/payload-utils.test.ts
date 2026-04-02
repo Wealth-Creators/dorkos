@@ -9,6 +9,9 @@ import {
   formatToolDescription,
   extractAgentIdFromEnvelope,
   extractSessionIdFromEnvelope,
+  splitMessage,
+  TELEGRAM_MAX_LENGTH,
+  SLACK_MAX_LENGTH,
 } from '../payload-utils.js';
 import type { RelayEnvelope } from '@dorkos/shared/relay-schemas';
 
@@ -84,7 +87,9 @@ describe('detectStreamEventType', () => {
   });
 
   it('returns type for session_status event', () => {
-    expect(detectStreamEventType({ type: 'session_status', data: { sessionId: 'abc' } })).toBe('session_status');
+    expect(detectStreamEventType({ type: 'session_status', data: { sessionId: 'abc' } })).toBe(
+      'session_status'
+    );
   });
 
   it('returns type for done event', () => {
@@ -152,7 +157,9 @@ describe('extractTextDelta', () => {
 
 describe('extractErrorMessage', () => {
   it('returns message for valid error event', () => {
-    expect(extractErrorMessage({ type: 'error', data: { message: 'Something broke' } })).toBe('Something broke');
+    expect(extractErrorMessage({ type: 'error', data: { message: 'Something broke' } })).toBe(
+      'Something broke'
+    );
   });
 
   it('returns null for non-error event type', () => {
@@ -201,11 +208,15 @@ describe('extractApprovalData', () => {
   });
 
   it('returns null for missing toolCallId', () => {
-    expect(extractApprovalData({ type: 'approval_required', data: { toolName: 'Write' } })).toBeNull();
+    expect(
+      extractApprovalData({ type: 'approval_required', data: { toolName: 'Write' } })
+    ).toBeNull();
   });
 
   it('returns null for missing toolName', () => {
-    expect(extractApprovalData({ type: 'approval_required', data: { toolCallId: 'x' } })).toBeNull();
+    expect(
+      extractApprovalData({ type: 'approval_required', data: { toolCallId: 'x' } })
+    ).toBeNull();
   });
 
   it('returns null for null payload', () => {
@@ -236,20 +247,18 @@ describe('extractApprovalData', () => {
 describe('formatToolDescription', () => {
   it('describes Write tool with file path', () => {
     expect(formatToolDescription('Write', '{"path":"src/index.ts","content":"x"}')).toBe(
-      'wants to write to `src/index.ts`',
+      'wants to write to `src/index.ts`'
     );
   });
 
   it('describes Edit tool with file_path', () => {
     expect(formatToolDescription('Edit', '{"file_path":"src/app.ts"}')).toBe(
-      'wants to edit `src/app.ts`',
+      'wants to edit `src/app.ts`'
     );
   });
 
   it('describes Bash tool with short command', () => {
-    expect(formatToolDescription('Bash', '{"command":"ls -la"}')).toBe(
-      'wants to run `ls -la`',
-    );
+    expect(formatToolDescription('Bash', '{"command":"ls -la"}')).toBe('wants to run `ls -la`');
   });
 
   it('truncates long Bash commands', () => {
@@ -308,13 +317,15 @@ describe('formatForPlatform', () => {
     });
 
     it('converts inline code', () => {
-      expect(formatForPlatform('use `npm install`', 'telegram')).toBe('use <code>npm install</code>');
+      expect(formatForPlatform('use `npm install`', 'telegram')).toBe(
+        'use <code>npm install</code>'
+      );
     });
 
     it('converts code blocks with language hint', () => {
       const input = '```typescript\nconst x = 1;\n```';
       expect(formatForPlatform(input, 'telegram')).toBe(
-        '<pre><code class="language-typescript">const x = 1;</code></pre>',
+        '<pre><code class="language-typescript">const x = 1;</code></pre>'
       );
     });
 
@@ -325,7 +336,7 @@ describe('formatForPlatform', () => {
 
     it('converts links', () => {
       expect(formatForPlatform('[Google](https://google.com)', 'telegram')).toBe(
-        '<a href="https://google.com">Google</a>',
+        '<a href="https://google.com">Google</a>'
       );
     });
 
@@ -341,7 +352,7 @@ describe('formatForPlatform', () => {
     it('handles mixed formatting', () => {
       const input = '**bold** and *italic* with `code`';
       expect(formatForPlatform(input, 'telegram')).toBe(
-        '<b>bold</b> and <i>italic</i> with <code>code</code>',
+        '<b>bold</b> and <i>italic</i> with <code>code</code>'
       );
     });
 
@@ -389,7 +400,10 @@ function makeEnvelope(payload: unknown): RelayEnvelope {
 
 describe('extractAgentIdFromEnvelope', () => {
   it('returns the agentId when payload.data.agentId is present', () => {
-    const envelope = makeEnvelope({ type: 'approval_required', data: { agentId: 'agent-abc', ccaSessionKey: 'sess-1' } });
+    const envelope = makeEnvelope({
+      type: 'approval_required',
+      data: { agentId: 'agent-abc', ccaSessionKey: 'sess-1' },
+    });
     expect(extractAgentIdFromEnvelope(envelope)).toBe('agent-abc');
   });
 
@@ -416,7 +430,10 @@ describe('extractAgentIdFromEnvelope', () => {
 
 describe('extractSessionIdFromEnvelope', () => {
   it('returns the ccaSessionKey when payload.data.ccaSessionKey is present', () => {
-    const envelope = makeEnvelope({ type: 'approval_required', data: { agentId: 'agent-abc', ccaSessionKey: 'sess-xyz' } });
+    const envelope = makeEnvelope({
+      type: 'approval_required',
+      data: { agentId: 'agent-abc', ccaSessionKey: 'sess-xyz' },
+    });
     expect(extractSessionIdFromEnvelope(envelope)).toBe('sess-xyz');
   });
 
@@ -438,5 +455,90 @@ describe('extractSessionIdFromEnvelope', () => {
   it('returns undefined when payload is null', () => {
     const envelope = makeEnvelope(null);
     expect(extractSessionIdFromEnvelope(envelope)).toBeUndefined();
+  });
+});
+
+describe('splitMessage', () => {
+  it('returns single chunk for short text', () => {
+    expect(splitMessage('hello')).toEqual(['hello']);
+  });
+
+  it('returns single empty chunk for empty string', () => {
+    expect(splitMessage('')).toEqual(['']);
+  });
+
+  it('splits at paragraph boundary (\\n\\n)', () => {
+    const first = 'a'.repeat(50);
+    const second = 'b'.repeat(50);
+    const text = `${first}\n\n${second}`;
+    const chunks = splitMessage(text, 60);
+    expect(chunks).toEqual([`${first}\n\n`, second]);
+  });
+
+  it('splits at line boundary when no paragraph break', () => {
+    const first = 'a'.repeat(50);
+    const second = 'b'.repeat(50);
+    const text = `${first}\n${second}`;
+    const chunks = splitMessage(text, 60);
+    expect(chunks).toEqual([`${first}\n`, second]);
+  });
+
+  it('splits at word boundary when no line break', () => {
+    const text = 'word '.repeat(20).trimEnd(); // 99 chars
+    const chunks = splitMessage(text, 30);
+    // Each chunk should end at a space boundary
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(30);
+    }
+    expect(chunks.join('')).toBe(text);
+  });
+
+  it('hard cuts when no word boundary', () => {
+    const text = 'a'.repeat(100);
+    const chunks = splitMessage(text, 30);
+    expect(chunks).toEqual(['a'.repeat(30), 'a'.repeat(30), 'a'.repeat(30), 'a'.repeat(10)]);
+  });
+
+  it('closes and reopens code fences at split points', () => {
+    // A code block with no paragraph breaks — forces split inside the fenced region
+    const text = '```\n' + 'line\n'.repeat(15) + '```';
+    const chunks = splitMessage(text, 40);
+    // First chunk contains the opening fence but not the closing one,
+    // so the function should append a closing fence
+    expect(chunks[0]).toMatch(/```$/);
+    // Next chunk should start with a re-opened fence
+    expect(chunks[1]).toMatch(/^```/);
+    // All original content should be preserved across chunks
+    const joined = chunks.join('');
+    expect(joined).toContain('line');
+  });
+
+  it('handles multiple code blocks', () => {
+    const text = '```\nfoo\n```\n\nSome text\n\n```\nbar\n```';
+    // With a large enough limit, no splitting needed
+    expect(splitMessage(text, 5000)).toEqual([text]);
+    // The fence count is even (4 fences), so no re-opening needed
+  });
+
+  it('respects custom maxLen parameter', () => {
+    const text = 'a'.repeat(100);
+    const chunks = splitMessage(text, 50);
+    expect(chunks).toEqual(['a'.repeat(50), 'a'.repeat(50)]);
+  });
+
+  it('exports correct constant values', () => {
+    expect(TELEGRAM_MAX_LENGTH).toBe(4000);
+    expect(SLACK_MAX_LENGTH).toBe(3500);
+  });
+
+  it('uses TELEGRAM_MAX_LENGTH as default maxLen', () => {
+    // Text shorter than TELEGRAM_MAX_LENGTH should not be split
+    const text = 'a'.repeat(3999);
+    expect(splitMessage(text)).toEqual([text]);
+
+    // Text longer than TELEGRAM_MAX_LENGTH should be split
+    const longText = 'a'.repeat(4001);
+    const chunks = splitMessage(longText);
+    expect(chunks.length).toBe(2);
   });
 });

@@ -1,17 +1,20 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { Check } from 'lucide-react';
-import { Button } from '@/layers/shared/ui';
 import { useIsMobile } from '@/layers/shared/model';
-import { cn } from '@/layers/shared/lib';
+import { OnboardingNavBar } from './OnboardingNavBar';
 import { useMeshAgentPaths } from '@/layers/entities/mesh';
 import { useOnboarding } from '../model/use-onboarding';
 import { WelcomeStep } from './WelcomeStep';
+import { MeetDorkBotStep } from './MeetDorkBotStep';
 import { AgentDiscoveryStep } from './AgentDiscoveryStep';
-import { PulsePresetsStep } from './PulsePresetsStep';
+import { TaskTemplatesStep } from './TaskTemplatesStep';
 import { OnboardingComplete } from './OnboardingComplete';
 
-const STEPS = ['discovery', 'pulse'] as const;
+const STEPS = ['meet-dorkbot', 'discovery', 'tasks'] as const;
+
+/** Index of the Tasks step within STEPS — used for auto-skip logic. */
+const TASKS_STEP_INDEX = STEPS.indexOf('tasks');
 
 interface OnboardingFlowProps {
   onComplete: () => void;
@@ -22,7 +25,7 @@ interface OnboardingFlowProps {
  * Full-screen onboarding container managing step navigation, skip controls,
  * and animated transitions between onboarding steps.
  *
- * Flow: Welcome -> Discovery -> Pulse -> Complete
+ * Flow: Welcome -> Meet DorkBot -> Discovery -> Tasks -> Complete
  *
  * @param onComplete - Called when onboarding finishes (last step or skip all)
  * @param initialStep - Zero-based index of the starting step (default: -1 for welcome)
@@ -31,7 +34,8 @@ export function OnboardingFlow({ onComplete, initialStep = -1 }: OnboardingFlowP
   const [currentStep, setCurrentStep] = useState(initialStep);
   const [direction, setDirection] = useState(1);
   const [showComplete, setShowComplete] = useState(false);
-  const { completeStep, skipStep, dismiss, startOnboarding } = useOnboarding();
+  const { completeStep, skipStep, dismiss, startOnboarding, config } = useOnboarding();
+  const navigate = useNavigate();
   const isMobile = useIsMobile();
   const reducedMotion = useReducedMotion();
   const agentPaths = useMeshAgentPaths();
@@ -47,7 +51,7 @@ export function OnboardingFlow({ onComplete, initialStep = -1 }: OnboardingFlowP
       setDirection(1);
       setCurrentStep((prev) => prev + 1);
     } else {
-      // Also mark adapters as skipped since we removed that step
+      // Mark adapters as completed since we removed that step from the visible flow
       completeStep('adapters');
       setShowComplete(true);
     }
@@ -84,14 +88,23 @@ export function OnboardingFlow({ onComplete, initialStep = -1 }: OnboardingFlowP
     setCurrentStep(0);
   }, []);
 
-  // Auto-skip Pulse step when no agents are registered
+  /** Navigate to a chat session with the configured default agent. */
+  const navigateToDefaultAgent = useCallback(() => {
+    const defaultAgent = config?.agents?.defaultAgent || 'dorkbot';
+    const defaultDir = config?.agents?.defaultDirectory || '~/.dork/agents';
+    const agentPath = `${defaultDir}/${defaultAgent}`;
+    navigate({ to: '/session', search: { dir: agentPath } });
+    onComplete();
+  }, [config, navigate, onComplete]);
+
+  // Auto-skip Tasks step when no agents are registered
   useEffect(() => {
     if (
-      currentStep === 1 &&
+      currentStep === TASKS_STEP_INDEX &&
       !agentPaths.isLoading &&
       agentPaths.data?.agents.length === 0
     ) {
-      completeStep('pulse');
+      completeStep('tasks');
       goNext();
     }
   }, [currentStep, agentPaths.isLoading, agentPaths.data, completeStep, goNext]);
@@ -99,8 +112,8 @@ export function OnboardingFlow({ onComplete, initialStep = -1 }: OnboardingFlowP
   // Show the completion screen
   if (showComplete) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
-        <OnboardingComplete onComplete={onComplete} />
+      <div className="bg-background flex h-full w-full items-center justify-center">
+        <OnboardingComplete onComplete={navigateToDefaultAgent} />
       </div>
     );
   }
@@ -108,7 +121,7 @@ export function OnboardingFlow({ onComplete, initialStep = -1 }: OnboardingFlowP
   // Welcome screen (step -1)
   if (currentStep === -1) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
+      <div className="bg-background flex h-full w-full items-center justify-center">
         <WelcomeStep onGetStarted={handleWelcomeStart} onSkip={handleSkipAll} />
       </div>
     );
@@ -138,42 +151,14 @@ export function OnboardingFlow({ onComplete, initialStep = -1 }: OnboardingFlowP
       };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
-      {/* Unified navigation bar — Back, step dots, Skip/Skip all */}
-      <div className="flex items-center justify-between px-4 py-3 sm:px-6">
-        <Button variant="ghost" size="sm" onClick={goBack} className="min-w-16">
-          Back
-        </Button>
-
-        <div className="flex items-center gap-2">
-          {STEPS.map((_, i) => (
-            <div key={i} className="relative flex items-center justify-center">
-              {i === currentStep ? (
-                <motion.div
-                  layoutId="step-indicator"
-                  className="flex h-2 w-6 items-center justify-center rounded-full bg-primary"
-                  transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                />
-              ) : i < currentStep ? (
-                <div className="flex size-2 items-center justify-center rounded-full bg-primary/60">
-                  <Check className="size-1.5 text-primary-foreground" />
-                </div>
-              ) : (
-                <div className={cn('size-2 rounded-full ring-1 ring-muted-foreground/30')} />
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div className="flex min-w-16 items-center justify-end gap-1">
-          <Button variant="ghost" size="sm" onClick={handleSkip}>
-            Skip
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleSkipAll} className="text-muted-foreground">
-            Skip all
-          </Button>
-        </div>
-      </div>
+    <div className="bg-background flex h-full w-full flex-col">
+      <OnboardingNavBar
+        totalSteps={STEPS.length}
+        currentStep={currentStep}
+        onBack={goBack}
+        onSkip={handleSkip}
+        onSkipAll={handleSkipAll}
+      />
 
       {/* Step content with slide transitions */}
       <div className="relative flex-1 overflow-hidden">
@@ -194,11 +179,10 @@ export function OnboardingFlow({ onComplete, initialStep = -1 }: OnboardingFlowP
             className="absolute inset-0 flex flex-col"
           >
             <div className="mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col px-4 py-4 sm:px-6">
-              {currentStep === 0 && (
-                <AgentDiscoveryStep onStepComplete={handleStepComplete} />
-              )}
-              {currentStep === 1 && (
-                <PulsePresetsStep
+              {currentStep === 0 && <MeetDorkBotStep onStepComplete={handleStepComplete} />}
+              {currentStep === 1 && <AgentDiscoveryStep onStepComplete={handleStepComplete} />}
+              {currentStep === 2 && (
+                <TaskTemplatesStep
                   onStepComplete={handleStepComplete}
                   agents={agentPaths.data?.agents ?? []}
                 />

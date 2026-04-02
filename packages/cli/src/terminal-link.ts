@@ -8,11 +8,8 @@
  * @param url - Target URL
  */
 export function link(text: string, url: string): string {
-  if (
-    !process.stdout.isTTY ||
-    process.env.NO_COLOR !== undefined ||
-    process.env.TERM === 'dumb'
-  ) {
+  // eslint-disable-next-line no-restricted-syntax -- Standard terminal convention env vars (NO_COLOR, TERM), not app config
+  if (!process.stdout.isTTY || process.env.NO_COLOR !== undefined || process.env.TERM === 'dumb') {
     return text;
   }
 

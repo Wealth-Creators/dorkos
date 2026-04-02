@@ -15,7 +15,7 @@ export { RelayCore } from './relay-core.js';
 export { RELAY_ADAPTER_API_VERSION } from './version.js';
 
 // Sub-modules (for advanced usage)
-export { EndpointRegistry, hashSubject } from './endpoint-registry.js';
+export { EndpointRegistry } from './endpoint-registry.js';
 export { SubscriptionRegistry } from './subscription-registry.js';
 export { MaildirStore } from './maildir-store.js';
 export type {
@@ -26,11 +26,7 @@ export type {
 } from './maildir-store.js';
 
 export { SqliteIndex } from './sqlite-index.js';
-export type {
-  SqliteIndexOptions,
-  IndexedMessage,
-  MessageStatus,
-} from './sqlite-index.js';
+export type { SqliteIndexOptions, IndexedMessage, MessageStatus } from './sqlite-index.js';
 
 export { DeadLetterQueue } from './dead-letter-queue.js';
 export type {
@@ -99,11 +95,12 @@ export type {
   TelegramAdapterConfig,
   WebhookAdapterConfig,
   SlackAdapterConfig,
-  SmsAdapterConfig,
   AdapterRegistryLike,
   PublishResult,
   AdapterInboundCallbacks,
   AdapterOutboundCallbacks,
+  PlatformClient,
+  StreamableAdapter,
 } from './types.js';
 
 export { noopLogger } from './types.js';
@@ -118,17 +115,21 @@ export { AdapterRegistry } from './adapter-registry.js';
 export { TelegramAdapter, TELEGRAM_MANIFEST } from './adapters/telegram/index.js';
 export { WebhookAdapter, verifySignature, WEBHOOK_MANIFEST } from './adapters/webhook/index.js';
 export { SlackAdapter, SLACK_MANIFEST } from './adapters/slack/index.js';
-export { SmsAdapter, SMS_MANIFEST } from './adapters/sms/index.js';
 
 // Built-in adapters
 export { ClaudeCodeAdapter, CLAUDE_CODE_MANIFEST } from './adapters/claude-code/index.js';
+export {
+  ChatSdkTelegramAdapter,
+  TELEGRAM_CHATSDK_MANIFEST,
+} from './adapters/telegram-chatsdk/index.js';
+export type { ChatSdkTelegramAdapterConfig } from './adapters/telegram-chatsdk/index.js';
 export type {
   ClaudeCodeAdapterConfig,
   ClaudeCodeAdapterDeps,
   AgentRuntimeLike as ClaudeCodeAgentRuntimeLike,
   AgentSessionStoreLike,
   TraceStoreLike,
-  PulseStoreLike,
+  TasksStoreLike,
 } from './adapters/claude-code/index.js';
 
 // Payload utilities
@@ -136,7 +137,24 @@ export {
   formatForPlatform,
   extractAgentIdFromEnvelope,
   extractSessionIdFromEnvelope,
+  splitMessage,
+  TELEGRAM_MAX_LENGTH,
+  SLACK_MAX_LENGTH,
 } from './lib/payload-utils.js';
+
+// Thread ID codecs
+export type { ThreadIdCodec } from './lib/thread-id.js';
+export {
+  TelegramThreadIdCodec,
+  SlackThreadIdCodec,
+  ChatSdkTelegramThreadIdCodec,
+} from './lib/thread-id.js';
+
+// Async primitives
+export { AsyncQueue } from './lib/async-queue.js';
+
+// Stream aggregation
+export { AdapterStreamManager } from './adapter-stream-manager.js';
 
 // Plugin loader
 export { loadAdapters, validateAdapterShape } from './adapter-plugin-loader.js';

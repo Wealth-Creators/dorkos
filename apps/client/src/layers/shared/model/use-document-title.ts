@@ -10,8 +10,8 @@ interface UseDocumentTitleOptions {
   agentName?: string;
   /** Agent emoji override — when provided, replaces CWD-hashed emoji */
   agentEmoji?: string;
-  /** Pulse badge count — shown as (N) prefix when tab is hidden */
-  pulseBadgeCount?: number;
+  /** Tasks badge count — shown as (N) prefix when tab is hidden */
+  tasksBadgeCount?: number;
 }
 
 const MAX_ACTIVE_FORM_LENGTH = 40;
@@ -22,7 +22,7 @@ interface BuildTitleOpts {
   prefix: string;
   agentName?: string;
   agentEmoji?: string;
-  pulseBadgeCount?: number;
+  tasksBadgeCount?: number;
   isTabHidden?: boolean;
 }
 
@@ -32,13 +32,13 @@ function buildTitle({
   prefix,
   agentName,
   agentEmoji,
-  pulseBadgeCount,
+  tasksBadgeCount,
   isTabHidden,
 }: BuildTitleOpts): string {
   const badgePrefix =
-    isTabHidden && pulseBadgeCount && pulseBadgeCount > 0 ? `(${pulseBadgeCount}) ` : '';
+    isTabHidden && tasksBadgeCount && tasksBadgeCount > 0 ? `(${tasksBadgeCount}) ` : '';
   const emoji = agentEmoji ?? hashToEmoji(cwd);
-  const label = agentName ?? (cwd.split('/').filter(Boolean).pop() ?? cwd);
+  const label = agentName ?? cwd.split('/').filter(Boolean).pop() ?? cwd;
   let title = `${badgePrefix}${prefix}${emoji} ${label}`;
   if (activeForm) {
     const truncated =
@@ -59,17 +59,31 @@ export function useDocumentTitle({
   isWaitingForUser,
   agentName,
   agentEmoji,
-  pulseBadgeCount,
+  tasksBadgeCount,
 }: UseDocumentTitleOptions) {
   const isTabHiddenRef = useRef(document.hidden);
   const hasUnseenResponseRef = useRef(false);
   const wasStreamingRef = useRef(isStreaming);
 
   // Single ref to keep visibility handler in sync with latest prop values
-  const optionsRef = useRef({ cwd, activeForm, isWaitingForUser, agentName, agentEmoji, pulseBadgeCount });
+  const optionsRef = useRef({
+    cwd,
+    activeForm,
+    isWaitingForUser,
+    agentName,
+    agentEmoji,
+    tasksBadgeCount,
+  });
   useEffect(() => {
-    optionsRef.current = { cwd, activeForm, isWaitingForUser, agentName, agentEmoji, pulseBadgeCount };
-  }, [cwd, activeForm, isWaitingForUser, agentName, agentEmoji, pulseBadgeCount]);
+    optionsRef.current = {
+      cwd,
+      activeForm,
+      isWaitingForUser,
+      agentName,
+      agentEmoji,
+      tasksBadgeCount,
+    };
+  }, [cwd, activeForm, isWaitingForUser, agentName, agentEmoji, tasksBadgeCount]);
 
   // Track tab visibility and rebuild title on return (clears 🏁 and badge)
   useEffect(() => {
@@ -79,7 +93,7 @@ export function useDocumentTitle({
         const opts = optionsRef.current;
         // Rebuild when returning from hidden: clears (N) badge and/or 🏁 prefix
         const hadUnseenResponse = hasUnseenResponseRef.current;
-        const hadBadge = (opts.pulseBadgeCount ?? 0) > 0;
+        const hadBadge = (opts.tasksBadgeCount ?? 0) > 0;
         if (hadUnseenResponse || hadBadge) {
           hasUnseenResponseRef.current = false;
           if (opts.cwd) {
@@ -90,7 +104,7 @@ export function useDocumentTitle({
               prefix,
               agentName: opts.agentName,
               agentEmoji: opts.agentEmoji,
-              pulseBadgeCount: opts.pulseBadgeCount,
+              tasksBadgeCount: opts.tasksBadgeCount,
               isTabHidden: false,
             });
           }
@@ -130,8 +144,8 @@ export function useDocumentTitle({
       prefix,
       agentName,
       agentEmoji,
-      pulseBadgeCount,
+      tasksBadgeCount,
       isTabHidden: isTabHiddenRef.current,
     });
-  }, [cwd, activeForm, isStreaming, isWaitingForUser, agentName, agentEmoji, pulseBadgeCount]);
+  }, [cwd, activeForm, isStreaming, isWaitingForUser, agentName, agentEmoji, tasksBadgeCount]);
 }

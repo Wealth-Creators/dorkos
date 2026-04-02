@@ -7,7 +7,6 @@
  * @module relay/adapter-delivery
  */
 import type { RelayEnvelope } from '@dorkos/shared/relay-schemas';
-import { hashSubject } from './endpoint-registry.js';
 import type { SqliteIndex } from './sqlite-index.js';
 import type { AdapterRegistryLike, AdapterContext, DeliveryResult } from './types.js';
 
@@ -24,7 +23,7 @@ export class AdapterDelivery {
   constructor(
     private readonly adapterRegistry: AdapterRegistryLike | undefined,
     private readonly sqliteIndex: SqliteIndex,
-    private readonly logger: Logger = console,
+    private readonly logger: Logger = console
   ) {}
 
   /**
@@ -38,7 +37,7 @@ export class AdapterDelivery {
   async deliver(
     subject: string,
     envelope: RelayEnvelope,
-    contextBuilder?: (subject: string) => AdapterContext | undefined,
+    contextBuilder?: (subject: string) => AdapterContext | undefined
   ): Promise<DeliveryResult | null> {
     if (!this.adapterRegistry) return null;
 
@@ -53,18 +52,17 @@ export class AdapterDelivery {
         new Promise<DeliveryResult>((_, reject) => {
           timer = setTimeout(
             () => reject(new Error('adapter delivery timeout (120s)')),
-            AdapterDelivery.TIMEOUT_MS,
+            AdapterDelivery.TIMEOUT_MS
           );
         }),
       ]);
 
       // Index adapter-delivered messages in SQLite for audit trail
       if (result && result.success) {
-        const subjectHash = hashSubject(subject);
         this.sqliteIndex.insertMessage({
           id: envelope.id,
           subject,
-          endpointHash: `adapter:${subjectHash}`,
+          endpointHash: `adapter:${subject}`,
           status: 'delivered',
           createdAt: envelope.createdAt,
           expiresAt: null,

@@ -18,6 +18,8 @@ interface SessionsViewProps {
   activeSessionId: string | null;
   groupedSessions: SessionGroup[];
   onSessionClick: (sessionId: string) => void;
+  onForkSession?: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string, title: string) => void;
 }
 
 /** Read-only session list view for the sidebar Sessions tab. */
@@ -25,6 +27,8 @@ export function SessionsView({
   activeSessionId,
   groupedSessions,
   onSessionClick,
+  onForkSession,
+  onRenameSession,
 }: SessionsViewProps) {
   return (
     <ScrollArea type="scroll" className="h-full" viewportClassName="[&>div]:!block">
@@ -47,6 +51,8 @@ export function SessionsView({
                           session={session}
                           isActive={session.id === activeSessionId}
                           onClick={() => onSessionClick(session.id)}
+                          onFork={onForkSession}
+                          onRename={onRenameSession}
                         />
                       </SidebarMenuItem>
                     ))}

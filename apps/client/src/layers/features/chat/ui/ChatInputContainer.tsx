@@ -2,18 +2,31 @@ import { useCallback, useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
 import type { RefObject } from 'react';
-import type { SessionStatusEvent, PresenceUpdateEvent } from '@dorkos/shared/types';
+import type {
+  SessionStatusEvent,
+  PresenceUpdateEvent,
+  ConnectionState,
+} from '@dorkos/shared/types';
 import type { ToolCallState } from '../model/chat-types';
 import { ChatInput } from './ChatInput';
 import type { ChatInputHandle } from './ChatInput';
 import { ChatStatusSection } from './ChatStatusSection';
+import { BackgroundTaskBar } from './BackgroundTaskBar';
+import type { VisibleBackgroundTask } from '../model/use-background-tasks';
 import { FileChipBar } from './FileChipBar';
 import { QueuePanel } from './QueuePanel';
 import { ToolApproval } from './ToolApproval';
 import { QuestionPrompt } from './QuestionPrompt';
 import { CommandPalette } from '@/layers/features/commands';
 import { FilePalette } from '@/layers/features/files';
+import { ScanLine } from '@/layers/shared/ui';
+import { useAppStore } from '@/layers/shared/model';
+import { useCurrentAgent, useAgentVisual } from '@/layers/entities/agent';
+import { useDirectoryState } from '@/layers/entities/session';
 import type { InteractiveToolHandle } from './message';
+import { useRotatingPlaceholder } from '../model/use-rotating-placeholder';
+import { AnimatedPlaceholder } from './AnimatedPlaceholder';
+import placeholderHints from '../config/placeholder-hints.json';
 import type { useInputAutocomplete } from '../model/use-input-autocomplete';
 import type { PendingFile } from '../model/use-file-upload';
 import type { QueueItem } from '../model/use-message-queue';
@@ -57,8 +70,8 @@ interface ChatInputContainerProps {
   onQueueNavigateDown: () => void;
   /** Current presence info from SSE. */
   presenceInfo: PresenceUpdateEvent | null;
-  /** Whether the presence badge should pulse. */
-  presencePulse: boolean;
+  /** Whether the presence badge should tasks. */
+  presenceTasks: boolean;
   /** The currently active interactive tool awaiting user input, or null. */
   activeInteraction: ToolCallState | null;
   /** Index of the currently keyboard-focused option (question prompts). */
@@ -67,6 +80,14 @@ interface ChatInputContainerProps {
   onToolRef: (handle: InteractiveToolHandle | null) => void;
   /** Called after the user approves/denies/submits to clear waiting state. */
   onToolDecided: (toolCallId: string) => void;
+  /** Background tasks to display in the task bar. */
+  backgroundTasks: VisibleBackgroundTask[];
+  /** Callback to stop a running background task. */
+  onStopTask: (taskId: string) => void;
+  /** SSE sync connection state for the ConnectionItem indicator. */
+  syncConnectionState: ConnectionState;
+  /** Number of failed reconnection attempts. */
+  syncFailedAttempts: number;
 }
 
 /** Container for chat input, autocomplete palettes, drag-and-drop, and status chips. */
@@ -95,13 +116,30 @@ export function ChatInputContainer({
   onQueueNavigateUp,
   onQueueNavigateDown,
   presenceInfo,
-  presencePulse,
+  presenceTasks,
   activeInteraction,
   focusedOptionIndex,
   onToolRef,
   onToolDecided,
+  backgroundTasks,
+  onStopTask,
+  syncConnectionState,
+  syncFailedAttempts,
 }: ChatInputContainerProps) {
   const mode = activeInteraction ? 'interactive' : 'normal';
+  const isStreaming = status === 'streaming';
+  const isIdle = !isStreaming && editingIndex === null;
+  const isTextStreaming = useAppStore((s) => s.isTextStreaming);
+  const [selectedCwd] = useDirectoryState();
+  const { data: currentAgent } = useCurrentAgent(selectedCwd);
+  const agentVisual = useAgentVisual(currentAgent ?? null, selectedCwd ?? '');
+  const agentName = currentAgent?.name;
+  const defaultPlaceholder = agentName ? `Message ${agentName}...` : 'Send a message...';
+  const rotatingPlaceholder = useRotatingPlaceholder({
+    defaultText: defaultPlaceholder,
+    hints: placeholderHints,
+    enabled: isIdle && input === '',
+  });
 
   // Preserve draft text when switching to interactive mode
   const interactiveDraftRef = useRef('');
@@ -160,6 +198,13 @@ export function ChatInputContainer({
       {/* Hidden dropzone input — react-dropzone requires this */}
       <input {...getInputProps()} />
 
+      {/* Streaming scan line — sweeps across input container top edge */}
+      <AnimatePresence>
+        {isStreaming && (
+          <ScanLine color={agentVisual.color} isTextStreaming={isTextStreaming} edge="top" />
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isDragActive && (
           <motion.div
@@ -192,10 +237,13 @@ export function ChatInputContainer({
                 toolName={activeInteraction!.toolName}
                 input={activeInteraction!.input || ''}
                 isActive
-                onDecided={onToolDecided ? () => onToolDecided(activeInteraction!.toolCallId) : undefined}
+                onDecided={
+                  onToolDecided ? () => onToolDecided(activeInteraction!.toolCallId) : undefined
+                }
                 timeoutMs={activeInteraction!.timeoutMs}
               />
-            ) : activeInteraction!.interactiveType === 'question' && activeInteraction!.questions ? (
+            ) : activeInteraction!.interactiveType === 'question' &&
+              activeInteraction!.questions ? (
               <QuestionPrompt
                 ref={onToolRef}
                 sessionId={sessionId}
@@ -204,7 +252,9 @@ export function ChatInputContainer({
                 answers={activeInteraction!.answers}
                 isActive
                 focusedOptionIndex={focusedOptionIndex}
-                onDecided={onToolDecided ? () => onToolDecided(activeInteraction!.toolCallId) : undefined}
+                onDecided={
+                  onToolDecided ? () => onToolDecided(activeInteraction!.toolCallId) : undefined
+                }
               />
             ) : null}
           </motion.div>
@@ -244,6 +294,8 @@ export function ChatInputContainer({
               onRemove={onQueueRemove}
             />
 
+            <BackgroundTaskBar tasks={backgroundTasks} onStopTask={onStopTask} />
+
             <ChatInput
               ref={chatInputRef}
               value={input}
@@ -274,12 +326,20 @@ export function ChatInputContainer({
               onQueueNavigateDown={onQueueNavigateDown}
               queueHasItems={queue.length > 0}
               placeholder={(() => {
-                const isStreaming = status === 'streaming';
                 if (editingIndex !== null) return '';
-                if (isStreaming && queue.length > 0) return `Compose another \u2014 ${queue.length} queued`;
+                if (isStreaming && queue.length > 0)
+                  return `Compose another \u2014 ${queue.length} queued`;
                 if (isStreaming) return 'Compose next \u2014 will send when ready';
-                return 'Message Claude...';
+                return defaultPlaceholder;
               })()}
+              placeholderOverlay={
+                isIdle ? (
+                  <AnimatedPlaceholder
+                    text={rotatingPlaceholder.text}
+                    animationKey={rotatingPlaceholder.key}
+                  />
+                ) : null
+              }
             />
 
             <ChatStatusSection
@@ -288,7 +348,12 @@ export function ChatInputContainer({
               isStreaming={status === 'streaming'}
               onChipClick={autocomplete.handleChipClick}
               presenceInfo={presenceInfo}
-              presencePulse={presencePulse}
+              presenceTasks={presenceTasks}
+              syncConnectionState={syncConnectionState}
+              syncFailedAttempts={syncFailedAttempts}
+              agentName={agentName}
+              agentColor={agentVisual.color}
+              agentEmoji={agentVisual.emoji}
             />
           </motion.div>
         )}

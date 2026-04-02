@@ -14,9 +14,14 @@
 import { randomUUID } from 'node:crypto';
 import type { WebClient } from '@slack/web-api';
 import type { AdapterOutboundCallbacks, DeliveryResult } from '../../types.js';
+import type { ThreadParticipationTracker } from './thread-tracker.js';
 import { formatForPlatform, truncateText } from '../../lib/payload-utils.js';
 import { MAX_MESSAGE_LENGTH } from './inbound.js';
-import { startStream as nativeStartStream, appendStream as nativeAppendStream, stopStream as nativeStopStream } from './stream-api.js';
+import {
+  startStream as nativeStartStream,
+  appendStream as nativeAppendStream,
+  stopStream as nativeStopStream,
+} from './stream-api.js';
 
 /** Minimum interval (ms) between chat.update calls for a single stream. */
 const STREAM_UPDATE_INTERVAL_MS = 1_000;
@@ -54,10 +59,17 @@ export interface ActiveStream {
 
 /** Shared context passed to all stream event handlers. */
 export interface StreamContext {
-  channelId: string; threadTs: string | undefined; client: WebClient;
-  streamState: Map<string, ActiveStream>; callbacks: AdapterOutboundCallbacks;
-  startTime: number; typingIndicator: 'none' | 'reaction'; streamKeyTs: string;
+  channelId: string;
+  threadTs: string | undefined;
+  client: WebClient;
+  streamState: Map<string, ActiveStream>;
+  callbacks: AdapterOutboundCallbacks;
+  startTime: number;
+  typingIndicator: 'none' | 'reaction';
+  streamKeyTs: string;
   pendingReactions: PendingReactions;
+  /** Thread participation tracker for marking threads the bot has replied to. */
+  threadTracker?: ThreadParticipationTracker;
   logger?: { debug: (...args: unknown[]) => void; warn: (...args: unknown[]) => void };
 }
 
@@ -73,7 +85,7 @@ export async function wrapSlackCall(
   fn: () => Promise<unknown>,
   callbacks: AdapterOutboundCallbacks,
   startTime: number,
-  trackDelivery = false,
+  trackDelivery = false
 ): Promise<DeliveryResult> {
   try {
     await fn();
@@ -101,13 +113,24 @@ export function buildStreamKey(channelId: string, streamKeyTs?: string): string 
   return streamKeyTs ? `${channelId}:${streamKeyTs}` : channelId;
 }
 
+/** Mark a thread as participating after a successful outbound post. */
+function markParticipation(
+  threadTracker: ThreadParticipationTracker | undefined,
+  channelId: string,
+  threadTs: string | undefined
+): void {
+  if (threadTracker && threadTs) {
+    threadTracker.markParticipating(channelId, threadTs);
+  }
+}
+
 /** Add :hourglass_flowing_sand: reaction — fire-and-forget with logged failures. */
 export function addTypingReaction(
   client: WebClient,
   channelId: string,
   threadTs: string | undefined,
   typingIndicator: 'none' | 'reaction',
-  logger?: { warn: (...args: unknown[]) => void },
+  logger?: { warn: (...args: unknown[]) => void }
 ): void {
   if (typingIndicator !== 'reaction' || !threadTs) return;
   void client.reactions
@@ -127,7 +150,7 @@ export function removeTypingReaction(
   channelId: string,
   threadTs: string | undefined,
   typingIndicator: 'none' | 'reaction',
-  logger?: { warn: (...args: unknown[]) => void },
+  logger?: { warn: (...args: unknown[]) => void }
 ): void {
   if (typingIndicator !== 'reaction' || !threadTs) return;
   void client.reactions
@@ -136,7 +159,9 @@ export function removeTypingReaction(
       // no_reaction is expected if the reaction was already removed or never added
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('no_reaction')) {
-        logger?.warn(`stream: failed to remove typing reaction from ${channelId}:${threadTs}: ${msg}`);
+        logger?.warn(
+          `stream: failed to remove typing reaction from ${channelId}:${threadTs}: ${msg}`
+        );
       }
     });
 }
@@ -153,7 +178,7 @@ export function removePendingReaction(
   channelId: string,
   typingIndicator: 'none' | 'reaction',
   pendingReactions: PendingReactions,
-  logger?: { debug?: (...args: unknown[]) => void; warn: (...args: unknown[]) => void },
+  logger?: { debug?: (...args: unknown[]) => void; warn: (...args: unknown[]) => void }
 ): void {
   if (typingIndicator !== 'reaction') return;
   const queue = pendingReactions.get(channelId);
@@ -169,7 +194,9 @@ export function removePendingReaction(
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('no_reaction')) {
-        logger?.warn(`stream: failed to remove pending typing reaction from ${channelId}:${messageTs}: ${msg}`);
+        logger?.warn(
+          `stream: failed to remove pending typing reaction from ${channelId}:${messageTs}: ${msg}`
+        );
       }
     });
 }
@@ -190,9 +217,19 @@ export async function handleTextDelta(
   textChunk: string,
   streaming: boolean,
   nativeStreaming: boolean,
-  ctx: StreamContext,
+  ctx: StreamContext
 ): Promise<DeliveryResult> {
-  const { channelId, threadTs, client, streamState, callbacks, startTime, typingIndicator, streamKeyTs, logger } = ctx;
+  const {
+    channelId,
+    threadTs,
+    client,
+    streamState,
+    callbacks,
+    startTime,
+    typingIndicator,
+    streamKeyTs,
+    logger,
+  } = ctx;
   const key = buildStreamKey(channelId, streamKeyTs);
   const existing = streamState.get(key);
 
@@ -202,11 +239,16 @@ export async function handleTextDelta(
       existing.accumulatedText += textChunk;
     } else {
       streamState.set(key, {
-        channelId, threadTs: threadTs ?? '', messageTs: '',
-        accumulatedText: textChunk, lastUpdateAt: 0,
-        startedAt: Date.now(), streamId: randomUUID(),
+        channelId,
+        threadTs: threadTs ?? '',
+        messageTs: '',
+        accumulatedText: textChunk,
+        lastUpdateAt: 0,
+        startedAt: Date.now(),
+        streamId: randomUUID(),
       });
       addTypingReaction(client, channelId, threadTs, typingIndicator, logger);
+      markParticipation(ctx.threadTracker, channelId, threadTs);
     }
     return { success: true, durationMs: Date.now() - startTime };
   }
@@ -217,8 +259,14 @@ export async function handleTextDelta(
     // Native streaming: append each chunk directly — no throttling needed
     if (existing.nativeStreamId) {
       return wrapSlackCall(
-        () => nativeAppendStream(client, existing.nativeStreamId!, formatForPlatform(textChunk, 'slack')),
-        callbacks, startTime,
+        () =>
+          nativeAppendStream(
+            client,
+            existing.nativeStreamId!,
+            formatForPlatform(textChunk, 'slack')
+          ),
+        callbacks,
+        startTime
       );
     }
 
@@ -234,11 +282,14 @@ export async function handleTextDelta(
     // slackify-markdown inserting \n\n paragraph separation (Issue #40).
     const formatted = formatForPlatform(existing.accumulatedText, 'slack');
     return wrapSlackCall(
-      () => client.chat.update({
-        channel: channelId, ts: existing.messageTs,
-        text: truncateText(formatted.replace(/\n{2,}/g, '\n'), MAX_MESSAGE_LENGTH),
-      }),
-      callbacks, startTime,
+      () =>
+        client.chat.update({
+          channel: channelId,
+          ts: existing.messageTs,
+          text: truncateText(formatted.replace(/\n{2,}/g, '\n'), MAX_MESSAGE_LENGTH),
+        }),
+      callbacks,
+      startTime
     );
   }
 
@@ -248,11 +299,18 @@ export async function handleTextDelta(
       const nativeStreamId = await nativeStartStream(client, channelId, threadTs);
       const now = Date.now();
       streamState.set(key, {
-        channelId, threadTs, messageTs: '', accumulatedText: textChunk,
-        lastUpdateAt: now, startedAt: now, streamId: randomUUID(), nativeStreamId,
+        channelId,
+        threadTs,
+        messageTs: '',
+        accumulatedText: textChunk,
+        lastUpdateAt: now,
+        startedAt: now,
+        streamId: randomUUID(),
+        nativeStreamId,
       });
       await nativeAppendStream(client, nativeStreamId, formatForPlatform(textChunk, 'slack'));
       addTypingReaction(client, channelId, threadTs, typingIndicator, logger);
+      markParticipation(ctx.threadTracker, channelId, threadTs);
       return { success: true, durationMs: Date.now() - startTime };
     } catch (err) {
       // Fallback to chat.postMessage (e.g., missing scope, API not available)
@@ -269,15 +327,24 @@ export async function handleTextDelta(
       ...(threadTs ? { thread_ts: threadTs } : {}),
     });
     streamState.set(key, {
-      channelId, threadTs: threadTs ?? '',
+      channelId,
+      threadTs: threadTs ?? '',
       messageTs: (result as { ts?: string }).ts ?? '',
-      accumulatedText: textChunk, lastUpdateAt: now, startedAt: now, streamId: randomUUID(),
+      accumulatedText: textChunk,
+      lastUpdateAt: now,
+      startedAt: now,
+      streamId: randomUUID(),
     });
     addTypingReaction(client, channelId, threadTs, typingIndicator, logger);
+    markParticipation(ctx.threadTracker, channelId, threadTs);
     return { success: true, durationMs: now - startTime };
   } catch (err) {
     callbacks.recordError(err);
-    return { success: false, error: err instanceof Error ? err.message : String(err), durationMs: Date.now() - startTime };
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - startTime,
+    };
   }
 }
 
@@ -300,7 +367,9 @@ export async function flushStreamBuffer(ctx: StreamContext): Promise<void> {
   if (existing.nativeStreamId) {
     try {
       await nativeStopStream(client, existing.nativeStreamId);
-    } catch { /* best-effort */ }
+    } catch {
+      /* best-effort */
+    }
     existing.nativeStreamId = undefined;
     return;
   }
@@ -310,7 +379,10 @@ export async function flushStreamBuffer(ctx: StreamContext): Promise<void> {
     try {
       const result = await client.chat.postMessage({
         channel: channelId,
-        text: truncateText(formatForPlatform(existing.accumulatedText, 'slack'), MAX_MESSAGE_LENGTH),
+        text: truncateText(
+          formatForPlatform(existing.accumulatedText, 'slack'),
+          MAX_MESSAGE_LENGTH
+        ),
         ...(threadTs ? { thread_ts: threadTs } : {}),
       });
       existing.messageTs = (result as { ts?: string }).ts ?? '';
@@ -324,7 +396,8 @@ export async function flushStreamBuffer(ctx: StreamContext): Promise<void> {
   // Streaming mode (has messageTs): update the existing message
   try {
     await client.chat.update({
-      channel: channelId, ts: existing.messageTs,
+      channel: channelId,
+      ts: existing.messageTs,
       text: truncateText(formatForPlatform(existing.accumulatedText, 'slack'), MAX_MESSAGE_LENGTH),
     });
     existing.lastUpdateAt = Date.now();
@@ -342,7 +415,18 @@ export async function flushStreamBuffer(ctx: StreamContext): Promise<void> {
  * @param ctx - Shared stream handler context
  */
 export async function handleDone(ctx: StreamContext): Promise<DeliveryResult> {
-  const { channelId, threadTs, client, streamState, callbacks, startTime, typingIndicator, streamKeyTs, pendingReactions, logger } = ctx;
+  const {
+    channelId,
+    threadTs,
+    client,
+    streamState,
+    callbacks,
+    startTime,
+    typingIndicator,
+    streamKeyTs,
+    pendingReactions,
+    logger,
+  } = ctx;
   const key = buildStreamKey(channelId, streamKeyTs);
   const existing = streamState.get(key);
   streamState.delete(key);
@@ -357,34 +441,51 @@ export async function handleDone(ctx: StreamContext): Promise<DeliveryResult> {
 
   if (!existing) {
     // Stream completed with zero text_delta events — the user's message produced no visible response.
-    logger?.warn(`stream: done received for ${channelId} with no active stream (empty response — user may see no output)`);
+    logger?.warn(
+      `stream: done received for ${channelId} with no active stream (empty response — user may see no output)`
+    );
     return { success: true, durationMs: Date.now() - startTime };
   }
 
   if (existing.nativeStreamId) {
     return wrapSlackCall(
       () => nativeStopStream(client, existing.nativeStreamId!),
-      callbacks, startTime, true,
+      callbacks,
+      startTime,
+      true
     );
   }
 
   if (!existing.messageTs) {
     return wrapSlackCall(
-      () => client.chat.postMessage({
-        channel: channelId,
-        text: truncateText(formatForPlatform(existing.accumulatedText, 'slack'), MAX_MESSAGE_LENGTH),
-        ...(threadTs ? { thread_ts: threadTs } : {}),
-      }),
-      callbacks, startTime, true,
+      () =>
+        client.chat.postMessage({
+          channel: channelId,
+          text: truncateText(
+            formatForPlatform(existing.accumulatedText, 'slack'),
+            MAX_MESSAGE_LENGTH
+          ),
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        }),
+      callbacks,
+      startTime,
+      true
     );
   }
 
   return wrapSlackCall(
-    () => client.chat.update({
-      channel: channelId, ts: existing.messageTs,
-      text: truncateText(formatForPlatform(existing.accumulatedText, 'slack'), MAX_MESSAGE_LENGTH),
-    }),
-    callbacks, startTime, true,
+    () =>
+      client.chat.update({
+        channel: channelId,
+        ts: existing.messageTs,
+        text: truncateText(
+          formatForPlatform(existing.accumulatedText, 'slack'),
+          MAX_MESSAGE_LENGTH
+        ),
+      }),
+    callbacks,
+    startTime,
+    true
   );
 }
 
@@ -398,7 +499,18 @@ export async function handleDone(ctx: StreamContext): Promise<DeliveryResult> {
  * @param ctx - Shared stream handler context
  */
 export async function handleError(errorMsg: string, ctx: StreamContext): Promise<DeliveryResult> {
-  const { channelId, threadTs, client, streamState, callbacks, startTime, typingIndicator, streamKeyTs, pendingReactions, logger } = ctx;
+  const {
+    channelId,
+    threadTs,
+    client,
+    streamState,
+    callbacks,
+    startTime,
+    typingIndicator,
+    streamKeyTs,
+    pendingReactions,
+    logger,
+  } = ctx;
   const key = buildStreamKey(channelId, streamKeyTs);
   const existing = streamState.get(key);
   streamState.delete(key);
@@ -414,41 +526,58 @@ export async function handleError(errorMsg: string, ctx: StreamContext): Promise
   if (existing) {
     if (existing.nativeStreamId) {
       try {
-        await nativeAppendStream(client, existing.nativeStreamId, formatForPlatform(`\n\n[Error: ${errorMsg}]`, 'slack'));
-      } catch { /* best-effort append */ }
+        await nativeAppendStream(
+          client,
+          existing.nativeStreamId,
+          formatForPlatform(`\n\n[Error: ${errorMsg}]`, 'slack')
+        );
+      } catch {
+        /* best-effort append */
+      }
       return wrapSlackCall(
         () => nativeStopStream(client, existing.nativeStreamId!),
-        callbacks, startTime, true,
+        callbacks,
+        startTime,
+        true
       );
     }
 
     const finalText = truncateText(
       `${formatForPlatform(existing.accumulatedText, 'slack')}\n\n[Error: ${errorMsg}]`,
-      MAX_MESSAGE_LENGTH,
+      MAX_MESSAGE_LENGTH
     );
 
     if (!existing.messageTs) {
       return wrapSlackCall(
-        () => client.chat.postMessage({
-          channel: channelId, text: finalText,
-          ...(threadTs ? { thread_ts: threadTs } : {}),
-        }),
-        callbacks, startTime, true,
+        () =>
+          client.chat.postMessage({
+            channel: channelId,
+            text: finalText,
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+          }),
+        callbacks,
+        startTime,
+        true
       );
     }
 
     return wrapSlackCall(
       () => client.chat.update({ channel: channelId, ts: existing.messageTs, text: finalText }),
-      callbacks, startTime, true,
+      callbacks,
+      startTime,
+      true
     );
   }
 
   return wrapSlackCall(
-    () => client.chat.postMessage({
-      channel: channelId,
-      text: truncateText(`[Error: ${errorMsg}]`, MAX_MESSAGE_LENGTH),
-      ...(threadTs ? { thread_ts: threadTs } : {}),
-    }),
-    callbacks, startTime, true,
+    () =>
+      client.chat.postMessage({
+        channel: channelId,
+        text: truncateText(`[Error: ${errorMsg}]`, MAX_MESSAGE_LENGTH),
+        ...(threadTs ? { thread_ts: threadTs } : {}),
+      }),
+    callbacks,
+    startTime,
+    true
   );
 }

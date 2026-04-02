@@ -16,7 +16,12 @@
  */
 import crypto from 'node:crypto';
 import type { RelayEnvelope, AdapterManifest } from '@dorkos/shared/relay-schemas';
-import type { AdapterContext, DeliveryResult, WebhookAdapterConfig, RelayPublisher } from '../../types.js';
+import type {
+  AdapterContext,
+  DeliveryResult,
+  WebhookAdapterConfig,
+  RelayPublisher,
+} from '../../types.js';
 import { BaseRelayAdapter } from '../../base-adapter.js';
 
 /** Stripe-standard timestamp window for replay attack prevention (±5 minutes). */
@@ -35,7 +40,7 @@ export const WEBHOOK_MANIFEST: AdapterManifest = {
   type: 'webhook',
   displayName: 'Webhook',
   description: 'Send and receive messages via HMAC-signed HTTP webhooks.',
-  iconEmoji: '🔗',
+  iconId: 'webhook',
   category: 'automation',
   builtin: true,
   multiInstance: true,
@@ -160,6 +165,8 @@ export class WebhookAdapter extends BaseRelayAdapter {
    * @param _relay - The RelayPublisher (stored by base class; unused here)
    */
   protected async _start(_relay: RelayPublisher): Promise<void> {
+    this.logger.info('webhook adapter ready', { subject: this.config.inbound.subject });
+
     // Prune expired nonces on a fixed interval to prevent memory growth
     this.nonceInterval = setInterval(() => {
       this.pruneExpiredNonces();
@@ -193,7 +200,7 @@ export class WebhookAdapter extends BaseRelayAdapter {
    */
   async handleInbound(
     rawBody: Buffer,
-    headers: Record<string, string | string[] | undefined>,
+    headers: Record<string, string | string[] | undefined>
   ): Promise<{ ok: boolean; error?: string }> {
     if (!this.relay) return { ok: false, error: 'Adapter not started' };
 
@@ -219,7 +226,7 @@ export class WebhookAdapter extends BaseRelayAdapter {
       timestamp,
       signature,
       this.config.inbound.secret,
-      this.config.inbound.previousSecret,
+      this.config.inbound.previousSecret
     );
     if (!valid) {
       return { ok: false, error: 'Invalid signature' };
@@ -270,7 +277,7 @@ export class WebhookAdapter extends BaseRelayAdapter {
   async deliver(
     _subject: string,
     envelope: RelayEnvelope,
-    _context?: AdapterContext,
+    _context?: AdapterContext
   ): Promise<DeliveryResult> {
     const startTime = Date.now();
     const body = JSON.stringify(envelope.payload);
@@ -345,7 +352,7 @@ export function verifySignature(
   timestamp: string,
   signature: string,
   secret: string,
-  previousSecret?: string,
+  previousSecret?: string
 ): boolean {
   const message = `${timestamp}.${rawBody.toString()}`;
 

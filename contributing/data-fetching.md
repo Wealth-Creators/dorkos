@@ -6,32 +6,34 @@ This guide covers data fetching patterns in DorkOS. The client uses TanStack Que
 
 ## Key Files
 
-| Concept                | Location                                                           |
-| ---------------------- | ------------------------------------------------------------------ |
-| Transport interface    | `packages/shared/src/transport.ts`                                 |
-| HttpTransport          | `apps/client/src/layers/shared/lib/transport/http-transport.ts`    |
-| DirectTransport        | `apps/client/src/layers/shared/lib/direct-transport.ts`            |
-| TransportContext       | `apps/client/src/layers/shared/model/TransportContext.tsx`         |
-| Session entity hooks   | `apps/client/src/layers/entities/session/`                         |
-| Command entity hooks   | `apps/client/src/layers/entities/command/`                         |
-| Agent entity hooks     | `apps/client/src/layers/entities/agent/`                           |
-| Runtime entity hooks   | `apps/client/src/layers/entities/runtime/`                         |
-| Relay entity hooks     | `apps/client/src/layers/entities/relay/`                           |
-| Binding entity hooks   | `apps/client/src/layers/entities/binding/`                         |
-| Pulse entity hooks     | `apps/client/src/layers/entities/pulse/`                           |
-| Chat feature hooks     | `apps/client/src/layers/features/chat/model/use-chat-session.ts`  |
-| Express routes         | `apps/server/src/routes/`                                          |
-| Zod schemas            | `packages/shared/src/schemas.ts`                                   |
+| Concept              | Location                                                         |
+| -------------------- | ---------------------------------------------------------------- |
+| Transport interface  | `packages/shared/src/transport.ts`                               |
+| HttpTransport        | `apps/client/src/layers/shared/lib/transport/http-transport.ts`  |
+| DirectTransport      | `apps/client/src/layers/shared/lib/direct-transport.ts`          |
+| TransportContext     | `apps/client/src/layers/shared/model/TransportContext.tsx`       |
+| EventStreamProvider  | `apps/client/src/layers/shared/model/event-stream-context.tsx`   |
+| Session entity hooks | `apps/client/src/layers/entities/session/`                       |
+| Command entity hooks | `apps/client/src/layers/entities/command/`                       |
+| Agent entity hooks   | `apps/client/src/layers/entities/agent/`                         |
+| Runtime entity hooks | `apps/client/src/layers/entities/runtime/`                       |
+| Relay entity hooks   | `apps/client/src/layers/entities/relay/`                         |
+| Binding entity hooks | `apps/client/src/layers/entities/binding/`                       |
+| Tasks entity hooks   | `apps/client/src/layers/entities/tasks/`                         |
+| Chat feature hooks   | `apps/client/src/layers/features/chat/model/use-chat-session.ts` |
+| Express routes       | `apps/server/src/routes/`                                        |
+| Zod schemas          | `packages/shared/src/schemas.ts`                                 |
 
 ## When to Use What
 
-| Scenario                                | Approach                                | Why                                                   |
-| --------------------------------------- | --------------------------------------- | ----------------------------------------------------- |
-| List/read server data (sessions, etc.)  | TanStack Query + Transport method       | Caching, deduplication, background refetch             |
-| Send a chat message (streaming)         | `useChatSession` hook + SSE             | Real-time streaming, handles all event types           |
-| Mutate server data (create session)     | `useMutation` + Transport method        | Automatic cache invalidation, optimistic updates       |
-| Subscribe to real-time updates          | SSE via `GET /api/sessions/:id/stream`  | Multi-client sync, file-watcher backed                 |
-| Static config/health check              | Transport method (no TanStack Query)    | One-shot, no caching needed                            |
+| Scenario                                               | Approach                                     | Why                                                                |
+| ------------------------------------------------------ | -------------------------------------------- | ------------------------------------------------------------------ |
+| List/read server data (sessions, etc.)                 | TanStack Query + Transport method            | Caching, deduplication, background refetch                         |
+| Send a chat message (streaming)                        | `useChatSession` hook + SSE                  | Real-time streaming, handles all event types                       |
+| Mutate server data (create session)                    | `useMutation` + Transport method             | Automatic cache invalidation, optimistic updates                   |
+| Subscribe to real-time updates                         | SSE via `GET /api/sessions/:id/stream`       | Multi-client sync, file-watcher backed                             |
+| Subscribe to system events (tunnel, relay, extensions) | `useEventSubscription` via `GET /api/events` | Single multiplexed connection, replaces per-resource SSE endpoints |
+| Static config/health check                             | Transport method (no TanStack Query)         | One-shot, no caching needed                                        |
 
 ## Core Patterns
 
@@ -89,7 +91,7 @@ const handleSubmit = async (content: string) => {
       }
     },
     abortController.signal,
-    cwd,
+    cwd
   );
 };
 ```
@@ -161,6 +163,70 @@ const response = await transport.getMessages(sessionId);
 // Server returns 304 if no changes (ETag match)
 ```
 
+### Real-Time System Events (Unified SSE Stream)
+
+System-wide events (tunnel status changes, extension reloads, relay activity) are delivered through a single multiplexed SSE connection rather than per-resource streams.
+
+**Endpoint**: `GET /api/events` — one SSE connection carries all system event types. The server multiplexes tunnel, extensions, and relay events onto this single stream.
+
+**Provider**: `EventStreamProvider` (in `layers/shared/model/event-stream-context.tsx`) manages a module-level `SSEConnection` singleton. It is mounted once in `main.tsx`. The singleton survives React StrictMode double-mounts and Vite HMR cycles.
+
+**Consumer hook**: `useEventSubscription(eventName, handler)` — subscribes to a named event for the lifetime of the calling component. The handler is ref-stabilized, so its identity can change between renders without causing re-subscriptions.
+
+**Available events**:
+
+| Event                | Payload            | Source           |
+| -------------------- | ------------------ | ---------------- |
+| `tunnel_status`      | `TunnelStatus`     | Tunnel service   |
+| `extension_reloaded` | Extension metadata | Extension loader |
+| `relay_connected`    | Connection info    | Relay service    |
+| `relay_message`      | Message envelope   | Relay service    |
+| `relay_backpressure` | Backpressure data  | Relay service    |
+| `relay_signal`       | Signal data        | Relay service    |
+
+**Example** — invalidating TanStack Query cache on tunnel status changes:
+
+```typescript
+// apps/client/src/layers/entities/tunnel/model/use-tunnel-sync.ts
+import { useQueryClient } from '@tanstack/react-query';
+import { useEventSubscription } from '@/layers/shared/model';
+import type { TunnelStatus } from '@dorkos/shared/types';
+
+export function useTunnelSync(): void {
+  const queryClient = useQueryClient();
+
+  useEventSubscription('tunnel_status', (data) => {
+    queryClient.setQueryData(['tunnel-status'], data as TunnelStatus);
+    queryClient.invalidateQueries({ queryKey: ['config'] });
+  });
+}
+```
+
+**Example** — relay event stream with conditional invalidation:
+
+```typescript
+// apps/client/src/layers/entities/relay/model/use-relay-event-stream.ts
+import { useEventSubscription } from '@/layers/shared/model';
+
+export function useRelayEventStream(enabled: boolean) {
+  const queryClient = useQueryClient();
+
+  useEventSubscription('relay_message', () => {
+    if (enabled) {
+      queryClient.invalidateQueries({ queryKey: ['relay', 'conversations'] });
+    }
+  });
+
+  useEventSubscription('relay_signal', () => {
+    if (enabled) {
+      queryClient.invalidateQueries({ queryKey: ['relay', 'conversations'] });
+    }
+  });
+}
+```
+
+> **Migration note**: The unified stream replaces raw `new EventSource('/api/tunnel/stream')` and `useSSEConnection('/api/relay/stream')` patterns that each opened a dedicated HTTP connection. Use `useEventSubscription('event_name', handler)` instead for all system-wide events. `useSSEConnection` still exists for per-session SSE (e.g., `GET /api/sessions/:id/stream` for session sync) but should **not** be used for system-wide events.
+
 ### ETag Caching on Messages
 
 The `GET /api/sessions/:id/messages` endpoint supports `If-None-Match` / `304` for efficient polling:
@@ -188,7 +254,7 @@ export function usePreviewData(agentId: string, agentCwd: string) {
 
   // Derived data via useMemo — recomputes only when dependencies change
   const agentSessions = useMemo(
-    () => sessions?.filter(s => s.cwd === agentCwd) ?? [],
+    () => sessions?.filter((s) => s.cwd === agentCwd) ?? [],
     [sessions, agentCwd]
   );
 
@@ -208,12 +274,12 @@ When multiple TanStack Query hooks need to be composed into a single derived res
 
 ```typescript
 export function usePreviewData(agentId: string, agentCwd: string) {
-  const { data: sessions } = useSessions();           // TanStack Query
+  const { data: sessions } = useSessions(); // TanStack Query
   const { data: health } = useMeshAgentHealth(agentId); // TanStack Query
 
   // Derive filtered + sliced data via useMemo
   const agentSessions = useMemo(
-    () => sessions?.filter(s => s.cwd === agentCwd) ?? [],
+    () => sessions?.filter((s) => s.cwd === agentCwd) ?? [],
     [sessions, agentCwd]
   );
 
@@ -230,20 +296,29 @@ When a hook needs to combine TanStack Query data with non-query state (feature f
 ```typescript
 // apps/client/src/layers/entities/agent/model/use-agent-tool-status.ts
 export function useAgentToolStatus(projectPath: string | null): AgentToolStatus {
-  const { data: agent } = useCurrentAgent(projectPath);   // TanStack Query
-  const relayEnabled = useRelayEnabled();                   // Feature flag (config query)
-  const pulseEnabled = usePulseEnabled();                   // Feature flag (config query)
+  const { data: agent } = useCurrentAgent(projectPath); // TanStack Query
+  const relayEnabled = useRelayEnabled(); // Feature flag (config query)
+  const pulseEnabled = usePulseEnabled(); // Feature flag (config query)
 
   return useMemo((): AgentToolStatus => {
     const groups = agent?.enabledToolGroups ?? {};
     return {
-      pulse: !pulseEnabled ? 'disabled-by-server'
-        : groups.pulse === false ? 'disabled-by-agent' : 'enabled',
-      relay: !relayEnabled ? 'disabled-by-server'
-        : groups.relay === false ? 'disabled-by-agent' : 'enabled',
+      pulse: !pulseEnabled
+        ? 'disabled-by-server'
+        : groups.pulse === false
+          ? 'disabled-by-agent'
+          : 'enabled',
+      relay: !relayEnabled
+        ? 'disabled-by-server'
+        : groups.relay === false
+          ? 'disabled-by-agent'
+          : 'enabled',
       mesh: groups.mesh === false ? 'disabled-by-agent' : 'enabled',
-      adapter: !relayEnabled ? 'disabled-by-server'
-        : groups.adapter === false ? 'disabled-by-agent' : 'enabled',
+      adapter: !relayEnabled
+        ? 'disabled-by-server'
+        : groups.adapter === false
+          ? 'disabled-by-agent'
+          : 'enabled',
     };
   }, [agent, relayEnabled, pulseEnabled]);
 }
@@ -323,7 +398,9 @@ useQuery({ queryKey: ['sessions'], ... }); // Duplicate, easy to drift
 ### SSE connection drops silently
 
 **Cause**: Network interruption or server restart.
-**Fix**: The `useChatSession` hook handles reconnection. If messages stop arriving, the session sync protocol (`sync_update` events) will catch up when the connection is restored.
+**Fix**: The `useChatSession` hook handles reconnection for chat streams. If messages stop arriving, the session sync protocol (`sync_update` events) will catch up when the connection is restored.
+
+For system-wide SSE events (tunnel, relay, extensions), reconnection is handled automatically by the `SSEConnection` singleton managed by `EventStreamProvider` — individual consumer hooks do not need to manage reconnection. The singleton includes exponential backoff, a heartbeat watchdog, and page visibility optimization (pauses when the tab is hidden, reconnects when it becomes visible).
 
 ### Messages endpoint returns 304 but UI is stale
 
@@ -430,6 +507,68 @@ export function useModels() {
 ```
 
 The server delegates to `runtimeRegistry.getDefault().getSupportedModels()` via `GET /api/models`.
+
+## Session Entity: useSubagents
+
+Available subagents are fetched via `useSubagents()` in `entities/session/`. Same non-blocking pattern as `useModels()` — long `staleTime` (30 minutes) since subagent sets rarely change between sessions:
+
+```typescript
+// apps/client/src/layers/entities/session/model/use-subagents.ts
+export function useSubagents() {
+  const transport = useTransport();
+  return useQuery<SubagentInfo[]>({
+    queryKey: ['subagents'],
+    queryFn: () => transport.getSubagents(),
+    staleTime: 30 * 60 * 1000,
+  });
+}
+```
+
+The server delegates to `runtimeRegistry.getDefault().getSupportedSubagents()` via `GET /api/subagents`. Values are cached by `RuntimeCache` and refreshed on `reloadPlugins()`.
+
+## Session Chat Store (Zustand)
+
+Per-session chat state is stored in a global Zustand store (`useSessionChatStore`) rather than in component state. This decouples chat state from the React component lifecycle so sessions can stream concurrently, resume instantly on switch, and expose background activity indicators in the sidebar.
+
+**File:** `apps/client/src/layers/entities/session/model/session-chat-store.ts`
+
+### Why Zustand here instead of TanStack Query
+
+TanStack Query manages _server state_ (sessions list, messages, models). The session chat store manages _client-side streaming state_ that doesn't come from an API response:
+
+| State                                     | Managed by            |
+| ----------------------------------------- | --------------------- |
+| Session list, message history             | TanStack Query        |
+| Streaming messages, tool call parts       | `useSessionChatStore` |
+| Input drafts, status (`idle`/`streaming`) | `useSessionChatStore` |
+| Unseen activity badges (sidebar)          | `useSessionChatStore` |
+
+### API
+
+The store is keyed by `sessionId`. All actions auto-initialize a session entry if one doesn't exist:
+
+```typescript
+const { initSession, destroySession, updateSession, getSession } = useSessionChatStore.getState();
+```
+
+**Selectors (prefer granular over full-state):**
+
+```typescript
+// Full session state — re-renders on any field change
+const state = useSessionChatState(sessionId);
+
+// Granular selectors — fewer re-renders
+const messages = useSessionMessages(sessionId);
+const status = useSessionStatus(sessionId);
+```
+
+### LRU eviction
+
+The store retains at most 20 sessions (`MAX_RETAINED_SESSIONS`). When a new session is initialized and the limit is exceeded, the oldest `idle` sessions are evicted. Active sessions (`status !== 'idle'`) are never evicted.
+
+### Mount generation
+
+Each `initSession` call increments a monotonic `mountGeneration` counter. Stale closures captured by a previous component instance for the same session ID detect their staleness by comparing generation values and drop their writes rather than corrupting the new session's state.
 
 ## Runtime Entity Hooks
 
@@ -592,9 +731,14 @@ export function useUpdateBinding() {
   const transport = useTransport();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, updates }: {
+    mutationFn: ({
+      id,
+      updates,
+    }: {
       id: string;
-      updates: Partial<Pick<AdapterBinding, 'sessionStrategy' | 'label' | 'chatId' | 'channelType'>>;
+      updates: Partial<
+        Pick<AdapterBinding, 'sessionStrategy' | 'label' | 'chatId' | 'channelType'>
+      >;
     }) => transport.updateBinding(id, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [...BINDINGS_QUERY_KEY] });
@@ -631,26 +775,55 @@ const { mutate: deleteBinding } = useDeleteBinding();
 const { mutate: updateBinding } = useUpdateBinding();
 ```
 
-## Pulse Entity Hooks
+## Tasks Entity Hooks
 
-The pulse entity layer (`entities/pulse/`) provides hooks for schedule presets. These are used to pre-populate `CreateScheduleDialog` from the preset gallery.
+The tasks entity layer (`entities/tasks/`) provides hooks for task scheduling and run data. These are consumed by the Tasks feature (`features/tasks/`) to power the schedule list, run history, and task creation dialogs.
 
-### usePulsePresets
+### useTasks / useCreateTask / useUpdateTask / useDeleteTask / useTriggerTask
 
-Fetches the list of available schedule presets from the server. No `staleTime` override — presets change rarely, relying on TanStack Query defaults.
+CRUD and trigger hooks for the Tasks scheduler. All mutations invalidate the `['tasks']` query key on success.
 
 ```typescript
-// apps/client/src/layers/entities/pulse/model/use-pulse-presets.ts
-export function usePulsePresets() {
+// apps/client/src/layers/entities/tasks/model/use-tasks.ts
+export function useTasks(enabled = true) {
   const transport = useTransport();
-  return useQuery<PulsePreset[]>({
-    queryKey: ['pulse', 'presets'],
-    queryFn: () => transport.getPulsePresets(),
+  return useQuery({
+    queryKey: ['tasks'],
+    queryFn: () => transport.listTasks(),
+    enabled,
+  });
+}
+
+export function useCreateTask() {
+  const transport = useTransport();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateTaskInput) => transport.createTask(input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
   });
 }
 ```
 
-Used by `PresetGallery` in `features/pulse/ui/` to render the preset cards shown on the Pulse empty state.
+`enabled` is driven by `useTasksEnabled()` — a config flag that gates the Tasks feature entirely. Pass `enabled={false}` when Tasks is disabled to skip the query.
+
+### useTaskTemplates
+
+Fetches built-in and user-defined task templates. Used to pre-populate `CreateTaskDialog` from the template gallery.
+
+```typescript
+// apps/client/src/layers/entities/tasks/model/use-task-templates.ts
+export function useTaskTemplates() {
+  const transport = useTransport();
+  return useQuery({
+    queryKey: ['tasks', 'templates'],
+    queryFn: () => transport.getTemplates(),
+  });
+}
+```
+
+### useTaskRuns / useTaskRun / useCancelTaskRun / useActiveTaskRunCount
+
+Hooks for task execution history. `useTaskRuns(taskId)` fetches the run list for a specific task. `useActiveTaskRunCount()` is a lightweight selector used by the sidebar badge.
 
 ## Agent Entity: useMcpConfig
 

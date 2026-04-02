@@ -1,67 +1,33 @@
-import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-
-/** Number of consecutive errors before the connection is considered fully disconnected. */
-const DISCONNECTED_THRESHOLD = 3;
-
-export type RelayConnectionState = 'connected' | 'reconnecting' | 'disconnected';
+import type { ConnectionState } from '@dorkos/shared/types';
+import { useEventStream, useEventSubscription } from '@/layers/shared/model';
 
 /**
- * Connect to the Relay SSE event stream and inject incoming messages into the query cache.
+ * Subscribe to relay events from the unified SSE stream and invalidate the
+ * conversations query cache on each incoming message.
  *
- * @param enabled - Whether to connect (typically tied to relay feature flag).
- * @param pattern - Optional subject pattern for server-side filtering.
- * @returns Connection state and failed attempt count for UI status display.
+ * @param enabled - When false, handlers are no-ops (avoids invalidations while relay is disabled).
+ * @param pattern - Reserved for future server-side filtering; currently unused by the unified stream.
+ * @returns Connection state and failed attempt count sourced from the shared event stream.
  */
 export function useRelayEventStream(
   enabled: boolean,
-  pattern?: string,
-): { connectionState: RelayConnectionState; failedAttempts: number } {
+  pattern?: string // eslint-disable-line @typescript-eslint/no-unused-vars
+): { connectionState: ConnectionState; failedAttempts: number } {
   const queryClient = useQueryClient();
-  const [connectionState, setConnectionState] = useState<RelayConnectionState>('connected');
-  const [failedAttempts, setFailedAttempts] = useState(0);
+  const { connectionState, failedAttempts } = useEventStream();
 
-  useEffect(() => {
-    if (!enabled) return;
+  useEventSubscription('relay_message', () => {
+    if (enabled) {
+      queryClient.invalidateQueries({ queryKey: ['relay', 'conversations'] });
+    }
+  });
 
-    const params = pattern ? `?subject=${encodeURIComponent(pattern)}` : '';
-    const source = new EventSource(`/api/relay/stream${params}`);
-
-    source.onopen = () => {
-      setConnectionState('connected');
-      setFailedAttempts(0);
-    };
-
-    source.onerror = () => {
-      setFailedAttempts((prev) => {
-        const next = prev + 1;
-        setConnectionState(next >= DISCONNECTED_THRESHOLD ? 'disconnected' : 'reconnecting');
-        return next;
-      });
-    };
-
-    source.addEventListener('relay_message', (e) => {
-      try {
-        JSON.parse(e.data); // validate parseable
-        // Invalidate conversations — the buildConversations() server function
-        // handles grouping, so we let TanStack Query refetch the structured data
-        queryClient.invalidateQueries({ queryKey: ['relay', 'conversations'] });
-      } catch {
-        console.warn('[Relay] Failed to parse relay_message event:', e.data);
-      }
-    });
-
-    source.addEventListener('relay_delivery', (e) => {
-      try {
-        JSON.parse(e.data); // validate parseable
-        queryClient.invalidateQueries({ queryKey: ['relay', 'conversations'] });
-      } catch {
-        console.warn('[Relay] Failed to parse relay_delivery event:', e.data);
-      }
-    });
-
-    return () => source.close();
-  }, [enabled, pattern, queryClient]);
+  useEventSubscription('relay_signal', () => {
+    if (enabled) {
+      queryClient.invalidateQueries({ queryKey: ['relay', 'conversations'] });
+    }
+  });
 
   return { connectionState, failedAttempts };
 }

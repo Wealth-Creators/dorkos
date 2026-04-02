@@ -17,35 +17,33 @@ import {
   UpdateAccessRuleRequestSchema,
 } from '@dorkos/shared/mesh-schemas';
 import { validateBoundary } from '../lib/boundary.js';
+import type { ActivityService } from '../services/activity/activity-service.js';
 
 /** Optional cross-subsystem dependencies for topology enrichment. */
 export interface MeshRouterDeps {
   meshCore: MeshCore;
-  pulseStore?: { getSchedules(): Array<{ cwd: string | null }> };
+  taskStore?: { getSchedules(): Array<{ cwd: string | null }> };
   relayCore?: { listEndpoints(): Array<{ subject: string }> };
 }
 
 /**
- * Enrich a topology view with health, Relay, and Pulse data for each agent.
+ * Enrich a topology view with health, Relay, and Task data for each agent.
  *
  * Each enrichment step is individually wrapped in try/catch so a failure
  * in one subsystem never breaks the topology response.
  */
-function enrichTopology(
-  topology: TopologyView,
-  deps: MeshRouterDeps,
-): TopologyView {
-  // Pre-compute Pulse schedule counts by CWD for O(1) lookups per agent
+function enrichTopology(topology: TopologyView, deps: MeshRouterDeps): TopologyView {
+  // Pre-compute Task counts by CWD for O(1) lookups per agent
   const scheduleCounts = new Map<string, number>();
-  if (deps.pulseStore) {
+  if (deps.taskStore) {
     try {
-      for (const schedule of deps.pulseStore.getSchedules()) {
+      for (const schedule of deps.taskStore.getSchedules()) {
         if (schedule.cwd) {
           scheduleCounts.set(schedule.cwd, (scheduleCounts.get(schedule.cwd) ?? 0) + 1);
         }
       }
     } catch {
-      // Pulse unavailable — scheduleCounts stays empty, all agents get 0
+      // Tasks unavailable — scheduleCounts stays empty, all agents get 0
     }
   }
 
@@ -64,7 +62,7 @@ function enrichTopology(
     namespaces: topology.namespaces.map((ns) => ({
       ...ns,
       agents: ns.agents.map((agent) =>
-        enrichAgent(agent, ns.namespace, deps, scheduleCounts, relayEndpoints),
+        enrichAgent(agent, ns.namespace, deps, scheduleCounts, relayEndpoints)
       ),
     })),
   };
@@ -84,14 +82,14 @@ function enrichAgent(
   namespace: string,
   deps: MeshRouterDeps,
   scheduleCounts: Map<string, number>,
-  relayEndpoints: Array<{ subject: string }>,
+  relayEndpoints: Array<{ subject: string }>
 ): AgentManifest & {
   healthStatus: AgentHealthStatus;
   lastSeenAt: string | null;
   lastSeenEvent: string | null;
   relayAdapters: string[];
   relaySubject: string | null;
-  pulseScheduleCount: number;
+  taskCount: number;
 } {
   // Safe defaults
   let healthStatus: AgentHealthStatus = 'stale';
@@ -99,7 +97,7 @@ function enrichAgent(
   let lastSeenEvent: string | null = null;
   let relayAdapters: string[] = [];
   let relaySubject: string | null = null;
-  let pulseScheduleCount = 0;
+  let taskCount = 0;
 
   // Health enrichment
   try {
@@ -128,9 +126,7 @@ function enrichAgent(
   if (relaySubject && relayEndpoints.length > 0) {
     try {
       const nsPrefix = `relay.agent.${namespace}.`;
-      const matchingEndpoints = relayEndpoints.filter((ep) =>
-        ep.subject.startsWith(nsPrefix),
-      );
+      const matchingEndpoints = relayEndpoints.filter((ep) => ep.subject.startsWith(nsPrefix));
       // Extract adapter names from subject segments after the namespace prefix
       relayAdapters = matchingEndpoints
         .map((ep) => ep.subject.slice(nsPrefix.length))
@@ -140,15 +136,15 @@ function enrichAgent(
     }
   }
 
-  // Pulse schedule count — match against the agent's exact projectPath
+  // Task count — match against the agent's exact projectPath
   if (scheduleCounts.size > 0) {
     try {
       const projectPath = deps.meshCore.getProjectPath(agent.id);
       if (projectPath && scheduleCounts.has(projectPath)) {
-        pulseScheduleCount = scheduleCounts.get(projectPath)!;
+        taskCount = scheduleCounts.get(projectPath)!;
       }
     } catch {
-      // Pulse matching failed — defaults apply
+      // Task matching failed — defaults apply
     }
   }
 
@@ -159,7 +155,7 @@ function enrichAgent(
     lastSeenEvent,
     relayAdapters,
     relaySubject,
-    pulseScheduleCount,
+    taskCount,
   };
 }
 
@@ -234,17 +230,34 @@ export function createMeshRouter(deps: MeshRouterDeps | MeshCore): Router {
     const name = overrides?.name;
     const runtime = overrides?.runtime;
     if (!name || !runtime) {
-      return res
-        .status(400)
-        .json({ error: 'overrides.name and overrides.runtime are required for manual registration' });
+      return res.status(400).json({
+        error: 'overrides.name and overrides.runtime are required for manual registration',
+      });
     }
 
     try {
       const manifest = await meshCore.registerByPath(
         validatedPath,
         { ...overrides, name, runtime },
-        approver,
+        approver
       );
+
+      // Fire-and-forget activity event for agent registration
+      const activityService = req.app.locals.activityService as ActivityService | undefined;
+      if (activityService) {
+        await activityService.emit({
+          actorType: 'user',
+          actorLabel: 'You',
+          category: 'agent',
+          eventType: 'agent.registered',
+          resourceType: 'agent',
+          resourceId: manifest.id,
+          resourceLabel: manifest.name,
+          summary: `Registered agent ${manifest.name}`,
+          linkPath: '/agents',
+        });
+      }
+
       return res.status(201).json(manifest);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Registration failed';
@@ -254,7 +267,7 @@ export function createMeshRouter(deps: MeshRouterDeps | MeshCore): Router {
 
   // GET /topology — Query the mesh network topology with optional namespace filtering
   // meshCore.getTopology() returns base AgentManifest agents; enrichTopology()
-  // adds healthStatus, relayAdapters, pulseScheduleCount, etc. from other subsystems.
+  // adds healthStatus, relayAdapters, taskCount, etc. from other subsystems.
   router.get('/topology', (req, res) => {
     const namespace = (req.query.namespace as string) ?? '*';
     const topology = meshCore.getTopology(namespace);
@@ -322,12 +335,34 @@ export function createMeshRouter(deps: MeshRouterDeps | MeshCore): Router {
   });
 
   // POST /agents/:id/heartbeat — Record a heartbeat for an agent
-  router.post('/agents/:id/heartbeat', (req, res) => {
+  router.post('/agents/:id/heartbeat', async (req, res) => {
     const parsed = HeartbeatRequestSchema.safeParse(req.body ?? {});
     const event = parsed.success ? (parsed.data.event ?? 'heartbeat') : 'heartbeat';
-    const health = meshCore.getAgentHealth(req.params.id);
-    if (!health) return res.status(404).json({ error: 'Agent not found' });
+    const healthBefore = meshCore.getAgentHealth(req.params.id);
+    if (!healthBefore) return res.status(404).json({ error: 'Agent not found' });
+
+    const previousStatus = healthBefore.status;
     meshCore.updateLastSeen(req.params.id, event);
+
+    // Emit activity event only when health status actually transitions
+    const healthAfter = meshCore.getAgentHealth(req.params.id);
+    if (healthAfter && healthAfter.status !== previousStatus) {
+      const activityService = req.app.locals.activityService as ActivityService | undefined;
+      if (activityService) {
+        await activityService.emit({
+          actorType: 'system',
+          actorLabel: 'System',
+          category: 'agent',
+          eventType: 'agent.status_changed',
+          resourceType: 'agent',
+          resourceId: req.params.id,
+          resourceLabel: healthAfter.name,
+          summary: `${healthAfter.name} is now ${healthAfter.status}`,
+          linkPath: '/agents',
+        });
+      }
+    }
+
     return res.json({ success: true });
   });
 
@@ -346,10 +381,23 @@ export function createMeshRouter(deps: MeshRouterDeps | MeshCore): Router {
     if (!result.success) {
       return res.status(400).json({ error: 'Validation failed', details: result.error.flatten() });
     }
+
+    // Guard: system agents cannot have identity fields changed
+    const SYSTEM_PROTECTED_FIELDS = ['name', 'description', 'namespace', 'isSystem'] as const;
+    const agent = meshCore.get(req.params.id);
+    if (agent?.isSystem) {
+      const blockedFields = SYSTEM_PROTECTED_FIELDS.filter((f) => f in req.body);
+      if (blockedFields.length > 0) {
+        return res.status(403).json({
+          error: `Cannot modify ${blockedFields.join(', ')} on system agents`,
+        });
+      }
+    }
+
     // Strip keys that were absent from the request body (defaults filled in by Zod).
     // PATCH semantics: only update fields explicitly provided by the caller.
     const explicitFields = Object.fromEntries(
-      Object.entries(result.data).filter(([k]) => k in req.body),
+      Object.entries(result.data).filter(([k]) => k in req.body)
     ) as typeof result.data;
     // ADR-0043: update() is async — writes to disk first, then DB
     const updated = await meshCore.update(req.params.id, explicitFields);
@@ -365,7 +413,26 @@ export function createMeshRouter(deps: MeshRouterDeps | MeshCore): Router {
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
     }
+    if (agent.isSystem) {
+      return res.status(403).json({ error: 'System agents cannot be removed' });
+    }
     await meshCore.unregister(req.params.id);
+
+    // Fire-and-forget activity event for agent removal
+    const activityService = req.app.locals.activityService as ActivityService | undefined;
+    if (activityService) {
+      await activityService.emit({
+        actorType: 'user',
+        actorLabel: 'You',
+        category: 'agent',
+        eventType: 'agent.removed',
+        resourceType: 'agent',
+        resourceId: req.params.id,
+        resourceLabel: agent.name,
+        summary: `Removed agent ${agent.name}`,
+      });
+    }
+
     return res.json({ success: true });
   });
 
@@ -376,14 +443,15 @@ export function createMeshRouter(deps: MeshRouterDeps | MeshCore): Router {
       return res.status(400).json({ error: 'Validation failed', details: result.error.flatten() });
     }
 
+    let resolvedPath: string;
     try {
-      await validateBoundary(result.data.path);
+      resolvedPath = await validateBoundary(result.data.path);
     } catch {
       return res.status(403).json({ error: `Path outside boundary: ${result.data.path}` });
     }
 
     try {
-      await meshCore.deny(result.data.path, result.data.reason, result.data.denier);
+      await meshCore.deny(resolvedPath, result.data.reason, result.data.denier);
       return res.status(201).json({ success: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Denial failed';
@@ -405,13 +473,14 @@ export function createMeshRouter(deps: MeshRouterDeps | MeshCore): Router {
       return res.status(400).json({ error: 'Invalid path' });
     }
 
+    let resolvedPath: string;
     try {
-      await validateBoundary(filePath);
+      resolvedPath = await validateBoundary(filePath);
     } catch {
       return res.status(403).json({ error: `Path outside boundary: ${filePath}` });
     }
 
-    await meshCore.undeny(filePath);
+    await meshCore.undeny(resolvedPath);
     return res.json({ success: true });
   });
 

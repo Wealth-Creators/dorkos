@@ -29,8 +29,7 @@ describe('stripRelayContext', () => {
   });
 
   it('handles multiple paragraphs of user content after closing tag', () => {
-    const text =
-      '<relay_context>\nAgent-ID: abc\n</relay_context>\n\nParagraph 1\n\nParagraph 2';
+    const text = '<relay_context>\nAgent-ID: abc\n</relay_context>\n\nParagraph 1\n\nParagraph 2';
     expect(stripRelayContext(text)).toBe('Paragraph 1\n\nParagraph 2');
   });
 
@@ -281,7 +280,7 @@ describe('parseTranscript error/subagent extraction', () => {
     });
   });
 
-  it('extracts subagent blocks from JSONL as SubagentPart', () => {
+  it('extracts subagent blocks from JSONL as BackgroundTaskPart', () => {
     const lines = [
       JSON.stringify({
         type: 'assistant',
@@ -305,12 +304,14 @@ describe('parseTranscript error/subagent extraction', () => {
     ];
     const messages = parseTranscript(lines);
     expect(messages).toHaveLength(1);
-    const subagentPart = messages[0].parts!.find((p) => p.type === 'subagent');
-    expect(subagentPart).toEqual({
-      type: 'subagent',
+    const taskPart = messages[0].parts!.find((p) => p.type === 'background_task');
+    expect(taskPart).toEqual({
+      type: 'background_task',
       taskId: 'task-abc',
-      description: 'Running tests',
+      taskType: 'agent',
       status: 'complete',
+      startedAt: 0,
+      description: 'Running tests',
       toolUses: 3,
       lastToolName: 'Bash',
       durationMs: 5000,
@@ -348,10 +349,7 @@ describe('parseTranscript error/subagent extraction', () => {
         uuid: 'msg-5',
         message: {
           role: 'assistant',
-          content: [
-            { type: 'error' },
-            { type: 'subagent' },
-          ],
+          content: [{ type: 'error' }, { type: 'subagent' }],
         },
       }),
     ];
@@ -362,8 +360,9 @@ describe('parseTranscript error/subagent extraction', () => {
     expect(errorPart).toMatchObject({ type: 'error', message: '' });
     const subPart = messages[0].parts![1];
     expect(subPart).toMatchObject({
-      type: 'subagent',
+      type: 'background_task',
       taskId: '',
+      taskType: 'agent',
       description: '',
       status: 'running',
     });
@@ -416,7 +415,7 @@ describe('parseTranscript error/subagent extraction', () => {
       }),
     ];
     const messages = parseTranscript(lines);
-    const subPart = messages[0].parts!.find((p) => p.type === 'subagent');
-    expect(subPart).toMatchObject({ type: 'subagent', taskId: 'fallback-id' });
+    const subPart = messages[0].parts!.find((p) => p.type === 'background_task');
+    expect(subPart).toMatchObject({ type: 'background_task', taskId: 'fallback-id' });
   });
 });

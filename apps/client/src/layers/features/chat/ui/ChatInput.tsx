@@ -41,8 +41,10 @@ interface ChatInputProps {
   onCursorChange?: (pos: number) => void;
   /** Callback when files are selected via the paperclip button. */
   onAttach?: (files: File[]) => void;
-  /** Custom placeholder text for the textarea. Defaults to "Message Claude...". */
+  /** Custom placeholder text for the textarea. Defaults to "Send a message...". */
   placeholder?: string;
+  /** Overlay element rendered in place of the native placeholder (e.g. animated hints). */
+  placeholderOverlay?: React.ReactNode;
   /** Navigate up through the message queue (shell-history style). */
   onQueueNavigateUp?: () => void;
   /** Navigate down through the message queue (shell-history style). */
@@ -74,7 +76,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     activeDescendantId,
     onCursorChange,
     onAttach,
-    placeholder = 'Message Claude...',
+    placeholder = 'Send a message...',
+    placeholderOverlay,
     onQueueNavigateUp,
     onQueueNavigateDown,
     queueHasItems = false,
@@ -305,7 +308,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       label: '',
       onClick: undefined,
     },
-  } satisfies Record<ButtonState, { icon: React.ElementType; className: string; label: string; onClick: (() => void) | undefined }>;
+  } satisfies Record<
+    ButtonState,
+    { icon: React.ElementType; className: string; label: string; onClick: (() => void) | undefined }
+  >;
 
   const config = buttonConfig[buttonState];
   const ButtonIcon = config.icon;
@@ -324,7 +330,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       )}
       <div
         className={cn(
-          'border-input flex items-end gap-1.5 rounded-md border bg-background p-1.5 shadow-xs transition-[color,box-shadow]',
+          'border-input bg-background flex items-end gap-1.5 rounded-md border p-1.5 shadow-xs transition-[color,box-shadow]',
           isFocused && 'border-ring ring-ring/75 ring-[1px]',
           editingQueueItem && 'border-primary/40',
           !onAttach && 'pl-3'
@@ -354,30 +360,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             </button>
           </>
         )}
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onSelect={handleSelect}
-          role="combobox"
-          aria-autocomplete="list"
-          aria-controls={
-            isPaletteOpen
-              ? activeDescendantId?.startsWith('file-')
-                ? 'file-palette-listbox'
-                : 'command-palette-listbox'
-              : undefined
-          }
-          aria-expanded={isPaletteOpen ?? false}
-          aria-activedescendant={isPaletteOpen ? activeDescendantId : undefined}
-          placeholder={placeholder}
-          className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent py-0.5 text-sm focus:outline-none"
-          rows={1}
-          disabled={isInputDisabled}
-        />
+        <div className="relative min-h-[24px] flex-1">
+          {!hasText && placeholderOverlay}
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            onSelect={handleSelect}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls={
+              isPaletteOpen
+                ? activeDescendantId?.startsWith('file-')
+                  ? 'file-palette-listbox'
+                  : 'command-palette-listbox'
+                : undefined
+            }
+            aria-expanded={isPaletteOpen ?? false}
+            aria-activedescendant={isPaletteOpen ? activeDescendantId : undefined}
+            placeholder={placeholderOverlay ? '' : placeholder}
+            className="max-h-[200px] min-h-[24px] w-full resize-none bg-transparent py-0.5 text-sm focus:outline-none"
+            rows={1}
+            disabled={isInputDisabled}
+          />
+        </div>
         <motion.button
           animate={{ opacity: showClear ? 0.5 : 0, scale: showClear ? 1 : 0.8 }}
           transition={{ duration: 0.15 }}
@@ -404,14 +413,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             className={cn(
               'shrink-0 rounded-lg p-1.5 transition-colors max-md:p-2',
               config.className,
-              (!showButton || (buttonState === 'send' && sessionBusy)) && 'pointer-events-none opacity-50'
+              (!showButton || (buttonState === 'send' && sessionBusy)) &&
+                'pointer-events-none opacity-50'
             )}
             aria-label={config.label}
           >
             <ButtonIcon className="size-(--size-icon-sm)" />
           </motion.button>
           {queueDepth > 0 && buttonState === 'queue' && (
-            <span className="bg-foreground text-background absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-medium">
+            <span className="bg-foreground text-background absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-medium">
               {queueDepth}
             </span>
           )}

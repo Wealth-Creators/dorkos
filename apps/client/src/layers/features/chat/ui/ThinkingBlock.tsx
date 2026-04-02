@@ -63,14 +63,14 @@ export function ThinkingBlock({ text, isStreaming, elapsedMs }: ThinkingBlockPro
         <>
           <Brain
             className={cn(
-              'size-(--size-icon-xs) text-muted-foreground',
-              isStreaming && 'animate-pulse'
+              'text-muted-foreground size-(--size-icon-xs)',
+              isStreaming && 'animate-tasks'
             )}
           />
           <span
             className={cn(
-              'text-3xs font-mono text-muted-foreground',
-              isStreaming && 'animate-pulse'
+              'text-3xs text-muted-foreground font-mono',
+              isStreaming && 'animate-tasks'
             )}
           >
             {durationLabel}
@@ -78,13 +78,8 @@ export function ThinkingBlock({ text, isStreaming, elapsedMs }: ThinkingBlockPro
         </>
       }
     >
-      <div
-        ref={contentRef}
-        className="max-h-64 overflow-y-auto"
-      >
-        <pre className="text-xs text-muted-foreground whitespace-pre-wrap break-words">
-          {text}
-        </pre>
+      <div ref={contentRef} className="max-h-64 overflow-y-auto">
+        <pre className="text-muted-foreground text-xs break-words whitespace-pre-wrap">{text}</pre>
       </div>
     </CollapsibleCard>
   );

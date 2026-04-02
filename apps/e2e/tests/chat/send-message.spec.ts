@@ -28,7 +28,7 @@ test.describe('Chat — Send Message @integration', () => {
   test('assistant message renders markdown after stream ends', async ({ chatPage }) => {
     // Ask for content with common markdown elements
     await chatPage.sendMessage(
-      'Respond with a short markdown example: one heading (##), one bold word, and one bullet list item.',
+      'Respond with a short markdown example: one heading (##), one bold word, and one bullet list item.'
     );
     await chatPage.waitForResponse();
 
@@ -42,7 +42,7 @@ test.describe('Chat — Send Message @integration', () => {
   test('tool calls display as collapsible cards', async ({ chatPage }) => {
     // Trigger a tool call by asking Claude to read a file it can access
     await chatPage.sendMessage(
-      'Use the Read tool to read the file /etc/hostname, then tell me what it contains.',
+      'Use the Read tool to read the file /etc/hostname, then tell me what it contains.'
     );
 
     // Tool call cards should appear during or after streaming
@@ -60,7 +60,7 @@ test.describe('Chat — Send Message @integration', () => {
     await expect(toggleButton).toHaveAttribute('aria-expanded', 'false');
   });
 
-  test('message history loads when switching sessions', async ({ chatPage, agentSidebar }) => {
+  test('message history loads when switching sessions', async ({ chatPage, sessionSidebar }) => {
     // Send a message in the current session to create history
     await chatPage.sendMessage('Say: session history test marker');
     await chatPage.waitForResponse();
@@ -69,7 +69,7 @@ test.describe('Chat — Send Message @integration', () => {
     expect(sessionId).toBeTruthy();
 
     // Create a new session to navigate away
-    await agentSidebar.createNewSession();
+    await sessionSidebar.createNewSession();
     await expect(chatPage.panel).toBeVisible({ timeout: 10_000 });
 
     // Navigate back to the original session via URL

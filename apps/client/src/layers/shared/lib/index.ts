@@ -8,7 +8,7 @@ export { getPlatform, setPlatformAdapter, isMac, type PlatformAdapter } from './
 export { fuzzyMatch } from './fuzzy-match';
 export { HttpTransport } from './transport';
 export { DirectTransport, type DirectTransportServices } from './direct-transport';
-export { getToolLabel } from './tool-labels';
+export { getToolLabel, getMcpServerBadge, parseMcpToolName } from './tool-labels';
 export { ToolArgumentsDisplay } from './tool-arguments-formatter';
 export {
   EMOJI_SET,
@@ -16,10 +16,11 @@ export {
   hashToHslColor,
   hashToEmoji,
   generateCircleFavicon,
-  generatePulseFrames,
+  generateTasksFrames,
   setFavicon,
 } from './favicon-utils';
 export { playNotificationSound } from './notification-sound';
+export { playSliderTick, playCelebration } from './sound';
 export {
   groupSessionsByTime,
   shortenHomePath,
@@ -52,10 +53,12 @@ export {
   STORAGE_KEYS,
   FONT_SCALE_MAP,
   MAX_RECENT_CWDS,
+  MAX_CANVAS_SESSIONS,
   TIMING,
   QUERY_TIMING,
   CELEBRATIONS,
   TIME_UNITS,
+  SSE_RESILIENCE,
 } from './constants';
 export type { FileEntry } from './file-types';
 export { createChannel, type Channel } from './broadcast-channel';
@@ -68,3 +71,35 @@ export {
   type ShortcutDef,
   type ShortcutGroup,
 } from './shortcuts';
+export {
+  DEFAULT_TEXT_EFFECT,
+  resolveStreamdownAnimation,
+  useTextEffectConfig,
+} from './text-effects';
+export type { TextEffectMode, TextEffectConfig } from './text-effects';
+export { useAppForm, withForm, formOptions, useFieldContext, useFormContext } from './form';
+export { formatDuration } from './format-duration';
+export { queryClient } from './query-client';
+export { classifyContent, type ContentType } from './classify-content';
+export { resolveAgentVisual } from './resolve-agent-visual';
+export type { AgentVisual, AgentVisualSource } from './resolve-agent-visual';
+export {
+  executeUiCommand,
+  type DispatcherContext,
+  type DispatcherStore,
+} from './ui-action-dispatcher';
+export {
+  textFilter,
+  enumFilter,
+  dateRangeFilter,
+  booleanFilter,
+  numericRangeFilter,
+  createFilterSchema,
+  createSortOptions,
+  applySortAndFilter,
+  isEnumFilter,
+  type FilterDefinition,
+  type EnumFilterDefinition,
+  type FilterSchema,
+  type FilterValues,
+} from './filter-engine';

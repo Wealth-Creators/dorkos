@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useImperativeHandle, useCallback 
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, X, Shield } from 'lucide-react';
 import { useTransport } from '@/layers/shared/model';
-import { ToolArgumentsDisplay, cn } from '@/layers/shared/lib';
+import { ToolArgumentsDisplay, cn, getToolLabel, getMcpServerBadge } from '@/layers/shared/lib';
 import { Kbd, Button } from '@/layers/shared/ui';
 import { CompactResultRow, InteractiveCard } from './primitives';
 
@@ -28,7 +28,8 @@ function formatAriaTimeRemaining(seconds: number | null): string {
   if (seconds <= 0) return 'Expired';
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
-  if (m > 0) return `${m} minute${m !== 1 ? 's' : ''} and ${s} second${s !== 1 ? 's' : ''} remaining`;
+  if (m > 0)
+    return `${m} minute${m !== 1 ? 's' : ''} and ${s} second${s !== 1 ? 's' : ''} remaining`;
   return `${s} second${s !== 1 ? 's' : ''} remaining`;
 }
 
@@ -69,8 +70,11 @@ export function ToolApproval({
   timeoutMs,
 }: ToolApprovalProps) {
   const transport = useTransport();
+  const badge = getMcpServerBadge(toolName);
+  const label = getToolLabel(toolName, input);
   const [responding, setResponding] = useState(false);
   const [decided, setDecided] = useState<'approved' | 'denied' | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Countdown state
   const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
@@ -126,6 +130,7 @@ export function ToolApproval({
   const handleApprove = useCallback(async () => {
     if (responding || decided) return;
     setResponding(true);
+    setError(null);
     try {
       await transport.approveTool(sessionId, toolCallId);
       setDecided('approved');
@@ -137,6 +142,7 @@ export function ToolApproval({
         onDecided?.();
       } else {
         console.error('Approval failed:', err);
+        setError('Approval request failed — try again');
       }
     } finally {
       setResponding(false);
@@ -146,6 +152,7 @@ export function ToolApproval({
   const handleDeny = useCallback(async () => {
     if (responding || decided) return;
     setResponding(true);
+    setError(null);
     try {
       await transport.denyTool(sessionId, toolCallId);
       setDecided('denied');
@@ -157,6 +164,7 @@ export function ToolApproval({
         onDecided?.();
       } else {
         console.error('Deny failed:', err);
+        setError('Deny request failed — try again');
       }
     } finally {
       setResponding(false);
@@ -179,26 +187,22 @@ export function ToolApproval({
   if (decided) {
     const isApproved = decided === 'approved';
     return (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={fadeTransition}
-      >
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={fadeTransition}>
         <CompactResultRow
           data-testid="tool-approval-decided"
           data-decision={decided}
           icon={
             isApproved ? (
-              <Check className="size-(--size-icon-sm) shrink-0 text-status-success" />
+              <Check className="text-status-success size-(--size-icon-sm) shrink-0" />
             ) : (
-              <X className="size-(--size-icon-sm) shrink-0 text-status-error" />
+              <X className="text-status-error size-(--size-icon-sm) shrink-0" />
             )
           }
-          label={<span className="font-mono text-3xs">{toolName}</span>}
+          label={<span className="text-3xs font-mono">{label}</span>}
           trailing={
             <span
               className={cn(
-                'rounded-full px-1.5 py-0.5 text-2xs font-medium',
+                'text-2xs rounded-full px-1.5 py-0.5 font-medium',
                 isApproved
                   ? 'bg-status-success-bg text-status-success-fg'
                   : 'bg-status-error-bg text-status-error-fg'
@@ -210,8 +214,8 @@ export function ToolApproval({
         >
           {decided === 'denied' && timedOut.current && (
             <p className="text-2xs text-muted-foreground mt-1">
-              Auto-denied — approval timed out after {Math.ceil((timeoutMs ?? 0) / 60000)} minutes. The agent continued
-              without this tool.
+              Auto-denied — approval timed out after {Math.ceil((timeoutMs ?? 0) / 60000)} minutes.
+              The agent continued without this tool.
             </p>
           )}
         </CompactResultRow>
@@ -220,9 +224,14 @@ export function ToolApproval({
   }
 
   return (
-    <InteractiveCard isActive={isActive} isResolved={!!decided} className="my-1" data-testid="tool-approval">
+    <InteractiveCard
+      isActive={isActive}
+      isResolved={!!decided}
+      className="my-1"
+      data-testid="tool-approval"
+    >
       <div className="mb-2 flex items-center gap-2">
-        <Shield className="size-(--size-icon-md) text-muted-foreground" />
+        <Shield className="text-muted-foreground size-(--size-icon-md)" />
         <span className="font-semibold">Tool approval required</span>
       </div>
 
@@ -234,7 +243,7 @@ export function ToolApproval({
           aria-valuemax={Math.ceil(timeoutMs / 1000)}
           aria-valuenow={secondsRemaining ?? 0}
           aria-valuetext={formatAriaTimeRemaining(secondsRemaining)}
-          className="mb-2 h-1 w-full overflow-hidden rounded-full bg-muted"
+          className="bg-muted mb-2 h-1 w-full overflow-hidden rounded-full"
         >
           <div
             className={cn(
@@ -276,12 +285,20 @@ export function ToolApproval({
         )}
       </AnimatePresence>
 
-      <div className="mb-2 font-mono text-xs">{toolName}</div>
+      <div className="mb-2 flex items-center gap-1.5">
+        {badge && (
+          <span className="bg-muted text-muted-foreground text-3xs rounded px-1 py-0.5 font-medium">
+            {badge}
+          </span>
+        )}
+        <span className="font-mono text-xs">{label}</span>
+      </div>
       {input && (
         <div className="bg-muted mb-3 rounded p-2">
           <ToolArgumentsDisplay toolName={toolName} input={input} />
         </div>
       )}
+      {error && <p className="text-status-error text-2xs mb-2">{error}</p>}
       <div className="flex gap-2">
         <Button
           size="sm"

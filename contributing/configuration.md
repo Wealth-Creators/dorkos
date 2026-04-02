@@ -45,17 +45,17 @@ dorkos config path
 
 DorkOS writes several runtime data files under `~/.dork/` in addition to `config.json`. The root directory is overridden by `DORK_HOME`.
 
-| Path                             | Purpose                                                       |
-| -------------------------------- | ------------------------------------------------------------- |
-| `~/.dork/config.json`            | Persistent user config (this document)                        |
-| `~/.dork/pulse.db`               | SQLite database for Pulse scheduler state (WAL mode)          |
-| `~/.dork/schedules.json`         | JSON snapshot of Pulse schedules (alongside pulse.db)         |
-| `~/.dork/logs/dorkos.log`        | NDJSON server log with daily rotation                         |
-| `~/.dork/relay/adapters.json`    | Relay adapter config — hot-reloaded by AdapterManager         |
-| `~/.dork/relay/index.db`         | SQLite index for Relay message delivery and trace data         |
-| `~/.dork/relay/bindings.json`    | Adapter-to-agent binding definitions — hot-reloaded at runtime |
-| `~/.dork/relay/sessions.json`    | Binding session map persisted across server restarts          |
-| `~/.dork/relay/`                 | Relay Maildir message store (subdirectories per subject)      |
+| Path                          | Purpose                                                        |
+| ----------------------------- | -------------------------------------------------------------- |
+| `~/.dork/config.json`         | Persistent user config (this document)                         |
+| `~/.dork/dork.db`             | SQLite database (Tasks, Mesh, Relay state; WAL mode)           |
+| `~/.dork/schedules.json`      | JSON snapshot of Tasks schedules                               |
+| `~/.dork/logs/dorkos.log`     | NDJSON server log with daily rotation                          |
+| `~/.dork/relay/adapters.json` | Relay adapter config — hot-reloaded by AdapterManager          |
+| `~/.dork/relay/index.db`      | SQLite index for Relay message delivery and trace data         |
+| `~/.dork/relay/bindings.json` | Adapter-to-agent binding definitions — hot-reloaded at runtime |
+| `~/.dork/relay/sessions.json` | Binding session map persisted across server restarts           |
+| `~/.dork/relay/`              | Relay Maildir message store (subdirectories per subject)       |
 
 ### Relay config (`~/.dork/relay/adapters.json`)
 
@@ -67,43 +67,59 @@ Adapter-to-agent bindings are persisted to `~/.dork/relay/bindings.json`. The fi
 
 ## Settings Reference
 
-| Key               | Type                           | Default   | Description                                |
-| ----------------- | ------------------------------ | --------- | ------------------------------------------ |
-| `server.port`     | integer (1024--65535)          | `4242`    | Port the Express server listens on         |
-| `server.cwd`      | string \| null                 | `null`    | Default working directory for sessions     |
-| `server.boundary` | string \| null                 | `null`    | Directory boundary root (`null` = home directory) |
-| `tunnel.enabled`  | boolean                        | `false`   | Enable ngrok tunnel on startup             |
-| `tunnel.domain`   | string \| null                 | `null`    | Custom ngrok domain                        |
-| `tunnel.authtoken`| string \| null                 | `null`    | ngrok auth token (sensitive)               |
-| `tunnel.auth`     | string \| null                 | `null`    | HTTP basic auth for tunnel, `user:pass` format (sensitive) |
-| `logging.level`   | `"fatal"` \| `"error"` \| `"warn"` \| `"info"` \| `"debug"` \| `"trace"` | `"info"` | Log verbosity level |
-| `logging.maxLogSizeKb` | integer (100--10240)      | `500`     | Maximum log file size in KB before rotation |
-| `logging.maxLogFiles`  | integer (1--30)           | `14`      | Number of rotated log files to retain      |
-| `ui.theme`        | `"light"` \| `"dark"` \| `"system"` | `"system"` | UI color theme                           |
-| `relay.enabled`   | boolean                        | `true`    | Enable Relay subsystem (config-level toggle, distinct from `DORKOS_RELAY_ENABLED`) |
-| `relay.dataDir`   | string \| null                 | `null`    | Override Relay data directory (`null` = default under `DORK_HOME`) |
-| `scheduler.enabled` | boolean                      | `true`    | Enable Pulse scheduler subsystem (config-level toggle) |
-| `scheduler.maxConcurrentRuns` | integer (1--10)    | `1`       | Maximum concurrently executing Pulse runs  |
-| `scheduler.timezone` | string \| null              | `null`    | Default timezone for cron expressions (`null` = system timezone) |
-| `scheduler.retentionCount` | integer              | `100`     | Number of completed run records to retain in the database |
-| `mesh.scanRoots`  | string[]                       | `[]`      | Directories to scan for agent discovery    |
-| `uploads.maxFileSize` | integer | `10485760` (10 MB) | Maximum file size in bytes per uploaded file |
-| `uploads.maxFiles` | integer (1--50) | `10` | Maximum number of files per upload request |
-| `uploads.allowedTypes` | string[] | `["*/*"]` | Allowed MIME types (e.g., `["image/*", "text/plain"]`) |
-| `agentContext.relayTools` | boolean                 | `true`    | Include Relay messaging tool documentation in agent context |
-| `agentContext.meshTools`  | boolean                 | `true`    | Include Mesh discovery tool documentation in agent context  |
-| `agentContext.adapterTools` | boolean               | `true`    | Include adapter tool documentation in agent context         |
-| `agentContext.pulseTools` | boolean                 | `true`    | Include Pulse scheduler tool documentation in agent context |
+| Key                           | Type                                                                     | Default            | Description                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------ | ------------------ | ---------------------------------------------------------------------------------- |
+| `server.port`                 | integer (1024--65535)                                                    | `4242`             | Port the Express server listens on                                                 |
+| `server.cwd`                  | string \| null                                                           | `null`             | Default working directory for sessions                                             |
+| `server.boundary`             | string \| null                                                           | `null`             | Directory boundary root (`null` = home directory)                                  |
+| `server.open`                 | boolean                                                                  | `true`             | Open browser automatically on startup                                              |
+| `tunnel.enabled`              | boolean                                                                  | `false`            | Enable ngrok tunnel on startup                                                     |
+| `tunnel.domain`               | string \| null                                                           | `null`             | Custom ngrok domain                                                                |
+| `tunnel.authtoken`            | string \| null                                                           | `null`             | ngrok auth token (sensitive)                                                       |
+| `tunnel.auth`                 | string \| null                                                           | `null`             | HTTP basic auth for tunnel, `user:pass` format (sensitive)                         |
+| `logging.level`               | `"fatal"` \| `"error"` \| `"warn"` \| `"info"` \| `"debug"` \| `"trace"` | `"info"`           | Log verbosity level                                                                |
+| `logging.maxLogSizeKb`        | integer (100--10240)                                                     | `500`              | Maximum log file size in KB before rotation                                        |
+| `logging.maxLogFiles`         | integer (1--30)                                                          | `14`               | Number of rotated log files to retain                                              |
+| `ui.theme`                    | `"light"` \| `"dark"` \| `"system"`                                      | `"system"`         | UI color theme                                                                     |
+| `relay.enabled`               | boolean                                                                  | `true`             | Enable Relay subsystem (config-level toggle, distinct from `DORKOS_RELAY_ENABLED`) |
+| `relay.dataDir`               | string \| null                                                           | `null`             | Override Relay data directory (`null` = default under `DORK_HOME`)                 |
+| `scheduler.enabled`           | boolean                                                                  | `true`             | Enable Tasks scheduler subsystem (config-level toggle)                             |
+| `scheduler.maxConcurrentRuns` | integer (1--10)                                                          | `1`                | Maximum concurrently executing Pulse runs                                          |
+| `scheduler.timezone`          | string \| null                                                           | `null`             | Default timezone for cron expressions (`null` = system timezone)                   |
+| `scheduler.retentionCount`    | integer                                                                  | `100`              | Number of completed run records to retain in the database                          |
+| `mesh.scanRoots`              | string[]                                                                 | `[]`               | Directories to scan for agent discovery                                            |
+| `uploads.maxFileSize`         | integer                                                                  | `10485760` (10 MB) | Maximum file size in bytes per uploaded file                                       |
+| `uploads.maxFiles`            | integer (1--50)                                                          | `10`               | Maximum number of files per upload request                                         |
+| `uploads.allowedTypes`        | string[]                                                                 | `["*/*"]`          | Allowed MIME types (e.g., `["image/*", "text/plain"]`)                             |
+| `agentContext.relayTools`     | boolean                                                                  | `true`             | Include Relay messaging tool documentation in agent context                        |
+| `agentContext.meshTools`      | boolean                                                                  | `true`             | Include Mesh discovery tool documentation in agent context                         |
+| `agentContext.adapterTools`   | boolean                                                                  | `true`             | Include adapter tool documentation in agent context                                |
+| `agentContext.tasksTools`     | boolean                                                                  | `true`             | Include Tasks scheduler tool documentation in agent context                        |
+
+The `agents` section configures agent storage defaults:
+
+| Key                       | Type   | Default          | Description                                      |
+| ------------------------- | ------ | ---------------- | ------------------------------------------------ |
+| `agents.defaultDirectory` | string | `~/.dork/agents` | Default directory for agent storage              |
+| `agents.defaultAgent`     | string | `dorkbot`        | Default agent ID used when no agent is specified |
+
+The `extensions` section controls the extension system:
+
+| Key                  | Type       | Default | Description                                        |
+| -------------------- | ---------- | ------- | -------------------------------------------------- |
+| `extensions.enabled` | `string[]` | `[]`    | Extension IDs that the user has explicitly enabled |
+
+Extensions are discovered automatically from `<cwd>/.dork/extensions/` and the global `~/.dork/extensions/` directory. The `enabled` array controls which discovered extensions are activated. See `contributing/extension-authoring.md` for the full extension system documentation.
 
 The `onboarding` section tracks first-time setup wizard state (`completedSteps`, `skippedSteps`, `startedAt`, `dismissedAt`). It is managed automatically by the server and should not be edited manually.
 
 The following settings are controlled exclusively by environment variables and have no corresponding config file key:
 
-| Environment Variable       | Default                            | Description                                                |
-| -------------------------- | ---------------------------------- | ---------------------------------------------------------- |
-| `DORKOS_RELAY_ENABLED`     | `false`                            | Enable the Relay message bus subsystem at the process level |
-| `DORKOS_CORS_ORIGIN`       | localhost on DORKOS_PORT/VITE_PORT | CORS allowed origin(s). Set to `*` for wildcard or a comma-separated list to override. |
-| `DORKOS_VERSION_OVERRIDE`  | (none)                             | Override the reported server version for testing upgrade UX. When set, dev mode detection is bypassed and this value is used as the current version. Example: `DORKOS_VERSION_OVERRIDE=0.1.0` simulates running an old version so the upgrade notification appears. |
+| Environment Variable      | Default                            | Description                                                                                                                                                                                                                                                         |
+| ------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DORKOS_RELAY_ENABLED`    | `true`                             | Enable the Relay message bus subsystem at the process level                                                                                                                                                                                                         |
+| `DORKOS_CORS_ORIGIN`      | localhost on DORKOS_PORT/VITE_PORT | CORS allowed origin(s). Set to `*` for wildcard or a comma-separated list to override.                                                                                                                                                                              |
+| `DORKOS_VERSION_OVERRIDE` | (none)                             | Override the reported server version for testing upgrade UX. When set, dev mode detection is bypassed and this value is used as the current version. Example: `DORKOS_VERSION_OVERRIDE=0.1.0` simulates running an old version so the upgrade notification appears. |
 
 The config file also contains a `version` field (always `1`) used for schema migrations.
 
@@ -140,6 +156,7 @@ Equivalent env var: `DORKOS_DEFAULT_CWD`
 The directory boundary restricts all filesystem operations to a specific root directory. When `null` (default), the boundary is the user's home directory (`~/`). All API endpoints that accept `cwd`, `path`, or `dir` parameters validate against this boundary and return 403 if the path is outside it.
 
 At startup, the server logs a warning if:
+
 - The boundary is set above the home directory
 - `server.cwd` is outside the configured boundary (falls back to boundary root)
 
@@ -149,6 +166,26 @@ dorkos config set server.boundary /home/user/projects
 
 Equivalent CLI flag: `--boundary` / `-b`
 Equivalent env var: `DORKOS_BOUNDARY`
+
+### server.open
+
+Whether to automatically open DorkOS in the default browser on startup. Defaults to `true`. Only applies in interactive terminals (non-TTY environments always skip opening).
+
+```bash
+dorkos config set server.open false
+```
+
+Equivalent CLI flag: `--no-open` (to suppress) — there is no `--open` flag since the default is already `true`
+Equivalent env var: `DORKOS_OPEN`
+
+**Open browser resolution:**
+
+```
+--no-open                # CLI flag (wins if provided, sets open=false)
+DORKOS_OPEN=false        # Env var (wins if no CLI flag)
+server.open: false       # config.json (wins if no env var)
+true                     # Built-in default (fallback)
+```
 
 ### tunnel.enabled
 
@@ -250,11 +287,11 @@ dorkos config set mesh.scanRoots '["/home/user/projects", "/home/user/agents"]'
 
 Controls file upload limits for the `POST /api/uploads` endpoint. The upload handler reads these values dynamically on each request from the config manager.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `uploads.maxFileSize` | `number` | `10485760` (10 MB) | Maximum file size in bytes |
-| `uploads.maxFiles` | `number` | `10` | Maximum files per request (1--50) |
-| `uploads.allowedTypes` | `string[]` | `["*/*"]` | Allowed MIME types |
+| Key                    | Type       | Default            | Description                       |
+| ---------------------- | ---------- | ------------------ | --------------------------------- |
+| `uploads.maxFileSize`  | `number`   | `10485760` (10 MB) | Maximum file size in bytes        |
+| `uploads.maxFiles`     | `number`   | `10`               | Maximum files per request (1--50) |
+| `uploads.allowedTypes` | `string[]` | `["*/*"]`          | Allowed MIME types                |
 
 ```bash
 dorkos config set uploads.maxFileSize 52428800    # 50 MB
@@ -265,18 +302,18 @@ dorkos config set uploads.maxFiles 20
 
 Controls which tool domain blocks are injected into agent system prompts. Each toggle determines whether the corresponding tool documentation is included in the context, helping agents understand available tools.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `agentContext.relayTools` | `boolean` | `true` | Include Relay messaging tool documentation |
-| `agentContext.meshTools` | `boolean` | `true` | Include Mesh discovery tool documentation |
-| `agentContext.adapterTools` | `boolean` | `true` | Include adapter tool documentation |
-| `agentContext.pulseTools` | `boolean` | `true` | Include Pulse scheduler tool documentation |
+| Key                         | Type      | Default | Description                                |
+| --------------------------- | --------- | ------- | ------------------------------------------ |
+| `agentContext.relayTools`   | `boolean` | `true`  | Include Relay messaging tool documentation |
+| `agentContext.meshTools`    | `boolean` | `true`  | Include Mesh discovery tool documentation  |
+| `agentContext.adapterTools` | `boolean` | `true`  | Include adapter tool documentation         |
+| `agentContext.tasksTools`   | `boolean` | `true`  | Include Tasks scheduler tool documentation |
 
 These can be configured globally in Settings > Tools tab, or per-agent via the agent manifest's `enabledToolGroups` field (which overrides global defaults).
 
 ```bash
 dorkos config set agentContext.relayTools false
-dorkos config set agentContext.pulseTools false
+dorkos config set agentContext.tasksTools false
 ```
 
 ### DORKOS_RELAY_ENABLED
@@ -396,6 +433,7 @@ DorkOS Configuration (~/.dork/config.json)
   server.port          4242           (default)
   server.cwd           —              (default)
   server.boundary      —              (default)
+  server.open          true           (default)
   tunnel.enabled       false          (default)
   tunnel.domain        —              (default)
   tunnel.authtoken     —              (default)
@@ -404,7 +442,7 @@ DorkOS Configuration (~/.dork/config.json)
   agentContext.relayTools   true       (default)
   agentContext.meshTools    true       (default)
   agentContext.adapterTools true       (default)
-  agentContext.pulseTools   true       (default)
+  agentContext.tasksTools   true       (default)
 
 Config file: /Users/you/.dork/config.json
 ```
@@ -451,7 +489,7 @@ $ dorkos config list
   "scheduler": { "enabled": true, "maxConcurrentRuns": 1, "timezone": null, "retentionCount": 100 },
   "mesh": { "scanRoots": [] },
   "uploads": { "maxFileSize": 10485760, "maxFiles": 10, "allowedTypes": ["*/*"] },
-  "agentContext": { "relayTools": true, "meshTools": true, "adapterTools": true, "pulseTools": true }
+  "agentContext": { "relayTools": true, "meshTools": true, "adapterTools": true, "tasksTools": true }
 }
 ```
 
@@ -586,10 +624,20 @@ Content-Type: application/json
     "ui": { "theme": "dark" },
     "logging": { "level": "info", "maxLogSizeKb": 500, "maxLogFiles": 14 },
     "relay": { "enabled": true, "dataDir": null },
-    "scheduler": { "enabled": true, "maxConcurrentRuns": 1, "timezone": null, "retentionCount": 100 },
+    "scheduler": {
+      "enabled": true,
+      "maxConcurrentRuns": 1,
+      "timezone": null,
+      "retentionCount": 100
+    },
     "mesh": { "scanRoots": [] },
     "uploads": { "maxFileSize": 10485760, "maxFiles": 10, "allowedTypes": ["*/*"] },
-    "agentContext": { "relayTools": true, "meshTools": true, "adapterTools": true, "pulseTools": true }
+    "agentContext": {
+      "relayTools": true,
+      "meshTools": true,
+      "adapterTools": true,
+      "tasksTools": true
+    }
   }
 }
 ```

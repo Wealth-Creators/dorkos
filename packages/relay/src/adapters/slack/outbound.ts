@@ -19,9 +19,12 @@ import {
   extractErrorMessage,
   extractApprovalData,
   formatForPlatform,
-  truncateText,
+  splitMessage,
+  SLACK_MAX_LENGTH,
 } from '../../lib/payload-utils.js';
-import { extractChannelId, SUBJECT_PREFIX, MAX_MESSAGE_LENGTH } from './inbound.js';
+import { extractChannelId, isGroupChannel } from './inbound.js';
+import type { SlackThreadIdCodec } from '../../lib/thread-id.js';
+import type { ThreadParticipationTracker } from './thread-tracker.js';
 import {
   handleTextDelta,
   handleDone,
@@ -38,7 +41,11 @@ import type { SlackOutboundState } from './approval.js';
 // Re-export types so existing imports from outbound.ts continue to work
 export type { ActiveStream, PendingReactions } from './stream.js';
 // Re-export approval state types and helpers so the adapter facade can use them
-export { clearApprovalTimeout, createSlackOutboundState, clearAllApprovalTimeouts } from './approval.js';
+export {
+  clearApprovalTimeout,
+  createSlackOutboundState,
+  clearAllApprovalTimeouts,
+} from './approval.js';
 export type { SlackOutboundState } from './approval.js';
 
 // === Types ===
@@ -57,6 +64,10 @@ export interface SlackDeliverOptions {
   nativeStreaming: boolean;
   typingIndicator: 'none' | 'reaction';
   approvalState: SlackOutboundState;
+  /** Instance-scoped codec for subject encoding/decoding. */
+  codec: SlackThreadIdCodec;
+  /** Thread participation tracker for marking threads the bot has replied to. */
+  threadTracker?: ThreadParticipationTracker;
   logger?: RelayLogger;
 }
 
@@ -98,7 +109,16 @@ function resolveThreadTs(envelope: RelayEnvelope): string | undefined {
  * @param opts - Delivery options
  */
 export async function deliverMessage(opts: SlackDeliverOptions): Promise<DeliveryResult> {
-  const { adapterId, subject, envelope, client, streamState, pendingReactions, callbacks, logger = noopLogger } = opts;
+  const {
+    adapterId,
+    subject,
+    envelope,
+    client,
+    streamState,
+    pendingReactions,
+    callbacks,
+    logger = noopLogger,
+  } = opts;
   const startTime = Date.now();
 
   // Reap orphaned streams that never received a done/error event
@@ -107,23 +127,35 @@ export async function deliverMessage(opts: SlackDeliverOptions): Promise<Deliver
       streamState.delete(key);
       // Clean up the pending hourglass reaction that would otherwise linger forever
       if (client) {
-        removePendingReaction(client, stream.channelId, opts.typingIndicator, pendingReactions, logger);
+        removePendingReaction(
+          client,
+          stream.channelId,
+          opts.typingIndicator,
+          pendingReactions,
+          logger
+        );
       }
-      logger.warn(`stream: reaped orphaned stream for ${key} (age: ${Math.round((startTime - stream.startedAt) / 1000)}s)`);
+      logger.warn(
+        `stream: reaped orphaned stream for ${key} (age: ${Math.round((startTime - stream.startedAt) / 1000)}s)`
+      );
     }
   }
 
   // Echo prevention: skip messages originating from this adapter
-  if (envelope.from.startsWith(SUBJECT_PREFIX)) {
+  if (envelope.from.startsWith(opts.codec.prefix)) {
     logger.debug('deliver: echo prevention — skipping self-originated message');
     return { success: true, durationMs: Date.now() - startTime };
   }
 
   if (!client) {
-    return { success: false, error: `SlackAdapter(${adapterId}): not started`, durationMs: Date.now() - startTime };
+    return {
+      success: false,
+      error: `SlackAdapter(${adapterId}): not started`,
+      durationMs: Date.now() - startTime,
+    };
   }
 
-  const channelId = extractChannelId(subject);
+  const channelId = extractChannelId(opts.codec, subject);
   if (!channelId) {
     return {
       success: false,
@@ -134,21 +166,34 @@ export async function deliverMessage(opts: SlackDeliverOptions): Promise<Deliver
 
   const threadTs = resolveThreadTs(envelope);
 
+  // Safety warning: channel messages without threadTs may post to the main channel
+  if (isGroupChannel(channelId) && !threadTs) {
+    logger.warn(`outbound: no threadTs for channel message in ${channelId}`);
+  }
+
   // For stream key differentiation, use a value consistent across all events
   // in a single agent response stream. Priority:
   // 1. threadTs — real Slack timestamp (always present for messages from Slack users)
   // 2. correlationId — shared across events from the same request
   // 3. envelope.from — agent session ID, consistent across all stream events
-  const payloadObj = envelope.payload && typeof envelope.payload === 'object'
-    ? (envelope.payload as Record<string, unknown>) : undefined;
-  const streamKeyTs = threadTs ?? (payloadObj?.correlationId as string | undefined) ?? envelope.from;
+  const payloadObj =
+    envelope.payload && typeof envelope.payload === 'object'
+      ? (envelope.payload as Record<string, unknown>)
+      : undefined;
+  const streamKeyTs =
+    threadTs ?? (payloadObj?.correlationId as string | undefined) ?? envelope.from;
 
   const ctx: StreamContext = {
-    channelId, threadTs, client, streamState,
-    callbacks, startTime,
+    channelId,
+    threadTs,
+    client,
+    streamState,
+    callbacks,
+    startTime,
     typingIndicator: opts.typingIndicator,
     streamKeyTs,
     pendingReactions,
+    threadTracker: opts.threadTracker,
     logger,
   };
 
@@ -158,7 +203,9 @@ export async function deliverMessage(opts: SlackDeliverOptions): Promise<Deliver
   if (eventType) {
     const textChunk = extractTextDelta(envelope.payload);
     if (textChunk) {
-      logger.debug(`deliver: text_delta to ${channelId} (${textChunk.length} chars, streaming=${opts.streaming ? (opts.nativeStreaming ? 'native' : 'legacy') : 'buffered'})`);
+      logger.debug(
+        `deliver: text_delta to ${channelId} (${textChunk.length} chars, streaming=${opts.streaming ? (opts.nativeStreaming ? 'native' : 'legacy') : 'buffered'})`
+      );
       return handleTextDelta(textChunk, opts.streaming, opts.nativeStreaming, ctx);
     }
 
@@ -176,11 +223,23 @@ export async function deliverMessage(opts: SlackDeliverOptions): Promise<Deliver
     if (eventType === 'approval_required') {
       const approvalData = extractApprovalData(envelope.payload);
       if (approvalData) {
-        logger.debug(`deliver: approval_required for tool '${approvalData.toolName}' to ${channelId}`);
+        logger.debug(
+          `deliver: approval_required for tool '${approvalData.toolName}' to ${channelId}`
+        );
         // Flush accumulated text before posting the approval card so partial
         // responses aren't lost when the stream pauses for approval.
         await flushStreamBuffer(ctx);
-        return handleApprovalRequired(channelId, threadTs, approvalData, envelope, client, callbacks, startTime, opts.approvalState);
+        return handleApprovalRequired(
+          channelId,
+          threadTs,
+          approvalData,
+          envelope,
+          client,
+          callbacks,
+          startTime,
+          opts.approvalState,
+          opts.threadTracker
+        );
       }
     }
 
@@ -190,11 +249,36 @@ export async function deliverMessage(opts: SlackDeliverOptions): Promise<Deliver
   }
 
   // --- Standard payload (non-StreamEvent) ---
-  const text = truncateText(formatForPlatform(extractPayloadContent(envelope.payload), 'slack'), MAX_MESSAGE_LENGTH);
-  logger.debug(`deliver: standard payload to ${channelId} (${text.length} chars)`);
-
-  return wrapSlackCall(
-    () => client.chat.postMessage({ channel: channelId, text, ...(threadTs ? { thread_ts: threadTs } : {}) }),
-    callbacks, startTime, true,
+  const formatted = formatForPlatform(extractPayloadContent(envelope.payload), 'slack');
+  const chunks = splitMessage(formatted, SLACK_MAX_LENGTH);
+  logger.debug(
+    `deliver: standard payload to ${channelId} (${formatted.length} chars, ${chunks.length} chunk${chunks.length === 1 ? '' : 's'})`
   );
+
+  let lastResult: DeliveryResult = { success: true, durationMs: 0 };
+  for (let i = 0; i < chunks.length; i++) {
+    lastResult = await wrapSlackCall(
+      () =>
+        client.chat.postMessage({
+          channel: channelId,
+          text: chunks[i],
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+        }),
+      callbacks,
+      startTime,
+      i === chunks.length - 1
+    );
+    if (!lastResult.success) return lastResult;
+
+    // Mark thread participation after the first successful post
+    if (i === 0 && opts.threadTracker && threadTs) {
+      opts.threadTracker.markParticipating(channelId, threadTs);
+    }
+
+    // Rate-limit between chunks to avoid Slack API throttling
+    if (i < chunks.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+    }
+  }
+  return lastResult;
 }

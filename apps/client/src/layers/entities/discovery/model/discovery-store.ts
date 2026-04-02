@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
-import type { DiscoveryCandidate, ScanProgress } from '@dorkos/shared/mesh-schemas';
+import type { DiscoveryCandidate, ExistingAgent, ScanProgress } from '@dorkos/shared/mesh-schemas';
 
 /** State managed by the shared discovery store. */
 export interface DiscoveryState {
   /** Candidates discovered during the current or most recent scan. */
   candidates: DiscoveryCandidate[];
+  /** Agents auto-imported from existing `.dork/agent.json` manifests during the scan. */
+  existingAgents: ExistingAgent[];
   /** Most recent progress snapshot from the scan stream. */
   progress: ScanProgress | null;
   /** Whether a scan is currently in progress. */
@@ -22,6 +24,8 @@ export interface DiscoveryActions {
   startScan: () => void;
   /** Append a discovered candidate. */
   addCandidate: (candidate: DiscoveryCandidate) => void;
+  /** Append an existing agent (auto-imported from manifest). */
+  addExistingAgent: (agent: ExistingAgent) => void;
   /** Update scan progress. */
   setProgress: (progress: ScanProgress) => void;
   /** Mark the scan as complete and record timestamp. */
@@ -34,6 +38,7 @@ export interface DiscoveryActions {
 
 const INITIAL_STATE: DiscoveryState = {
   candidates: [],
+  existingAgents: [],
   progress: null,
   isScanning: false,
   error: null,
@@ -53,33 +58,38 @@ export const useDiscoveryStore = create<DiscoveryState & DiscoveryActions>()(
 
       startScan: () =>
         set(
-          { candidates: [], progress: null, isScanning: true, error: null },
+          { candidates: [], existingAgents: [], progress: null, isScanning: true, error: null },
           false,
-          'discovery/startScan',
+          'discovery/startScan'
         ),
 
       addCandidate: (candidate) =>
         set(
           (state) => ({ candidates: [...state.candidates, candidate] }),
           false,
-          'discovery/addCandidate',
+          'discovery/addCandidate'
         ),
 
-      setProgress: (progress) =>
-        set({ progress }, false, 'discovery/setProgress'),
+      addExistingAgent: (agent) =>
+        set(
+          (state) => ({ existingAgents: [...state.existingAgents, agent] }),
+          false,
+          'discovery/addExistingAgent'
+        ),
+
+      setProgress: (progress) => set({ progress }, false, 'discovery/setProgress'),
 
       completeScan: (finalProgress) =>
         set(
           { progress: finalProgress, isScanning: false, lastScanAt: new Date().toISOString() },
           false,
-          'discovery/completeScan',
+          'discovery/completeScan'
         ),
 
-      setError: (error) =>
-        set({ error, isScanning: false }, false, 'discovery/setError'),
+      setError: (error) => set({ error, isScanning: false }, false, 'discovery/setError'),
 
       reset: () => set(INITIAL_STATE, false, 'discovery/reset'),
     }),
-    { name: 'DiscoveryStore' },
-  ),
+    { name: 'DiscoveryStore' }
+  )
 );

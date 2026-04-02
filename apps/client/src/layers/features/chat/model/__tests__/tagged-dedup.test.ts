@@ -1,113 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { HistoryMessage, MessagePart } from '@dorkos/shared/types';
 import type { ChatMessage } from '../chat-types';
-
-// ---------------------------------------------------------------------------
-// Helpers to replicate the tagged-dedup logic from use-chat-session.ts
-// without importing the full hook (which requires heavy React context setup).
-// The logic is extracted verbatim so any refactor that breaks parity will
-// fail compilation or produce divergent test results.
-// ---------------------------------------------------------------------------
-
-function mapHistoryMessage(m: HistoryMessage): ChatMessage {
-  const parts: MessagePart[] = m.parts ? [...m.parts] : [];
-  if (parts.length === 0 && m.content) {
-    parts.push({ type: 'text', text: m.content });
-  }
-  return {
-    id: m.id,
-    role: m.role,
-    content: m.content ?? '',
-    parts,
-    timestamp: m.timestamp ?? '',
-    messageType: m.messageType,
-    commandName: m.commandName,
-    commandArgs: m.commandArgs,
-  };
-}
-
-/**
- * Pure implementation of the seed-effect Branch 2 tagged-dedup logic.
- * Mirrors use-chat-session.ts so the logic can be tested without React.
- */
-function runTaggedDedup(
-  currentMessages: ChatMessage[],
-  history: HistoryMessage[],
-  setMessages: (fn: (prev: ChatMessage[]) => ChatMessage[]) => void,
-) {
-  const currentIds = new Set(currentMessages.map((m) => m.id));
-  const taggedMessages = currentMessages.filter((m) => m._streaming);
-
-  const taggedUser = taggedMessages.find((m) => m.role === 'user');
-  const taggedAssistant = taggedMessages.find((m) => m.role === 'assistant');
-
-  const newMessages: HistoryMessage[] = [];
-  let matchedUserIdx = -1;
-
-  for (let i = 0; i < history.length; i++) {
-    const serverMsg = history[i];
-    if (currentIds.has(serverMsg.id)) continue;
-
-    if (
-      taggedUser &&
-      serverMsg.role === 'user' &&
-      serverMsg.content === taggedUser.content
-    ) {
-      matchedUserIdx = i;
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === taggedUser.id
-            ? { ...mapHistoryMessage(serverMsg), _streaming: false }
-            : m,
-        ),
-      );
-      continue;
-    }
-
-    if (
-      taggedAssistant &&
-      matchedUserIdx >= 0 &&
-      i === matchedUserIdx + 1 &&
-      serverMsg.role === 'assistant'
-    ) {
-      const serverMapped = mapHistoryMessage(serverMsg);
-      const serverSubagentIds = new Set(
-        serverMapped.parts
-          .filter((p) => p.type === 'subagent')
-          .map((p) => p.taskId),
-      );
-      const clientOnlyParts = taggedAssistant.parts.filter(
-        (p) => p.type === 'subagent' && !serverSubagentIds.has(p.taskId),
-      );
-      const mergedParts =
-        clientOnlyParts.length > 0
-          ? [...serverMapped.parts, ...clientOnlyParts]
-          : serverMapped.parts;
-
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === taggedAssistant.id
-            ? { ...serverMapped, parts: mergedParts, _streaming: false }
-            : m,
-        ),
-      );
-      continue;
-    }
-
-    newMessages.push(serverMsg);
-  }
-
-  if (newMessages.length > 0) {
-    setMessages((prev) => [...prev, ...newMessages.map(mapHistoryMessage)]);
-  }
-}
+import { reconcileTaggedMessages } from '../stream-history-helpers';
 
 // ---------------------------------------------------------------------------
 // Helper to apply setMessages calls against a mutable state array
 // ---------------------------------------------------------------------------
 function applySetMessages(
   state: ChatMessage[],
-  calls: Array<(prev: ChatMessage[]) => ChatMessage[]>,
+  calls: Array<(prev: ChatMessage[]) => ChatMessage[]>
 ): ChatMessage[] {
   return calls.reduce((acc, fn) => fn(acc), state);
 }
@@ -139,11 +40,9 @@ describe('tagged-dedup in seed effect Branch 2', () => {
         _streaming: true,
       },
     ];
-    const history: HistoryMessage[] = [
-      { id: 'server-user-1', role: 'user', content: 'Hello' },
-    ];
+    const history: HistoryMessage[] = [{ id: 'server-user-1', role: 'user', content: 'Hello' }];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     expect(result).toHaveLength(1);
@@ -177,7 +76,7 @@ describe('tagged-dedup in seed effect Branch 2', () => {
       { id: 'server-asst-1', role: 'assistant', content: 'Hi there' },
     ];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     expect(result).toHaveLength(2);
@@ -187,14 +86,16 @@ describe('tagged-dedup in seed effect Branch 2', () => {
     expect(result[1]._streaming).toBe(false);
   });
 
-  it('carries over client-only subagent parts on assistant match', () => {
+  it('carries over client-only background task parts on assistant match', () => {
     const clientUserId = 'pending-user-abc';
     const clientAsstId = 'pending-asst-xyz';
-    const subagentPart: MessagePart = {
-      type: 'subagent',
+    const taskPart: MessagePart = {
+      type: 'background_task',
       taskId: 'task-1',
-      description: 'Running tests',
+      taskType: 'agent',
       status: 'complete',
+      startedAt: 0,
+      description: 'Running tests',
     };
     const current: ChatMessage[] = [
       {
@@ -209,7 +110,7 @@ describe('tagged-dedup in seed effect Branch 2', () => {
         id: clientAsstId,
         role: 'assistant',
         content: 'Done',
-        parts: [{ type: 'text', text: 'Done' }, subagentPart],
+        parts: [{ type: 'text', text: 'Done' }, taskPart],
         timestamp: '',
         _streaming: true,
       },
@@ -219,26 +120,28 @@ describe('tagged-dedup in seed effect Branch 2', () => {
       { id: 'server-asst-1', role: 'assistant', content: 'Done' },
     ];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     expect(result).toHaveLength(2);
     const asst = result[1];
     expect(asst.id).toBe('server-asst-1');
-    // Server has text part, client subagent part is carried over
-    const subagentInResult = asst.parts.find((p) => p.type === 'subagent');
-    expect(subagentInResult).toBeDefined();
-    expect(subagentInResult).toMatchObject({ type: 'subagent', taskId: 'task-1' });
+    // Server has text part, client background task part is carried over
+    const taskInResult = asst.parts.find((p) => p.type === 'background_task');
+    expect(taskInResult).toBeDefined();
+    expect(taskInResult).toMatchObject({ type: 'background_task', taskId: 'task-1' });
   });
 
-  it('does not duplicate subagent parts when server already includes them', () => {
+  it('does not duplicate background task parts when server already includes them', () => {
     const clientUserId = 'pending-user-abc';
     const clientAsstId = 'pending-asst-xyz';
-    const subagentPart: MessagePart = {
-      type: 'subagent',
+    const taskPart: MessagePart = {
+      type: 'background_task',
       taskId: 'task-1',
-      description: 'Running tests',
+      taskType: 'agent',
       status: 'complete',
+      startedAt: 0,
+      description: 'Running tests',
     };
     const current: ChatMessage[] = [
       {
@@ -253,12 +156,12 @@ describe('tagged-dedup in seed effect Branch 2', () => {
         id: clientAsstId,
         role: 'assistant',
         content: 'Done',
-        parts: [{ type: 'text', text: 'Done' }, subagentPart],
+        parts: [{ type: 'text', text: 'Done' }, taskPart],
         timestamp: '',
         _streaming: true,
       },
     ];
-    // Server response includes the same subagent part (transcript parser extracted it)
+    // Server response includes the same background task part (transcript parser extracted it)
     const history: HistoryMessage[] = [
       { id: 'server-user-1', role: 'user', content: 'Run tests' },
       {
@@ -267,19 +170,26 @@ describe('tagged-dedup in seed effect Branch 2', () => {
         content: 'Done',
         parts: [
           { type: 'text', text: 'Done' },
-          { type: 'subagent', taskId: 'task-1', description: 'Running tests', status: 'complete' },
+          {
+            type: 'background_task',
+            taskId: 'task-1',
+            taskType: 'agent',
+            status: 'complete',
+            startedAt: 0,
+            description: 'Running tests',
+          },
         ],
       },
     ];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     const asst = result[1];
-    // Should have exactly one subagent part, not two
-    const subagentParts = asst.parts.filter((p) => p.type === 'subagent');
-    expect(subagentParts).toHaveLength(1);
-    expect(subagentParts[0]).toMatchObject({ taskId: 'task-1' });
+    // Should have exactly one background task part, not two
+    const taskParts = asst.parts.filter((p) => p.type === 'background_task');
+    expect(taskParts).toHaveLength(1);
+    expect(taskParts[0]).toMatchObject({ taskId: 'task-1' });
   });
 
   it('does not match when user content differs', () => {
@@ -298,7 +208,7 @@ describe('tagged-dedup in seed effect Branch 2', () => {
       { id: 'server-user-1', role: 'user', content: 'Different message' },
     ];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     // No match: server message appended, original client message stays
@@ -322,7 +232,7 @@ describe('tagged-dedup in seed effect Branch 2', () => {
       { id: 'new-server-1', role: 'assistant', content: 'New response' },
     ];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     expect(result).toHaveLength(2);
@@ -341,11 +251,9 @@ describe('tagged-dedup in seed effect Branch 2', () => {
         _streaming: true,
       },
     ];
-    const history: HistoryMessage[] = [
-      { id: 'server-user-1', role: 'user', content: 'Hello' },
-    ];
+    const history: HistoryMessage[] = [{ id: 'server-user-1', role: 'user', content: 'Hello' }];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     expect(result[0]._streaming).toBe(false);
@@ -369,7 +277,7 @@ describe('tagged-dedup in seed effect Branch 2', () => {
       { id: 'server-asst-1', role: 'assistant', content: 'Hi there' },
     ];
 
-    runTaggedDedup(current, history, setMessages);
+    reconcileTaggedMessages(current, history, setMessages);
 
     const result = applySetMessages(current, setMessagesCalls);
     // Both server messages appended; original tagged assistant stays

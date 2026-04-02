@@ -8,7 +8,10 @@ import type { ToolCallState } from './chat-types';
 import type { StreamEventDeps, StreamHandlerHelpers } from './stream-event-types';
 
 /** Derive flat content and toolCalls from parts for backward compat. */
-export function deriveFromParts(parts: MessagePart[]): { content: string; toolCalls: ToolCallState[] } {
+export function deriveFromParts(parts: MessagePart[]): {
+  content: string;
+  toolCalls: ToolCallState[];
+} {
   const textSegments: string[] = [];
   const toolCalls: ToolCallState[] = [];
   for (const part of parts) {
@@ -27,6 +30,8 @@ export function deriveFromParts(parts: MessagePart[]): { content: string; toolCa
         answers: part.answers,
         timeoutMs: part.timeoutMs,
         hooks: part.hooks,
+        startedAt: part.startedAt,
+        completedAt: part.completedAt,
       });
     }
   }
@@ -58,10 +63,10 @@ export function createStreamHelpers(deps: StreamEventDeps): StreamHandlerHelpers
     return undefined;
   }
 
-  function findSubagentPart(taskId: string) {
+  function findBackgroundTaskPart(taskId: string) {
     for (let i = currentPartsRef.current.length - 1; i >= 0; i--) {
       const part = currentPartsRef.current[i];
-      if (part.type === 'subagent' && part.taskId === taskId) {
+      if (part.type === 'background_task' && part.taskId === taskId) {
         return part;
       }
     }
@@ -107,7 +112,7 @@ export function createStreamHelpers(deps: StreamEventDeps): StreamHandlerHelpers
   return {
     findToolCallPart,
     findHookById,
-    findSubagentPart,
+    findBackgroundTaskPart,
     updateAssistantMessage,
     currentPartsRef,
     orphanHooksRef,

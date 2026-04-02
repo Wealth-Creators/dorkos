@@ -17,7 +17,7 @@ function NamespaceGroupNodeComponent({ data }: NodeProps) {
 
   return (
     <div
-      className="rounded-xl border-2 bg-card/50"
+      className="bg-card/50 rounded-xl border-2"
       style={{
         borderColor: `${d.color}40`,
         backgroundColor: `${d.color}08`,
@@ -32,12 +32,12 @@ function NamespaceGroupNodeComponent({ data }: NodeProps) {
         <span className="text-xs font-semibold" style={{ color: d.color }}>
           {d.namespace}
         </span>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-muted-foreground text-[10px]">
           {d.activeCount}/{d.agentCount} agents
         </span>
         {d.activeCount > 0 && (
           <span
-            className={`h-1.5 w-1.5 rounded-full ${prefersReducedMotion ? '' : 'animate-pulse'}`}
+            className={`h-1.5 w-1.5 rounded-full ${prefersReducedMotion ? '' : 'animate-tasks'}`}
             style={{ backgroundColor: d.color }}
           />
         )}

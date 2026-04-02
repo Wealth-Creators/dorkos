@@ -7,22 +7,34 @@ import { initConfigManager, configManager } from './services/core/config-manager
 import { initBoundary } from './lib/boundary.js';
 import { initLogger, logger, logError } from './lib/logger.js';
 import { createDorkOsToolServer } from './services/runtimes/claude-code/mcp-tools/index.js';
-import { PulseStore } from './services/pulse/pulse-store.js';
-import { SchedulerService } from './services/pulse/scheduler-service.js';
-import { createPulseRouter } from './routes/pulse.js';
-import { setPulseEnabled, setPulseInitError } from './services/pulse/pulse-state.js';
-import { RelayCore, AdapterRegistry, SignalEmitter, type ClaudeCodeAgentRuntimeLike } from '@dorkos/relay';
+import { TaskStore } from './services/tasks/task-store.js';
+import { TaskSchedulerService } from './services/tasks/task-scheduler-service.js';
+import { createTasksRouter } from './routes/tasks.js';
+import { setTasksEnabled, setTasksInitError } from './services/tasks/task-state.js';
+import {
+  RelayCore,
+  AdapterRegistry,
+  SignalEmitter,
+  type ClaudeCodeAgentRuntimeLike,
+} from '@dorkos/relay';
 import { createRelayRouter } from './routes/relay.js';
 import { setRelayEnabled, setRelayInitError } from './services/relay/relay-state.js';
 import { AdapterManager } from './services/relay/adapter-manager.js';
 import { TraceStore } from './services/relay/trace-store.js';
 import { MeshCore } from '@dorkos/mesh';
 import { createMeshRouter } from './routes/mesh.js';
-import { FigmaClient } from './services/core/figma-client.js';
 import { setMeshEnabled, setMeshInitError } from './services/mesh/mesh-state.js';
+import { ensureDorkBot } from './services/mesh/ensure-dorkbot.js';
+import { createA2aRouter } from './routes/a2a.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
+import { createTemplateRouter } from './routes/templates.js';
 import { createAdminRouter } from './routes/admin.js';
+import { ExtensionManager } from './services/extensions/extension-manager.js';
+import { createExtensionsRouter } from './routes/extensions.js';
+import { ActivityService } from './services/activity/activity-service.js';
+import { createActivityRouter } from './routes/activity.js';
+import { createExtensionRoutesMiddleware } from './middleware/extension-routes.js';
 import { createExternalMcpServer } from './services/core/mcp-server.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { mcpApiKeyAuth } from './middleware/mcp-auth.js';
@@ -30,18 +42,20 @@ import { validateMcpOrigin } from './middleware/mcp-origin.js';
 import { createDb, runMigrations } from '@dorkos/db';
 import { INTERVALS } from './config/constants.js';
 import { resolveDorkHome } from './lib/dork-home.js';
+import { eventFanOut } from './services/core/event-fan-out.js';
 import { env } from './env.js';
 
 const PORT = env.DORKOS_PORT;
 
 // Global references for graceful shutdown
 let claudeRuntime: ClaudeCodeRuntime | null = null;
-let schedulerService: SchedulerService | null = null;
+let schedulerService: TaskSchedulerService | null = null;
 let relayCore: RelayCore | undefined;
 let adapterRegistry: AdapterRegistry | undefined;
 let adapterManager: AdapterManager | undefined;
 let traceStore: TraceStore | undefined;
 let meshCore: MeshCore | undefined;
+let extensionManager: ExtensionManager | undefined;
 let healthCheckInterval: ReturnType<typeof setInterval> | undefined;
 
 async function start() {
@@ -76,10 +90,34 @@ async function start() {
   runMigrations(db);
   logger.info(`[DB] Consolidated database ready at ${dbPath}`);
 
+  // Initialize Activity Service and prune stale events
+  const activityService = new ActivityService(db);
+  const retentionDays = env.DORKOS_ACTIVITY_RETENTION_DAYS ?? 30;
+  try {
+    const pruned = await activityService.prune(retentionDays);
+    if (pruned > 0) {
+      logger.info(`[Activity] Pruned ${pruned} events older than ${retentionDays} days`);
+    }
+  } catch (err) {
+    logger.warn('[Activity] Startup prune failed', logError(err));
+  }
+
   // Initialize directory boundary (must happen before app creation)
   const boundaryConfig = env.DORKOS_BOUNDARY;
   const resolvedBoundary = await initBoundary(boundaryConfig);
   logger.info(`[Boundary] Directory boundary: ${resolvedBoundary}`);
+
+  // Initialize Extension System
+  try {
+    extensionManager = new ExtensionManager(dorkHome);
+    const initialCwd = env.DORKOS_DEFAULT_CWD ?? null;
+    await extensionManager.initialize(initialCwd);
+    logger.info('[Extensions] Extension system initialized');
+  } catch (err) {
+    logger.error('[Extensions] Failed to initialize extension system', err);
+    // Extension failure is non-fatal: server continues without extensions
+    extensionManager = undefined;
+  }
 
   // --- Register runtime: TestModeRuntime in test mode, ClaudeCodeRuntime otherwise ---
   if (env.DORKOS_TEST_RUNTIME) {
@@ -93,20 +131,23 @@ async function start() {
     logger.info('[Runtime] ClaudeCodeRuntime registered as default');
   }
 
-  // Initialize Pulse scheduler if enabled
+  // Initialize Tasks scheduler if enabled
   const schedulerConfig = configManager.get('scheduler');
-  const pulseEnabled = env.DORKOS_PULSE_ENABLED || schedulerConfig.enabled;
 
-  let pulseStore: PulseStore | undefined;
-  if (pulseEnabled) {
+  const tasksEnabled =
+    // eslint-disable-next-line no-restricted-syntax -- Checking presence, not value: env.ts can't distinguish "unset" from "set to false"
+    'DORKOS_TASKS_ENABLED' in process.env ? env.DORKOS_TASKS_ENABLED : schedulerConfig.enabled;
+
+  let taskStore: TaskStore | undefined;
+  if (tasksEnabled) {
     try {
-      pulseStore = new PulseStore(db);
-      logger.info('[Pulse] PulseStore initialized');
+      taskStore = new TaskStore(db);
+      logger.info('[Tasks] TaskStore initialized');
     } catch (err) {
       const errInfo = logError(err);
-      logger.error(`[Pulse] Failed to initialize PulseStore at ${dorkHome}`, errInfo);
-      setPulseInitError(errInfo.error);
-      // Pulse failure is non-fatal: server continues without scheduler routes.
+      logger.error(`[Tasks] Failed to initialize TaskStore at ${dorkHome}`, errInfo);
+      setTasksInitError(errInfo.error);
+      // Tasks failure is non-fatal: server continues without scheduler routes.
     }
   }
 
@@ -114,15 +155,15 @@ async function start() {
   const relayConfig = configManager.get('relay');
   // Env var wins when explicitly set; fall back to config when not set.
   // boolFlag defaults to false even when unset, so check process.env directly.
-  // eslint-disable-next-line no-restricted-syntax -- checks key existence (not value); env.ts boolFlag can't distinguish "unset" from "set to false"
-  const relayEnabled = 'DORKOS_RELAY_ENABLED' in process.env
-    ? env.DORKOS_RELAY_ENABLED
-    : (relayConfig?.enabled ?? false);
+
+  const relayEnabled =
+    // eslint-disable-next-line no-restricted-syntax -- Checking presence, not value: env.ts can't distinguish "unset" from "set to false"
+    'DORKOS_RELAY_ENABLED' in process.env ? env.DORKOS_RELAY_ENABLED : relayConfig.enabled;
 
   // Phase A: core relay infrastructure (RelayCore + TraceStore)
   // AdapterManager construction is deferred to Phase C (after meshCore init)
   // so that meshCore is available for CWD resolution via buildContext().
-  const relayDataDir = relayConfig?.dataDir ?? path.join(dorkHome, 'relay');
+  const relayDataDir = relayConfig.dataDir ?? path.join(dorkHome, 'relay');
   if (relayEnabled) {
     try {
       adapterRegistry = new AdapterRegistry();
@@ -174,6 +215,13 @@ async function start() {
       logger.error('[Mesh] Startup reconciliation failed', logError(err));
     }
 
+    // Ensure DorkBot system agent exists (non-fatal)
+    try {
+      await ensureDorkBot(meshCore, dorkHome);
+    } catch (err) {
+      logger.warn('[Mesh] Failed to ensure DorkBot system agent', logError(err));
+    }
+
     // Start periodic reconciliation (every 5 minutes)
     meshCore.startPeriodicReconciliation(300_000);
   } catch (err) {
@@ -193,13 +241,22 @@ async function start() {
       adapterManager = new AdapterManager(adapterRegistry, adapterConfigPath, {
         agentManager: runtimeRegistry.getDefault() as unknown as ClaudeCodeAgentRuntimeLike,
         traceStore,
-        pulseStore,
+        taskStore: taskStore,
         relayCore,
         meshCore, // meshCore is now available
         eventRecorder: traceStore,
+        activityService,
       });
       await adapterManager.initialize();
       relayCore.setAdapterContextBuilder(adapterManager.buildContext.bind(adapterManager));
+
+      // Provide relay binding context to runtime for <relay_connections> system prompt block
+      const bindingRouter = adapterManager.getBindingRouter();
+      const bindingStore = adapterManager.getBindingStore();
+      if (claudeRuntime && bindingRouter && bindingStore) {
+        claudeRuntime.setRelayBindingContext(bindingRouter, bindingStore, adapterManager);
+      }
+
       logger.info('[Relay] AdapterManager initialized');
     } catch (err) {
       const errInfo = logError(err);
@@ -222,47 +279,62 @@ async function start() {
   // Register MCP tool server factory — only available with ClaudeCodeRuntime.
   // In test mode claudeRuntime is null so the MCP server and /mcp route are skipped.
   if (claudeRuntime) {
-    const figmaClient = env.FIGMA_ACCESS_TOKEN
-      ? new FigmaClient({ accessToken: env.FIGMA_ACCESS_TOKEN })
-      : undefined;
-
     const mcpToolDeps = {
       transcriptReader: claudeRuntime.getTranscriptReader(),
       defaultCwd: env.DORKOS_DEFAULT_CWD ?? process.cwd(),
-      ...(pulseStore && { pulseStore }),
+      ...(taskStore && { taskStore }),
       ...(relayCore && { relayCore }),
       ...(adapterManager && { adapterManager }),
       ...(adapterManager && { bindingStore: adapterManager.getBindingStore() }),
+      ...(adapterManager && { bindingRouter: adapterManager.getBindingRouter() }),
       ...(traceStore && { traceStore }),
       ...(meshCore && { meshCore }),
-      ...(figmaClient && { figmaClient }),
     };
-    claudeRuntime.setMcpServerFactory(() => ({ dorkos: createDorkOsToolServer(mcpToolDeps) }));
+    claudeRuntime.setMcpServerFactory((session) => ({
+      dorkos: createDorkOsToolServer(mcpToolDeps, session),
+    }));
 
     const mcpAuthMode = env.MCP_API_KEY ? 'auth: API key' : 'auth: none';
     // Mount external MCP server at /mcp (protocol endpoint, not REST API)
     // Stateless mode: each POST creates a fresh McpServer + transport (per SDK docs).
-    app.use('/mcp', validateMcpOrigin, mcpApiKeyAuth, createMcpRouter(() => createExternalMcpServer(mcpToolDeps)));
+    app.use(
+      '/mcp',
+      validateMcpOrigin,
+      mcpApiKeyAuth,
+      createMcpRouter(() => createExternalMcpServer(mcpToolDeps))
+    );
     logger.info(`[MCP] External MCP server mounted at /mcp (stateless, ${mcpAuthMode})`);
   }
 
-  // Mount Pulse routes if enabled — Pulse requires ClaudeCodeRuntime as SchedulerAgentManager.
-  if (pulseEnabled && pulseStore && claudeRuntime) {
-    schedulerService = new SchedulerService(pulseStore, claudeRuntime, {
-      maxConcurrentRuns: schedulerConfig.maxConcurrentRuns,
-      retentionCount: schedulerConfig.retentionCount,
-      timezone: schedulerConfig.timezone,
-    }, relayCore, meshCore);
-    app.use('/api/pulse', createPulseRouter(pulseStore, schedulerService, dorkHome, meshCore));
-    setPulseEnabled(true);
-    logger.info('[Pulse] Routes mounted and scheduler configured');
+  // Mount Tasks routes if enabled — Tasks requires ClaudeCodeRuntime as SchedulerAgentManager.
+  if (tasksEnabled && taskStore && claudeRuntime) {
+    schedulerService = new TaskSchedulerService({
+      store: taskStore,
+      agentManager: claudeRuntime,
+      config: {
+        maxConcurrentRuns: schedulerConfig.maxConcurrentRuns,
+        retentionCount: schedulerConfig.retentionCount,
+        timezone: schedulerConfig.timezone,
+      },
+      relay: relayCore,
+      meshCore,
+      activityService,
+    });
+    app.use(
+      '/api/tasks',
+      createTasksRouter(taskStore, schedulerService, dorkHome, meshCore, activityService)
+    );
+    setTasksEnabled(true);
+    logger.info('[Tasks] Routes mounted and scheduler configured');
 
-    // Cascade-disable: when an agent is unregistered from Mesh, disable its linked Pulse schedules
+    // Cascade-disable: when an agent is unregistered from Mesh, disable its linked task schedules
     if (meshCore) {
       meshCore.onUnregister((agentId) => {
-        const disabledCount = pulseStore.disableSchedulesByAgentId(agentId);
+        const disabledCount = taskStore.disableTasksByAgentId(agentId);
         if (disabledCount > 0) {
-          logger.info(`[Pulse] Disabled ${disabledCount} schedule(s) for unregistered agent ${agentId}`);
+          logger.info(
+            `[Tasks] Disabled ${disabledCount} schedule(s) for unregistered agent ${agentId}`
+          );
         }
       });
     }
@@ -275,6 +347,21 @@ async function start() {
 
     // Store relayCore on app.locals so the sessions router can access it
     app.locals.relayCore = relayCore;
+
+    // Wire relay events to unified SSE stream
+    relayCore.subscribe('relay.human.console.>', (envelope) => {
+      eventFanOut.broadcast('relay_message', envelope);
+    });
+
+    relayCore.onSignal('relay.human.console.>', (_subject, signal) => {
+      const eventType = signal.type === 'backpressure' ? 'relay_backpressure' : 'relay_signal';
+      eventFanOut.broadcast(eventType, signal);
+    });
+
+    eventFanOut.broadcast('relay_connected', {
+      pattern: 'relay.human.console.>',
+      connectedAt: new Date().toISOString(),
+    });
 
     logger.info('[Relay] Routes mounted');
   }
@@ -290,18 +377,66 @@ async function start() {
   // ADR-0043: pass meshCore (when available) so writes sync to Mesh DB cache.
   app.use('/api/agents', createAgentsRouter(meshCore));
 
+  // Template catalog — always available, merges built-in + user templates.
+  app.use('/api/templates', createTemplateRouter(dorkHome));
+
+  // Activity feed — always available, not behind a feature flag.
+  app.use('/api/activity', createActivityRouter(activityService));
+  app.locals.activityService = activityService;
+  logger.info('[Activity] Routes mounted');
+
+  // Mount Extensions routes if extension system initialized successfully.
+  if (extensionManager) {
+    app.use(
+      '/api/extensions',
+      createExtensionsRouter(extensionManager, dorkHome, () => env.DORKOS_DEFAULT_CWD ?? null)
+    );
+
+    // Delegate /api/ext/:id/* to extension-registered Express routers
+    app.use('/api/ext/:id', createExtensionRoutesMiddleware(extensionManager));
+
+    logger.info('[Extensions] Routes mounted');
+  }
+
   // Mount Discovery routes when MeshCore is available (delegates to meshCore.discover())
   if (meshCore) {
     app.use('/api/discovery', createDiscoveryRouter(meshCore));
     logger.info('[Discovery] Routes mounted');
   }
 
+  // Mount A2A gateway if enabled — requires both Relay (message routing) and Mesh (agent registry)
+  if (env.DORKOS_A2A_ENABLED && relayCore && meshCore) {
+    const baseUrl = `http://${env.DORKOS_HOST}:${PORT}`;
+    const version = env.DORKOS_VERSION_OVERRIDE ?? '0.0.0';
+    const { router: a2aRouter, fleetCardHandler } = createA2aRouter({
+      meshCore,
+      relay: relayCore,
+      db,
+      baseUrl,
+      version,
+    });
+
+    // Fleet Agent Card at the well-known path (outside /a2a prefix)
+    app.get('/.well-known/agent.json', mcpApiKeyAuth, fleetCardHandler);
+
+    // Per-agent cards and JSON-RPC under /a2a
+    app.use('/a2a', mcpApiKeyAuth, a2aRouter);
+
+    const a2aAuthMode = env.MCP_API_KEY ? 'auth: API key' : 'auth: none';
+    logger.info(
+      `[A2A] Gateway mounted (fleet card: /.well-known/agent.json, RPC: POST /a2a, ${a2aAuthMode})`
+    );
+  }
+
   // Mount Admin routes (reset, restart)
-  app.use('/api/admin', createAdminRouter({
-    dorkHome,
-    shutdownServices,
-    closeDb: () => db.$client.close(),
-  }));
+  app.use(
+    '/api/admin',
+    createAdminRouter({
+      dorkHome,
+      shutdownServices,
+      closeDb: () => db.$client.close(),
+    })
+  );
   logger.info('[Admin] Routes mounted');
 
   // Finalize app: API 404 catch-all, error handler, and SPA serving
@@ -315,24 +450,43 @@ async function start() {
   }
 
   const host = env.DORKOS_HOST;
-  app.listen(PORT, host, () => {
+  const server = app.listen(PORT, host, () => {
     logger.info(`DorkOS server running on http://${host}:${PORT}`);
+
+    // Fire-and-forget: record startup in the activity feed so the dashboard
+    // shows when the server was last (re)started.
+    activityService.emit({
+      actorType: 'system',
+      actorLabel: 'System',
+      category: 'system',
+      eventType: 'system.started',
+      summary: 'DorkOS started',
+    });
   });
 
-  // Start Pulse scheduler after server is listening
+  // Surface port conflicts with an actionable message instead of a raw EADDRINUSE stack trace
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      logger.error(
+        `Port ${PORT} is already in use. ` +
+          `Run \`lsof -i :${PORT}\` to find the process, or start with \`--port ${PORT + 1}\`.`
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
+
+  // Start Tasks scheduler after server is listening
   if (schedulerService) {
     await schedulerService.start();
-    logger.info('[Pulse] Scheduler started');
+    logger.info('[Tasks] Scheduler started');
   }
 
   // Run session health check periodically — only ClaudeCodeRuntime needs this.
   if (claudeRuntime) {
-    healthCheckInterval = setInterval(
-      () => {
-        claudeRuntime!.checkSessionHealth();
-      },
-      INTERVALS.HEALTH_CHECK_MS
-    );
+    healthCheckInterval = setInterval(() => {
+      claudeRuntime!.checkSessionHealth();
+    }, INTERVALS.HEALTH_CHECK_MS);
   }
 
   // Start ngrok tunnel if enabled
@@ -357,9 +511,17 @@ async function start() {
         ...(isDevPort && { mode: `dev (Vite on :${tunnelPort})` }),
       });
     } catch (err) {
-      logger.warn('[Tunnel] Failed to start ngrok tunnel — server continues without tunnel.', logError(err));
+      logger.warn(
+        '[Tunnel] Failed to start ngrok tunnel — server continues without tunnel.',
+        logError(err)
+      );
     }
   }
+
+  // Wire tunnel status changes to unified SSE stream
+  tunnelManager.on('status_change', (status) => {
+    eventFanOut.broadcast('tunnel_status', status);
+  });
 }
 
 // Ordered teardown of all running services WITHOUT calling process.exit().
@@ -410,6 +572,6 @@ process.on('SIGTERM', shutdown);
 start().catch((err) => {
   const info = logError(err);
   logger.error('[DorkOS] Fatal error during startup', info);
-   
+
   process.exit(1);
 });

@@ -141,13 +141,13 @@ Debug from the outside in or inside out:
 
 ### Layer-Specific Checks
 
-| Layer          | What to Check                                | Tools                        |
-| -------------- | -------------------------------------------- | ---------------------------- |
-| Component      | Props received, render conditions, state     | Browser DevTools             |
-| TanStack Query | Cache key, staleTime, enabled, queryFn       | React Query Devtools         |
-| Express Route  | Zod validation, boundary check, feature flag | Network tab, server logs     |
-| Service        | Business logic, error handling               | Server logs (NDJSON)         |
-| Data Store     | SQLite tables, JSONL files, JSON state       | `sqlite3`, `/debug:data`     |
+| Layer          | What to Check                                | Tools                    |
+| -------------- | -------------------------------------------- | ------------------------ |
+| Component      | Props received, render conditions, state     | Browser DevTools         |
+| TanStack Query | Cache key, staleTime, enabled, queryFn       | React Query Devtools     |
+| Express Route  | Zod validation, boundary check, feature flag | Network tab, server logs |
+| Service        | Business logic, error handling               | Server logs (NDJSON)     |
+| Data Store     | SQLite tables, JSONL files, JSON state       | `sqlite3`, `/debug:data` |
 
 ### Data Store Verification (Ground Truth)
 
@@ -294,6 +294,27 @@ When to escalate:
 | Skip reading error messages    | Read the complete error carefully    |
 | Add code without understanding | Understand existing code first       |
 | Debug in production            | Reproduce locally first              |
+
+## The 3-Fix Rule
+
+If you have attempted 3 or more fixes without success:
+
+**STOP. Question the architecture.**
+
+Pattern indicating an architectural problem:
+
+- Each fix reveals new shared state, coupling, or problems in a different place
+- Fixes require "massive refactoring" to implement
+- Each fix creates new symptoms elsewhere
+
+This is NOT a failed hypothesis — this is a wrong architecture. Discuss with the user before attempting more fixes.
+
+## Supporting Techniques
+
+- **`condition-based-waiting.md`** — Replace arbitrary timeouts with condition polling
+- **`defense-in-depth.md`** — Add validation at multiple layers after finding root cause
+- **`root-cause-tracing.md`** — Trace bugs backward through call stack to find original trigger
+- **`find-polluter.sh`** — Bisection script to find which test creates unwanted state
 
 ## Quick Reference
 

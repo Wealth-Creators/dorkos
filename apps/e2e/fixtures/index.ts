@@ -1,18 +1,18 @@
 import { test as base } from '@playwright/test';
 import { ChatPage } from '../pages/ChatPage';
-import { AgentSidebarPage } from '../pages/AgentSidebarPage';
+import { SessionSidebarPage } from '../pages/SessionSidebarPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { BasePage } from '../pages/BasePage';
-import { PulsePage } from '../pages/PulsePage';
+import { TasksPage } from '../pages/TasksPage';
 import { MeshPage } from '../pages/MeshPage';
 import { RelayPage } from '../pages/RelayPage';
 
 type DorkOSFixtures = {
   basePage: BasePage;
   chatPage: ChatPage;
-  agentSidebar: AgentSidebarPage;
+  sessionSidebar: SessionSidebarPage;
   settingsPage: SettingsPage;
-  pulsePage: PulsePage;
+  tasksPage: TasksPage;
   meshPage: MeshPage;
   relayPage: RelayPage;
 };
@@ -26,14 +26,14 @@ export const test = base.extend<DorkOSFixtures>({
     await chatPage.goto();
     await use(chatPage);
   },
-  agentSidebar: async ({ page }, use) => {
-    await use(new AgentSidebarPage(page));
+  sessionSidebar: async ({ page }, use) => {
+    await use(new SessionSidebarPage(page));
   },
   settingsPage: async ({ page }, use) => {
     await use(new SettingsPage(page));
   },
-  pulsePage: async ({ page }, use) => {
-    await use(new PulsePage(page));
+  tasksPage: async ({ page }, use) => {
+    await use(new TasksPage(page));
   },
   meshPage: async ({ page }, use) => {
     await use(new MeshPage(page));

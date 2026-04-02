@@ -1,7 +1,7 @@
 /**
  * Factory for stream event handlers that process SSE events into chat messages.
  *
- * Tool, hook, and subagent cases are delegated to `stream-tool-handlers.ts`.
+ * Tool, hook, and background task cases are delegated to `stream-tool-handlers.ts`.
  * Types live in `stream-event-types.ts`, helpers in `stream-event-helpers.ts`.
  *
  * @module features/chat/model/stream-event-handler
@@ -9,14 +9,21 @@
 import type {
   TextDelta,
   ThinkingDelta,
+  DoneEvent,
   ErrorEvent,
+  ApiRetryEvent,
+  ContextUsage,
   SessionStatusEvent,
+  SessionStateChangedEvent,
   TaskUpdateEvent,
   MessagePart,
   SystemStatusEvent,
   PromptSuggestionEvent,
+  UiCommand,
 } from '@dorkos/shared/types';
-import { TIMING } from '@/layers/shared/lib';
+import { TIMING, executeUiCommand } from '@/layers/shared/lib';
+import { useAppStore } from '@/layers/shared/model';
+import { useSessionChatStore } from '@/layers/entities/session';
 import type { StreamEventDeps, StreamingTextPart } from './stream-event-types';
 import { createStreamHelpers, deriveFromParts } from './stream-event-helpers';
 import {
@@ -33,6 +40,7 @@ import {
   handleHookStarted,
   handleHookProgress,
   handleHookResponse,
+  handleElicitationPrompt,
 } from './stream-tool-handlers';
 
 export type { StreamEventDeps } from './stream-event-types';
@@ -101,9 +109,7 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
           const elapsedMs = Date.now() - thinkingStartRef.current;
           thinkingStartRef.current = null;
           const updatedParts = currentPartsRef.current.map((p) =>
-            p.type === 'thinking' && p.isStreaming
-              ? { ...p, isStreaming: false, elapsedMs }
-              : p
+            p.type === 'thinking' && p.isStreaming ? { ...p, isStreaming: false, elapsedMs } : p
           );
           currentPartsRef.current = updatedParts;
         }
@@ -161,9 +167,14 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
       case 'question_prompt':
         handleQuestionPrompt(helpers, data, assistantId);
         break;
+      case 'elicitation_prompt':
+        handleElicitationPrompt(helpers, data, assistantId);
+        break;
       case 'error': {
         const errorData = data as ErrorEvent;
-        // SDK result errors with a category render inline in the message stream
+        // SDK result errors with a category render inline in the message stream.
+        // The stream may continue after these (e.g. SDK recovery), so keep status
+        // as 'streaming' to preserve inference indicators until the done event.
         if (errorData.category) {
           currentPartsRef.current.push({
             type: 'error',
@@ -173,22 +184,29 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
           });
           helpers.updateAssistantMessage(assistantId);
         } else {
-          // Transport-level errors (no category) use the banner
+          // Transport-level errors (no category) use the banner and kill streaming
+          // status — no more events will follow.
           setError({
             heading: 'Error',
             message: errorData.message,
             retryable: false,
           });
+          setStatus('error');
         }
-        // Always update session status to 'error' — the subsequent done event
-        // will reset it to 'idle', but this ensures correct status between events.
-        setStatus('error');
         break;
       }
       case 'rate_limit': {
         const { retryAfter } = data as { retryAfter?: number };
         setRateLimitRetryAfter(retryAfter ?? null);
         setIsRateLimited(true);
+        break;
+      }
+      case 'api_retry': {
+        const { attempt, maxRetries, retryDelayMs } = data as ApiRetryEvent;
+        const delaySec = Math.round(retryDelayMs / 1000);
+        setSystemStatus(
+          `Retrying API request (attempt ${attempt}/${maxRetries}, waiting ${delaySec}s…)`
+        );
         break;
       }
       case 'session_status': {
@@ -211,13 +229,13 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
         onTaskEventRef.current?.(taskEvent);
         break;
       }
-      case 'subagent_started':
+      case 'background_task_started':
         handleSubagentStarted(helpers, data, assistantId);
         break;
-      case 'subagent_progress':
+      case 'background_task_progress':
         handleSubagentProgress(helpers, data, assistantId);
         break;
-      case 'subagent_done':
+      case 'background_task_done':
         handleSubagentDone(helpers, data, assistantId);
         break;
       case 'hook_started':
@@ -239,6 +257,30 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
         setPromptSuggestions(suggestions);
         break;
       }
+      case 'context_usage': {
+        const usage = data as ContextUsage;
+        useSessionChatStore.getState().updateSession(sessionId, { contextUsage: usage });
+        break;
+      }
+      case 'session_state_changed': {
+        const { state } = data as SessionStateChangedEvent;
+        useSessionChatStore.getState().updateSession(sessionId, { sdkState: state });
+        break;
+      }
+      case 'ui_command': {
+        const { command } = data as { command: UiCommand };
+        const store = useAppStore.getState();
+        executeUiCommand(
+          {
+            store,
+            setTheme: deps.themeRef.current,
+            scrollToMessage: deps.scrollToMessageRef?.current,
+            switchAgent: deps.switchAgentRef?.current,
+          },
+          command
+        );
+        break;
+      }
       case 'compact_boundary': {
         setMessages((prev) => [
           ...prev,
@@ -254,7 +296,7 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
         break;
       }
       case 'done': {
-        const doneData = data as { sessionId?: string; messageIds?: { user: string; assistant: string } };
+        const doneData = data as DoneEvent;
         if (doneData.sessionId && doneData.sessionId !== sessionId) {
           // Flush current streaming state to messages before clearing parts for remap.
           // This prevents the queueMicrotask race in handleToolResult from reading
@@ -265,16 +307,26 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
             setMessages((prev) =>
               prev.map((m) =>
                 m._streaming && m.role === 'assistant'
-                  ? { ...m, content: derived.content, toolCalls: derived.toolCalls.length > 0 ? derived.toolCalls : [], parts }
+                  ? {
+                      ...m,
+                      content: derived.content,
+                      toolCalls: derived.toolCalls.length > 0 ? derived.toolCalls : [],
+                      parts,
+                    }
                   : m
               )
             );
           }
           currentPartsRef.current = [];
           assistantCreatedRef.current = false;
-          // Signal that this sessionId change is a remap — the session change effect
-          // must NOT clear messages (ref is read synchronously before the next render).
-          deps.isRemappingRef.current = true;
+          // Atomically rename the store entry so data is at the new key before
+          // React re-renders. The isRemapping flag tells the session-change effect
+          // to skip clearing messages — we're keeping them for tagged-dedup.
+          useSessionChatStore.getState().renameSession(sessionId, doneData.sessionId);
+          useSessionChatStore.getState().updateSession(doneData.sessionId, { isRemapping: true });
+          // Let StreamManager move its ActiveStream + timer entries to the new key
+          // before React re-renders with the new session ID.
+          deps.onRemapRef.current?.(sessionId, doneData.sessionId);
           onSessionIdChangeRef.current?.(doneData.sessionId);
         }
 
@@ -292,7 +344,7 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
                 return { ...m, id: serverAssistantId, _streaming: false };
               }
               return m;
-            }),
+            })
           );
         }
 
@@ -308,9 +360,7 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
         if (thinkingStartRef.current !== null) {
           const elapsedMs = Date.now() - thinkingStartRef.current;
           currentPartsRef.current = currentPartsRef.current.map((p) =>
-            p.type === 'thinking' && p.isStreaming
-              ? { ...p, isStreaming: false, elapsedMs }
-              : p
+            p.type === 'thinking' && p.isStreaming ? { ...p, isStreaming: false, elapsedMs } : p
           );
         }
         thinkingStartRef.current = null;
@@ -330,7 +380,9 @@ export function createStreamEventHandler(deps: StreamEventDeps) {
             return {
               ...m,
               toolCalls: m.toolCalls!.map((tc) =>
-                tc.interactiveType && tc.status === 'pending' ? { ...tc, status: 'complete' as const } : tc
+                tc.interactiveType && tc.status === 'pending'
+                  ? { ...tc, status: 'complete' as const }
+                  : tc
               ),
               parts: m.parts.map((p) =>
                 p.type === 'tool_call' && p.interactiveType && p.status === 'pending'

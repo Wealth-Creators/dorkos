@@ -26,6 +26,9 @@ export const agents = sqliteTable('agents', {
   lastSeenEvent: text('last_seen_event'),
   persona: text('persona'),
   personaEnabled: integer('persona_enabled', { mode: 'boolean' }).notNull().default(true),
+  traitsJson: text('traits_json'), // JSON string of Traits — null = no traits configured
+  conventionsJson: text('conventions_json'), // JSON string of Conventions — null = no conventions configured
+  isSystem: integer('is_system', { mode: 'boolean' }).notNull().default(false),
   color: text('color'),
   icon: text('icon'),
   registeredAt: text('registered_at').notNull(),
@@ -53,5 +56,5 @@ export const rateLimitBuckets = sqliteTable(
     bucketMinute: integer('bucket_minute').notNull(), // minutes since Unix epoch
     count: integer('count').notNull().default(0),
   },
-  (table) => [uniqueIndex('idx_rate_limit_agent_minute').on(table.agentId, table.bucketMinute)],
+  (table) => [uniqueIndex('idx_rate_limit_agent_minute').on(table.agentId, table.bucketMinute)]
 );

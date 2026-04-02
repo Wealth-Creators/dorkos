@@ -51,9 +51,7 @@ function renderSearch({
   return {
     onOpenChange,
     onSelect,
-    ...render(
-      <PlaygroundSearch open={open} onOpenChange={onOpenChange} onSelect={onSelect} />
-    ),
+    ...render(<PlaygroundSearch open={open} onOpenChange={onOpenChange} onSelect={onSelect} />),
   };
 }
 
@@ -72,7 +70,7 @@ describe('PlaygroundSearch', () => {
     renderSearch();
     expect(screen.getByText('Design Tokens')).toBeInTheDocument();
     expect(screen.getByText('Components')).toBeInTheDocument();
-    expect(screen.getByText('Chat')).toBeInTheDocument();
+    expect(screen.getByText('Chat Components')).toBeInTheDocument();
   });
 
   it('renders sections from the tokens page', () => {

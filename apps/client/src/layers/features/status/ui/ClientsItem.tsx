@@ -16,7 +16,7 @@ interface ClientsItemProps {
   clientCount: number;
   clients: PresenceClient[];
   lockInfo: PresenceUpdateEvent['lockInfo'];
-  pulse: boolean;
+  tasks: boolean;
 }
 
 /** Format a relative time string from an ISO timestamp. */
@@ -33,13 +33,13 @@ function relativeTime(isoTimestamp: string): string {
 }
 
 /** Status bar item displaying multi-client session presence. */
-export function ClientsItem({ clientCount, clients, lockInfo, pulse }: ClientsItemProps) {
+export function ClientsItem({ clientCount, clients, lockInfo, tasks }: ClientsItemProps) {
   const isLocked = lockInfo !== null;
 
   const badge = (
     <motion.span
-      animate={pulse ? { scale: [1, 1.15, 1] } : undefined}
-      transition={pulse ? { duration: 0.4 } : undefined}
+      animate={tasks ? { scale: [1, 1.15, 1] } : undefined}
+      transition={tasks ? { duration: 0.4 } : undefined}
       className={cn('inline-flex items-center gap-1', isLocked && 'text-amber-500')}
     >
       {isLocked ? (
@@ -66,18 +66,13 @@ export function ClientsItem({ clientCount, clients, lockInfo, pulse }: ClientsIt
         <p className="text-muted-foreground mb-2 text-xs font-medium">Connected clients</p>
         <ul className="space-y-1.5">
           {clients.map((client, i) => (
-            <li
-              key={`${client.type}-${i}`}
-              className="flex items-center justify-between text-xs"
-            >
+            <li key={`${client.type}-${i}`} className="flex items-center justify-between text-xs">
               <span>{CLIENT_TYPE_LABELS[client.type]}</span>
               <span className="text-muted-foreground">{relativeTime(client.connectedAt)}</span>
             </li>
           ))}
         </ul>
-        {isLocked && (
-          <p className="mt-2 text-xs text-amber-500">Locked by another client</p>
-        )}
+        {isLocked && <p className="mt-2 text-xs text-amber-500">Locked by another client</p>}
       </PopoverContent>
     </Popover>
   );

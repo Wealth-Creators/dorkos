@@ -20,8 +20,9 @@ import {
 import { z } from 'zod';
 import { logger } from '../../lib/logger.js';
 
-const BindingsFileSchema = z.object({
-  bindings: z.array(AdapterBindingSchema),
+/** Loose file schema — validates structure but not individual entries. */
+const BindingsFileShellSchema = z.object({
+  bindings: z.array(z.unknown()),
 });
 
 /** Chokidar stability threshold before triggering hot-reload (ms). */
@@ -128,7 +129,19 @@ export class BindingStore {
    */
   async update(
     id: string,
-    updates: Partial<Pick<AdapterBinding, 'sessionStrategy' | 'label' | 'chatId' | 'channelType' | 'permissionMode' | 'canInitiate' | 'canReply' | 'canReceive'>>,
+    updates: Partial<
+      Pick<
+        AdapterBinding,
+        | 'sessionStrategy'
+        | 'label'
+        | 'chatId'
+        | 'channelType'
+        | 'permissionMode'
+        | 'canInitiate'
+        | 'canReply'
+        | 'canReceive'
+      >
+    >
   ): Promise<AdapterBinding | undefined> {
     const existing = this.bindings.get(id);
     if (!existing) return undefined;
@@ -156,11 +169,7 @@ export class BindingStore {
    * @param chatId - Optional chat identifier from the message subject
    * @param channelType - Optional channel type from envelope metadata
    */
-  resolve(
-    adapterId: string,
-    chatId?: string,
-    channelType?: string,
-  ): AdapterBinding | undefined {
+  resolve(adapterId: string, chatId?: string, channelType?: string): AdapterBinding | undefined {
     const candidates = this.getByAdapterId(adapterId);
     if (candidates.length === 0) return undefined;
 
@@ -170,11 +179,7 @@ export class BindingStore {
       .sort((a, b) => b.score - a.score)[0]?.binding;
   }
 
-  private scoreMatch(
-    binding: AdapterBinding,
-    chatId?: string,
-    channelType?: string,
-  ): number {
+  private scoreMatch(binding: AdapterBinding, chatId?: string, channelType?: string): number {
     let score = 1; // base: adapterId already matches (filtered by caller)
     if (binding.chatId) {
       if (binding.chatId === chatId) score += 4;
@@ -191,12 +196,36 @@ export class BindingStore {
     try {
       const raw = await readFile(this.filePath, 'utf-8');
       const json = JSON.parse(raw) as unknown;
-      const parsed = BindingsFileSchema.parse(json);
-      this.bindings.clear();
-      for (const b of parsed.bindings) {
-        this.bindings.set(b.id, b);
+      const shell = BindingsFileShellSchema.safeParse(json);
+      if (!shell.success) {
+        logger.error('bindings.json has invalid structure, starting with empty bindings');
+        this.bindings.clear();
+        return;
       }
-      logger.info(`Loaded ${this.bindings.size} binding(s) from ${this.filePath}`);
+
+      this.bindings.clear();
+      let discarded = 0;
+      for (const entry of shell.data.bindings) {
+        const result = AdapterBindingSchema.safeParse(entry);
+        if (result.success) {
+          this.bindings.set(result.data.id, result.data);
+        } else {
+          discarded++;
+          logger.warn('Discarding invalid binding entry during load', {
+            entry,
+            errors: result.error.issues,
+          });
+        }
+      }
+
+      if (discarded > 0) {
+        logger.info(
+          `Loaded ${this.bindings.size} binding(s), discarded ${discarded} invalid — auto-saving cleaned file`
+        );
+        await this.save();
+      } else {
+        logger.info(`Loaded ${this.bindings.size} binding(s) from ${this.filePath}`);
+      }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         logger.info('No bindings.json found, starting with empty bindings');

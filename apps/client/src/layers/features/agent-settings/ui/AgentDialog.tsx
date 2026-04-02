@@ -18,9 +18,9 @@ import {
   NavigationLayoutPanel,
   NavigationLayoutPanelHeader,
 } from '@/layers/shared/ui';
-import type { AgentManifest } from '@dorkos/shared/mesh-schemas';
+import type { AgentManifest, Traits, Conventions } from '@dorkos/shared/mesh-schemas';
 import { IdentityTab } from './IdentityTab';
-import { PersonaTab } from './PersonaTab';
+import { PersonalityTab } from './PersonalityTab';
 import { CapabilitiesTab } from './CapabilitiesTab';
 import { ConnectionsTab } from './ConnectionsTab';
 
@@ -32,7 +32,7 @@ interface AgentDialogProps {
 
 /**
  * Dialog shell for agent configuration with sidebar navigation.
- * Four sections: Identity, Persona, Capabilities, and Connections.
+ * Four sections: Identity, Personality, Capabilities, and Connections.
  */
 export function AgentDialog({ projectPath, open, onOpenChange }: AgentDialogProps) {
   const [activeTab, setActiveTab] = useState('identity');
@@ -46,14 +46,29 @@ export function AgentDialog({ projectPath, open, onOpenChange }: AgentDialogProp
     [projectPath, updateAgent]
   );
 
+  const handlePersonalityUpdate = useCallback(
+    (updates: {
+      traits?: Traits;
+      conventions?: Conventions;
+      soulContent?: string;
+      nopeContent?: string;
+    }) => {
+      // Pass manifest-level fields through; soulContent/nopeContent are handled
+      // by the server's convention file PATCH (task 2.2).
+      updateAgent.mutate({
+        path: projectPath,
+        updates: updates as Partial<AgentManifest>,
+      });
+    },
+    [projectPath, updateAgent]
+  );
+
   if (!agent) {
     return (
       <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
         <ResponsiveDialogContent className="max-h-[85vh] max-w-lg gap-0 p-0">
           <ResponsiveDialogHeader className="space-y-0 border-b px-4 py-3">
-            <ResponsiveDialogTitle className="text-sm font-medium">
-              Agent
-            </ResponsiveDialogTitle>
+            <ResponsiveDialogTitle className="text-sm font-medium">Agent</ResponsiveDialogTitle>
             <ResponsiveDialogDescription className="sr-only">
               Agent configuration
             </ResponsiveDialogDescription>
@@ -92,46 +107,59 @@ export function AgentDialog({ projectPath, open, onOpenChange }: AgentDialogProp
           </NavigationLayoutDialogHeader>
 
           <NavigationLayoutBody>
-          <NavigationLayoutSidebar>
-            <NavigationLayoutItem value="identity" icon={User}>Identity</NavigationLayoutItem>
-            <NavigationLayoutItem value="persona" icon={Sparkles}>Persona</NavigationLayoutItem>
-            <NavigationLayoutItem value="capabilities" icon={Zap}>Capabilities</NavigationLayoutItem>
-            <NavigationLayoutItem value="connections" icon={Plug2}>Connections</NavigationLayoutItem>
-          </NavigationLayoutSidebar>
+            <NavigationLayoutSidebar>
+              <NavigationLayoutItem value="identity" icon={User}>
+                Identity
+              </NavigationLayoutItem>
+              <NavigationLayoutItem value="personality" icon={Sparkles}>
+                Personality
+              </NavigationLayoutItem>
+              <NavigationLayoutItem value="capabilities" icon={Zap}>
+                Capabilities
+              </NavigationLayoutItem>
+              <NavigationLayoutItem value="connections" icon={Plug2}>
+                Connections
+              </NavigationLayoutItem>
+            </NavigationLayoutSidebar>
 
-          <NavigationLayoutContent className="min-h-[280px] p-4">
-            <NavigationLayoutPanel value="identity">
-              <div className="space-y-4">
-                <NavigationLayoutPanelHeader>Identity</NavigationLayoutPanelHeader>
-                <IdentityTab
-                  agent={agent}
-                  projectPath={projectPath}
-                  onUpdate={handleUpdate}
-                />
-              </div>
-            </NavigationLayoutPanel>
+            <NavigationLayoutContent className="min-h-[280px] p-4">
+              <NavigationLayoutPanel value="identity">
+                <div className="space-y-4">
+                  <NavigationLayoutPanelHeader>Identity</NavigationLayoutPanelHeader>
+                  <IdentityTab agent={agent} projectPath={projectPath} onUpdate={handleUpdate} />
+                </div>
+              </NavigationLayoutPanel>
 
-            <NavigationLayoutPanel value="persona">
-              <div className="space-y-4">
-                <NavigationLayoutPanelHeader>Persona</NavigationLayoutPanelHeader>
-                <PersonaTab agent={agent} onUpdate={handleUpdate} />
-              </div>
-            </NavigationLayoutPanel>
+              <NavigationLayoutPanel value="personality">
+                <div className="space-y-4">
+                  <NavigationLayoutPanelHeader>Personality</NavigationLayoutPanelHeader>
+                  <PersonalityTab
+                    agent={agent}
+                    soulContent={
+                      (agent as AgentManifest & { soulContent?: string | null }).soulContent ?? null
+                    }
+                    nopeContent={
+                      (agent as AgentManifest & { nopeContent?: string | null }).nopeContent ?? null
+                    }
+                    onUpdate={handlePersonalityUpdate}
+                  />
+                </div>
+              </NavigationLayoutPanel>
 
-            <NavigationLayoutPanel value="capabilities">
-              <div className="space-y-4">
-                <NavigationLayoutPanelHeader>Capabilities</NavigationLayoutPanelHeader>
-                <CapabilitiesTab agent={agent} onUpdate={handleUpdate} />
-              </div>
-            </NavigationLayoutPanel>
+              <NavigationLayoutPanel value="capabilities">
+                <div className="space-y-4">
+                  <NavigationLayoutPanelHeader>Capabilities</NavigationLayoutPanelHeader>
+                  <CapabilitiesTab agent={agent} onUpdate={handleUpdate} />
+                </div>
+              </NavigationLayoutPanel>
 
-            <NavigationLayoutPanel value="connections">
-              <div className="space-y-4">
-                <NavigationLayoutPanelHeader>Connections</NavigationLayoutPanelHeader>
-                <ConnectionsTab agent={agent} />
-              </div>
-            </NavigationLayoutPanel>
-          </NavigationLayoutContent>
+              <NavigationLayoutPanel value="connections">
+                <div className="space-y-4">
+                  <NavigationLayoutPanelHeader>Connections</NavigationLayoutPanelHeader>
+                  <ConnectionsTab agent={agent} />
+                </div>
+              </NavigationLayoutPanel>
+            </NavigationLayoutContent>
           </NavigationLayoutBody>
         </NavigationLayout>
       </ResponsiveDialogContent>

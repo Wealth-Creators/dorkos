@@ -57,16 +57,22 @@ describe('ClaudeCodeRuntime.getSupportedModels', () => {
       value: 'claude-sonnet-4-5-20250929',
       displayName: 'Sonnet 4.5',
       description: 'Fast, intelligent model for everyday tasks',
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
     });
     expect(models[1]).toEqual({
       value: 'claude-haiku-4-5-20251001',
       displayName: 'Haiku 4.5',
       description: 'Fastest, most compact model',
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high'],
     });
     expect(models[2]).toEqual({
       value: 'claude-opus-4-6',
       displayName: 'Opus 4.6',
       description: 'Most capable model for complex tasks',
+      supportsEffort: true,
+      supportedEffortLevels: ['low', 'medium', 'high', 'max'],
     });
 
     // Each model has the required fields
@@ -83,13 +89,14 @@ describe('ClaudeCodeRuntime.getSupportedModels', () => {
       { value: 'custom-model', displayName: 'Custom', description: 'A custom model' },
     ];
 
-    // Populate the cache directly via bracket notation
-    (manager as Record<string, unknown>)['cachedModels'] = customModels;
+    // Populate the cache directly via bracket notation (cachedModels lives on the RuntimeCache collaborator)
+    const cache = (manager as Record<string, unknown>)['cache'] as Record<string, unknown>;
+    cache['cachedModels'] = customModels;
 
     const models = await manager.getSupportedModels();
     expect(models).toEqual(customModels);
-    expect(models).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ value: 'claude-sonnet-4-5-20250929' }),
-    ]));
+    expect(models).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: 'claude-sonnet-4-5-20250929' })])
+    );
   });
 });

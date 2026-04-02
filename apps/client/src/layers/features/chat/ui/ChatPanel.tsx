@@ -1,8 +1,9 @@
-import { useRef, useMemo, useCallback } from 'react';
+import { useRef, useMemo, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowDown } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useChatSession } from '../model/use-chat-session';
+import { useBackgroundTasks } from '../model/use-background-tasks';
 import { useMessageQueue } from '../model/use-message-queue';
 import { useCommands } from '@/layers/entities/command';
 import { useTaskState } from '../model/use-task-state';
@@ -13,7 +14,7 @@ import { useChatStatusSync } from '../model/use-chat-status-sync';
 import { useFileUpload } from '../model/use-file-upload';
 import { buildFileEntries } from '../lib/build-file-entries';
 import { useSessionId, useSessionStatus, useDirectoryState } from '@/layers/entities/session';
-import { useAppStore } from '@/layers/shared/model';
+import { useAppStore, useTransport } from '@/layers/shared/model';
 import { playNotificationSound } from '@/layers/shared/lib';
 import { MessageList } from './MessageList';
 import type { MessageListHandle } from './MessageList';
@@ -24,7 +25,7 @@ import { CelebrationOverlay } from './CelebrationOverlay';
 import { useFiles } from '@/layers/features/files';
 import { useCelebrations } from '../model/use-celebrations';
 import { ErrorMessageBlock } from './ErrorMessageBlock';
-import { SystemStatusZone } from './SystemStatusZone';
+import { ChatStatusStrip } from './ChatStatusStrip';
 import { PromptSuggestionChips } from './PromptSuggestionChips';
 import type { TaskUpdateEvent } from '@dorkos/shared/types';
 
@@ -43,6 +44,8 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
   const taskState = useTaskState(sessionId);
   const celebrations = useCelebrations();
   const enableNotificationSound = useAppStore((s) => s.enableNotificationSound);
+  const dorkbotFirstMessage = useAppStore((s) => s.dorkbotFirstMessage);
+  const setDorkbotFirstMessage = useAppStore((s) => s.setDorkbotFirstMessage);
   const [cwd] = useDirectoryState();
 
   const fileUpload = useFileUpload();
@@ -88,12 +91,15 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
     [taskState, celebrations]
   );
 
-  const handleSessionIdChange = useCallback((newId: string) => {
-    setSessionId(newId);
-    // Invalidate stale session metadata so the new key fetches immediately
-    // instead of waiting for TanStack Query's staleTime to expire.
-    queryClient.invalidateQueries({ queryKey: ['session', newId] });
-  }, [setSessionId, queryClient]);
+  const handleSessionIdChange = useCallback(
+    (newId: string) => {
+      setSessionId(newId);
+      // Invalidate stale session metadata so the new key fetches immediately
+      // instead of waiting for TanStack Query's staleTime to expire.
+      queryClient.invalidateQueries({ queryKey: ['session', newId] });
+    },
+    [setSessionId, queryClient]
+  );
 
   const {
     messages,
@@ -119,7 +125,10 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
     systemStatus,
     promptSuggestions,
     presenceInfo,
-    presencePulse,
+    presenceTasks,
+    syncConnectionState,
+    syncFailedAttempts,
+    retryMessage,
   } = useChatSession(sessionId, {
     transformContent: fileTransformContent,
     onTaskEvent: handleTaskEventWithCelebrations,
@@ -134,12 +143,35 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
     }, [enableNotificationSound, queryClient]),
   });
   const { permissionMode } = useSessionStatus(sessionId, sessionStatus, status === 'streaming');
+  const backgroundTasks = useBackgroundTasks(messages);
+  const transport = useTransport();
+
+  const handleStopTask = useCallback(
+    async (taskId: string) => {
+      if (!sessionId) return;
+      try {
+        await transport.stopTask(sessionId, taskId);
+      } catch (err) {
+        console.error('[chat] Failed to stop task:', err);
+      }
+    },
+    [sessionId, transport]
+  );
 
   const { handleToolRef, focusedOptionIndex } = useToolShortcuts(activeInteraction);
-  const { isAtBottom, hasNewMessages, scrollToBottom, handleScrollStateChange } =
-    useScrollOverlay(messages, messageListRef);
+  const { isAtBottom, hasNewMessages, scrollToBottom, handleScrollStateChange } = useScrollOverlay(
+    messages,
+    messageListRef
+  );
 
   useChatStatusSync(status, isWaitingForUser, taskState.activeForm, isTextStreaming);
+
+  // Focus the prompt textarea whenever the session changes (new session, switch, page mount).
+  // Every navigation scenario — sidebar click, new session, agent switch, page load —
+  // results in sessionId changing, so this single effect covers all of them.
+  useEffect(() => {
+    chatInputRef.current?.focus();
+  }, [sessionId]);
 
   const { data: registry } = useCommands(cwd);
   const allCommands = useMemo(() => registry?.commands ?? [], [registry]);
@@ -206,6 +238,14 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
       submitContent(lastUserMsg.content);
     }
   }, [messages, submitContent]);
+
+  /** Retry the last user message after a transport-level POST stream failure. */
+  const handleTransportRetry = useCallback(() => {
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+    if (lastUserMsg?.content) {
+      retryMessage(lastUserMsg.content);
+    }
+  }, [messages, retryMessage]);
 
   const showSuggestions = status === 'idle' && promptSuggestions.length > 0 && input.length === 0;
 
@@ -287,26 +327,37 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <div className="text-center">
-              <p className="text-muted-foreground text-base">Start a conversation</p>
-              <p className="text-muted-foreground/60 mt-2 text-sm">Type a message below to begin</p>
-            </div>
+            {dorkbotFirstMessage ? (
+              <div className="flex flex-col items-center gap-4 text-center">
+                <motion.div
+                  layoutId="dorkbot-first-message"
+                  className="bg-muted/50 w-full max-w-md rounded-lg border p-4"
+                  data-testid="dorkbot-welcome-message"
+                  onLayoutAnimationComplete={() => {
+                    // Clear after the layout animation fires once so it becomes a normal element
+                    setDorkbotFirstMessage(null);
+                  }}
+                >
+                  <p className="text-muted-foreground text-sm">{dorkbotFirstMessage}</p>
+                </motion.div>
+                <p className="text-muted-foreground/60 text-sm">Type a message below to begin</p>
+              </div>
+            ) : (
+              <div className="text-center">
+                <p className="text-muted-foreground text-base">Start a conversation</p>
+                <p className="text-muted-foreground/60 mt-2 text-sm">
+                  Type a message below to begin
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           <MessageList
             ref={messageListRef}
             messages={messages}
             sessionId={sessionId!}
-            status={status}
             isTextStreaming={isTextStreaming}
             onScrollStateChange={handleScrollStateChange}
-            streamStartTime={streamStartTime}
-            estimatedTokens={estimatedTokens}
-            permissionMode={permissionMode}
-            isWaitingForUser={isWaitingForUser}
-            waitingType={waitingType ?? undefined}
-            isRateLimited={isRateLimited}
-            rateLimitRetryAfter={rateLimitRetryAfter}
             activeToolCallId={activeInteraction?.toolCallId ?? null}
             onToolRef={handleToolRef}
             focusedOptionIndex={focusedOptionIndex}
@@ -350,7 +401,17 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
         </AnimatePresence>
       </div>
 
-      <SystemStatusZone message={systemStatus} />
+      <ChatStatusStrip
+        status={status}
+        streamStartTime={streamStartTime}
+        estimatedTokens={estimatedTokens}
+        permissionMode={permissionMode}
+        isWaitingForUser={isWaitingForUser ?? false}
+        waitingType={waitingType ?? 'approval'}
+        isRateLimited={isRateLimited ?? false}
+        rateLimitRetryAfter={rateLimitRetryAfter ?? null}
+        systemStatus={systemStatus}
+      />
 
       <AnimatePresence>
         {showSuggestions && (
@@ -368,11 +429,13 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
 
       <TaskListPanel
         tasks={taskState.tasks}
+        taskMap={taskState.taskMap}
         activeForm={taskState.activeForm}
         isCollapsed={taskState.isCollapsed}
         onToggleCollapse={taskState.toggleCollapse}
         celebratingTaskId={celebrations.celebratingTaskId}
         onCelebrationComplete={celebrations.clearCelebration}
+        statusTimestamps={taskState.statusTimestamps}
       />
 
       {error && (
@@ -381,7 +444,7 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
             message={error.message}
             heading={error.heading}
             subtext={error.message}
-            onRetry={error.retryable ? handleRetry : undefined}
+            onRetry={error.retryable ? handleTransportRetry : undefined}
           />
         </div>
       )}
@@ -411,11 +474,15 @@ export function ChatPanel({ sessionId, transformContent }: ChatPanelProps) {
         onQueueNavigateUp={handleQueueNavigateUp}
         onQueueNavigateDown={handleQueueNavigateDown}
         presenceInfo={presenceInfo}
-        presencePulse={presencePulse}
+        presenceTasks={presenceTasks}
         activeInteraction={activeInteraction}
         focusedOptionIndex={focusedOptionIndex}
         onToolRef={handleToolRef}
         onToolDecided={markToolCallResponded}
+        backgroundTasks={backgroundTasks}
+        onStopTask={handleStopTask}
+        syncConnectionState={syncConnectionState}
+        syncFailedAttempts={syncFailedAttempts}
       />
     </div>
   );

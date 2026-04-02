@@ -409,6 +409,26 @@ body {
   }
 }
 
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
+}
+
+.dorkbot-avatar {
+  animation: breathe 3s ease-in-out infinite;
+}
+
+.dorkbot-avatar.reacting {
+  animation-duration: 0.8s;
+}
+
 @keyframes shimmer-pulse {
   0%,
   100% {
@@ -432,6 +452,19 @@ body {
 
 @utility animate-drain {
   animation-name: drain;
+}
+
+@keyframes health-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(16 185 129 / 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgb(16 185 129 / 0);
+  }
+}
+.animate-health-pulse {
+  animation: health-pulse 2s ease-in-out infinite;
 }
 
 /* Assistant message typography */
@@ -539,14 +572,14 @@ body {
 }
 
 /* Radix ScrollArea inside command palette: fade scrollbar in/out */
-[cmdk-list] [data-slot="scroll-area-scrollbar"] {
+[cmdk-list] [data-slot='scroll-area-scrollbar'] {
   opacity: 0;
   transition: opacity 0.2s ease;
 }
 
-[cmdk-list]:hover [data-slot="scroll-area-scrollbar"],
-[cmdk-list] [data-slot="scroll-area-viewport"]:hover ~ [data-slot="scroll-area-scrollbar"],
-[cmdk-list] [data-state="visible"][data-slot="scroll-area-scrollbar"] {
+[cmdk-list]:hover [data-slot='scroll-area-scrollbar'],
+[cmdk-list] [data-slot='scroll-area-viewport']:hover ~ [data-slot='scroll-area-scrollbar'],
+[cmdk-list] [data-state='visible'][data-slot='scroll-area-scrollbar'] {
   opacity: 1;
 }
 

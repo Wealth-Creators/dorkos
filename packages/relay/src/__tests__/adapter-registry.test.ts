@@ -34,7 +34,13 @@ function createMockEnvelope() {
     id: 'env-01',
     subject: 'relay.test.mock.event',
     from: 'relay.agent.sender',
-    budget: { hopCount: 0, maxHops: 5, ancestorChain: [], ttl: Date.now() + 3600000, callBudgetRemaining: 10 },
+    budget: {
+      hopCount: 0,
+      maxHops: 5,
+      ancestorChain: [],
+      ttl: Date.now() + 3600000,
+      callBudgetRemaining: 10,
+    },
     createdAt: new Date().toISOString(),
     payload: { text: 'hello' },
   };
@@ -135,7 +141,11 @@ describe('AdapterRegistry', () => {
     const delivered = await registry.deliver(subject, { ...envelope, subject });
 
     expect(delivered).toEqual({ success: true, durationMs: 0 });
-    expect(adapter.deliver).toHaveBeenCalledWith(subject, expect.objectContaining({ subject }), undefined);
+    expect(adapter.deliver).toHaveBeenCalledWith(
+      subject,
+      expect.objectContaining({ subject }),
+      undefined
+    );
   });
 
   it('deliver() returns null when no adapter matches', async () => {
@@ -197,10 +207,73 @@ describe('AdapterRegistry', () => {
     await registry.deliver(
       'relay.test.ctx.event',
       { ...envelope, subject: 'relay.test.ctx.event' },
-      context,
+      context
     );
 
-    expect(adapter.deliver).toHaveBeenCalledWith('relay.test.ctx.event', expect.any(Object), context);
+    expect(adapter.deliver).toHaveBeenCalledWith(
+      'relay.test.ctx.event',
+      expect.any(Object),
+      context
+    );
+  });
+
+  // --- Start timeout ---
+
+  it('register() rejects when adapter.start() hangs beyond timeout', async () => {
+    vi.useFakeTimers();
+
+    const suppress = () => {};
+    process.on('unhandledRejection', suppress);
+
+    const hangingAdapter = createMockAdapter();
+    vi.mocked(hangingAdapter.start).mockReturnValue(new Promise(() => {})); // never resolves
+
+    const registerPromise = registry.register(hangingAdapter);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(registerPromise).rejects.toThrow('timed out');
+
+    // Hanging adapter should NOT be in the registry
+    expect(registry.get('mock-adapter')).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(0);
+    process.removeListener('unhandledRejection', suppress);
+    vi.useRealTimers();
+  });
+
+  it('register() clears timeout timer on successful start', async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    const adapter = createMockAdapter();
+    await registry.register(adapter);
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+  });
+
+  it('hot-reload: on start timeout, old adapter is NOT stopped', async () => {
+    vi.useFakeTimers();
+
+    const suppress = () => {};
+    process.on('unhandledRejection', suppress);
+
+    const oldAdapter = createMockAdapter({ id: 'my-adapter' });
+    vi.mocked(oldAdapter.start).mockResolvedValue(undefined);
+    await registry.register(oldAdapter);
+
+    const hangingNew = createMockAdapter({ id: 'my-adapter' });
+    vi.mocked(hangingNew.start).mockReturnValue(new Promise(() => {}));
+
+    const registerPromise = registry.register(hangingNew);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(registerPromise).rejects.toThrow('timed out');
+
+    // Old adapter should still be active — not stopped
+    expect(registry.get('my-adapter')).toBe(oldAdapter);
+    expect(oldAdapter.stop).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(0);
+    process.removeListener('unhandledRejection', suppress);
+    vi.useRealTimers();
   });
 
   // --- Hot-reload ---

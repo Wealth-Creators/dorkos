@@ -23,25 +23,29 @@ The core contract that all adapters must implement:
 
 ```typescript
 interface RelayAdapter {
-  readonly id: string;                                          // Unique identifier
-  readonly subjectPrefix: string | readonly string[];           // Subject prefix(es) (e.g. 'relay.human.telegram')
-  readonly displayName: string;                                 // Human-readable name
+  readonly id: string; // Unique identifier
+  readonly subjectPrefix: string | readonly string[]; // Subject prefix(es) (e.g. 'relay.human.telegram')
+  readonly displayName: string; // Human-readable name
 
-  start(relay: RelayPublisher): Promise<void>;                  // Connect and register
-  stop(): Promise<void>;                                        // Disconnect gracefully
-  deliver(subject: string, envelope: RelayEnvelope, context?: AdapterContext): Promise<DeliveryResult>;  // Send outbound message
-  getStatus(): AdapterStatus;                                   // Current runtime status
+  start(relay: RelayPublisher): Promise<void>; // Connect and register
+  stop(): Promise<void>; // Disconnect gracefully
+  deliver(
+    subject: string,
+    envelope: RelayEnvelope,
+    context?: AdapterContext
+  ): Promise<DeliveryResult>; // Send outbound message
+  getStatus(): AdapterStatus; // Current runtime status
   testConnection?(): Promise<{ ok: boolean; error?: string }>; // Optional lightweight credential check
 }
 ```
 
 ### Properties
 
-| Property         | Type    | Purpose                                                   |
-| ---------------- | ------- | --------------------------------------------------------- |
-| `id`             | string  | Unique adapter ID (e.g., `'telegram'`, `'webhook-github'`) used for storage and lifecycle management. Multiple adapter instances can exist; the ID disambiguates them. |
-| `subjectPrefix`  | string \| readonly string[]  | The Relay subject prefix(es) this adapter handles (e.g., `'relay.human.telegram'`). Can be an array for adapters that handle multiple prefixes. Used by AdapterRegistry to route outbound messages to the correct adapter. |
-| `displayName`    | string  | Human-readable name shown in adapter status UI (e.g., `'Telegram'`, `'Webhook (GitHub)'`). Useful when multiple Telegram adapters exist. |
+| Property        | Type                        | Purpose                                                                                                                                                                                                                    |
+| --------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`            | string                      | Unique adapter ID (e.g., `'telegram'`, `'webhook-github'`) used for storage and lifecycle management. Multiple adapter instances can exist; the ID disambiguates them.                                                     |
+| `subjectPrefix` | string \| readonly string[] | The Relay subject prefix(es) this adapter handles (e.g., `'relay.human.telegram'`). Can be an array for adapters that handle multiple prefixes. Used by AdapterRegistry to route outbound messages to the correct adapter. |
+| `displayName`   | string                      | Human-readable name shown in adapter status UI (e.g., `'Telegram'`, `'Webhook (GitHub)'`). Useful when multiple Telegram adapters exist.                                                                                   |
 
 ### Methods
 
@@ -289,30 +293,30 @@ Adapter configurations are persisted in `~/.dork/relay/adapters.json`:
 
 ```typescript
 interface AdapterConfig {
-  id: string;                           // Unique adapter ID
-  type: 'telegram' | 'webhook' | 'slack' | 'claude-code' | 'plugin';  // Adapter type
-  enabled: boolean;                     // Whether this adapter should be running
-  plugin?: PluginSource;                // Required when type is 'plugin'
-  config: TelegramAdapterConfig | WebhookAdapterConfig | Record<string, unknown>;  // Type-specific config
+  id: string; // Unique adapter ID
+  type: 'telegram' | 'telegram-chatsdk' | 'webhook' | 'slack' | 'claude-code' | 'plugin'; // Adapter type
+  enabled: boolean; // Whether this adapter should be running
+  plugin?: PluginSource; // Required when type is 'plugin'
+  config: TelegramAdapterConfig | WebhookAdapterConfig | Record<string, unknown>; // Type-specific config
 }
 
 interface TelegramAdapterConfig {
-  token: string;                        // Telegram bot token
-  mode: 'polling' | 'webhook';          // Update delivery mode
-  webhookUrl?: string;                  // Required if mode is 'webhook'
-  webhookPort?: number;                 // Optional, defaults to 8443
+  token: string; // Telegram bot token
+  mode: 'polling' | 'webhook'; // Update delivery mode
+  webhookUrl?: string; // Required if mode is 'webhook'
+  webhookPort?: number; // Optional, defaults to 8443
 }
 
 interface WebhookAdapterConfig {
   inbound: {
-    subject: string;                    // Relay subject to publish to
-    secret: string;                     // HMAC-SHA256 secret (min 16 chars)
-    previousSecret?: string;            // Previous secret for rotation (24h window)
+    subject: string; // Relay subject to publish to
+    secret: string; // HMAC-SHA256 secret (min 16 chars)
+    previousSecret?: string; // Previous secret for rotation (24h window)
   };
   outbound: {
-    url: string;                        // URL to POST outbound messages to
-    secret: string;                     // HMAC-SHA256 secret for signing
-    headers?: Record<string, string>;    // Custom headers to include
+    url: string; // URL to POST outbound messages to
+    secret: string; // HMAC-SHA256 secret for signing
+    headers?: Record<string, string>; // Custom headers to include
   };
 }
 ```
@@ -338,14 +342,14 @@ Receives Telegram messages via polling or webhook. Normalizes them into `Standar
 interface StandardPayload {
   content: string;
   senderName: string;
-  channelName?: string;                 // Group/channel name
+  channelName?: string; // Group/channel name
   channelType: 'dm' | 'group';
   responseContext: {
     platform: 'telegram';
-    maxLength: number;                   // 4096 for Telegram
+    maxLength: number; // 4096 for Telegram
     supportedFormats: string[];
     instructions: string;
-    formattingInstructions: string;      // Telegram-specific formatting rules for agent system prompts
+    formattingInstructions: string; // Telegram-specific formatting rules for agent system prompts
   };
   platformData: {
     chatId: number;
@@ -393,27 +397,69 @@ Bridges Slack workspaces into the Relay subject hierarchy using Socket Mode (no 
 - DMs: `relay.human.slack.{channelId}` (D-prefix channels)
 - Groups/Channels: `relay.human.slack.group.{channelId}` (C/G-prefix channels)
 
+**Respond Modes:**
+
+The `respondMode` config field controls when the bot responds in channels (DMs are always responded to unless restricted by `dmPolicy`):
+
+| Mode           | Behavior                                                                                                                           |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `thread-aware` | Responds to @mentions and replies in threads the bot has already participated in. Default since v0.21. Most channel-friendly mode. |
+| `mention-only` | Responds only when explicitly @mentioned. Ignores thread replies.                                                                  |
+| `always`       | Responds to every message in every channel. Use with caution in shared channels.                                                   |
+
+**DM Access Control:**
+
+The `dmPolicy` field controls who can DM the bot:
+
+| Policy      | Behavior                                                                  |
+| ----------- | ------------------------------------------------------------------------- |
+| `open`      | Any Slack user can DM the bot. Default.                                   |
+| `allowlist` | Only user IDs listed in `dmAllowlist` can DM the bot. Others are ignored. |
+
+**Channel Overrides:**
+
+The `channelOverrides` field allows per-channel configuration that overrides global settings:
+
+```json
+{
+  "channelOverrides": {
+    "C12345": { "respondMode": "always" },
+    "C67890": { "enabled": false }
+  }
+}
+```
+
+Each override can set `enabled` (boolean) and/or `respondMode` for that specific channel. Channels with `enabled: false` are completely ignored.
+
+**Event Deduplication:**
+
+Inbound events are deduplicated by `event_id` using an LRU set (500 entries, 5-minute TTL). This prevents duplicate processing when Slack retries event delivery.
+
+**Auth Failure Handling:**
+
+When the Slack API returns a fatal authentication error (`invalid_auth`, `token_revoked`, `not_authed`, `missing_scope`, `app_uninstalled`, `account_inactive`, `team_access_not_granted`), the adapter stops itself immediately instead of retrying in a loop.
+
 **Inbound:**
 
 Receives Slack messages via Socket Mode (`message` and `app_mention` events). Skips bot messages, file shares, and edits. Normalizes into `StandardPayload`:
 
 ```typescript
 interface StandardPayload {
-  content: string;                    // Message text (capped at 32 KB)
-  senderName: string;                 // Display name (cached, 1h TTL)
-  channelName?: string;               // Channel name for groups (cached, 1h TTL)
+  content: string; // Message text (capped at 32 KB)
+  senderName: string; // Display name (cached, 1h TTL)
+  channelName?: string; // Channel name for groups (cached, 1h TTL)
   channelType: 'dm' | 'group';
   responseContext: {
     platform: 'slack';
-    maxLength: number;                // 4000 for Slack
-    supportedFormats: string[];       // ['text', 'mrkdwn']
+    maxLength: number; // 4000 for Slack
+    supportedFormats: string[]; // ['text', 'mrkdwn']
     instructions: string;
-    formattingInstructions: string;   // Slack-specific formatting rules for agent system prompts
+    formattingInstructions: string; // Slack-specific formatting rules for agent system prompts
   };
   platformData: {
     channelId: string;
     userId: string;
-    ts: string;                       // Message timestamp (used for threading)
+    ts: string; // Message timestamp (used for threading)
     threadTs?: string;
     teamId?: string;
   };
@@ -424,19 +470,25 @@ interface StandardPayload {
 
 Supports two delivery modes controlled by the `streaming` config field:
 
-| Mode | Behavior |
-|------|----------|
+| Mode               | Behavior                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | Streaming (`true`) | Posts initial message on first `text_delta`, then updates via `chat.update` every 1 second. Final update on `done`. |
-| Buffered (`false`) | Accumulates text in memory, posts once on `done`. Reduces API quota usage. |
+| Buffered (`false`) | Accumulates text in memory, posts once on `done`. Reduces API quota usage.                                          |
 
-All bot responses thread under the original inbound message using `platformData.ts`. Messages are truncated to Slack's 4000-character limit.
+All bot responses thread under the original inbound message using `platformData.ts`. Messages exceeding Slack's 4000-character limit are split into multiple chunks (at paragraph or sentence boundaries) and sent sequentially with a 1.1-second delay between chunks for rate limiting.
 
 **Typing Indicators:**
 
-| Mode | Behavior |
-|------|----------|
+| Mode       | Behavior                                                                 |
+| ---------- | ------------------------------------------------------------------------ |
 | `reaction` | Adds/removes `:hourglass_flowing_sand:` emoji reaction during processing |
-| `none` | No visual feedback |
+| `none`     | No visual feedback                                                       |
+
+Default is `reaction` (changed from `none` in v0.21).
+
+**Thread Participation Tracking:**
+
+The adapter maintains an LRU map (1000 entries, 24h TTL) of threads the bot has participated in. When `respondMode` is `thread-aware`, the bot responds to replies in these tracked threads even without an @mention. Participation is recorded whenever the bot sends a message to a thread.
 
 **Connection:**
 
@@ -454,7 +506,13 @@ Uses `@slack/bolt` with `socketMode: true`. No public URL or ngrok required — 
     "appToken": "xapp-...",
     "signingSecret": "abc123...",
     "streaming": true,
-    "typingIndicator": "reaction"
+    "typingIndicator": "reaction",
+    "respondMode": "thread-aware",
+    "dmPolicy": "open",
+    "channelOverrides": {
+      "C_PROJECT": { "respondMode": "always" },
+      "C_NOISY": { "enabled": false }
+    }
   }
 }
 ```
@@ -613,10 +671,7 @@ it('delivers outbound messages', async () => {
 Always use HMAC-SHA256 (not MD5 or SHA1) for webhook signature verification:
 
 ```typescript
-const signature = crypto
-  .createHmac('sha256', secret)
-  .update(message)
-  .digest('hex');
+const signature = crypto.createHmac('sha256', secret).update(message).digest('hex');
 ```
 
 ### Timing-Safe Comparison
@@ -697,17 +752,17 @@ Every adapter type exposes an `AdapterManifest` that describes its metadata and 
 
 ```typescript
 interface AdapterManifest {
-  type: string;                        // Unique type key (e.g., 'telegram', 'webhook')
-  displayName: string;                 // Human-readable name shown in UI
-  description: string;                 // Short description of the adapter
-  iconEmoji?: string;                  // Optional emoji for visual identification
+  type: string; // Unique type key (e.g., 'telegram', 'webhook')
+  displayName: string; // Human-readable name shown in UI
+  description: string; // Short description of the adapter
+  iconEmoji?: string; // Optional emoji for visual identification
   category: 'messaging' | 'automation' | 'internal' | 'custom';
-  docsUrl?: string;                    // Link to external documentation
-  builtin: boolean;                    // True for adapters shipped with @dorkos/relay
-  configFields: ConfigField[];         // Ordered list of configuration fields
-  setupSteps?: AdapterSetupStep[];     // Optional multi-step setup wizard definition
-  setupInstructions?: string;          // Optional markdown instructions rendered before fields
-  multiInstance: boolean;              // Whether multiple instances of this type can coexist
+  docsUrl?: string; // Link to external documentation
+  builtin: boolean; // True for adapters shipped with @dorkos/relay
+  configFields: ConfigField[]; // Ordered list of configuration fields
+  setupSteps?: AdapterSetupStep[]; // Optional multi-step setup wizard definition
+  setupInstructions?: string; // Optional markdown instructions rendered before fields
+  multiInstance: boolean; // Whether multiple instances of this type can coexist
 }
 ```
 
@@ -717,18 +772,19 @@ Each entry in `configFields` defines one configurable parameter for the adapter:
 
 ```typescript
 interface ConfigField {
-  key: string;           // Config object key (e.g., 'token', 'mode')
-  label: string;         // Human-readable label shown in the UI
+  key: string; // Config object key (e.g., 'token', 'mode')
+  label: string; // Human-readable label shown in the UI
   type: ConfigFieldType; // Input type (see below)
-  required: boolean;     // Whether the field must have a value
-  default?: string | number | boolean;  // Default value
-  placeholder?: string;  // Input placeholder text
-  description?: string;  // Helper text shown below the field
-  options?: ConfigFieldOption[];  // Required when type is 'select'
-  section?: string;      // Optional grouping label
-  showWhen?: {           // Conditional display rule
-    field: string;       // Key of another field
-    equals: string | boolean | number;  // Value that triggers visibility
+  required: boolean; // Whether the field must have a value
+  default?: string | number | boolean; // Default value
+  placeholder?: string; // Input placeholder text
+  description?: string; // Helper text shown below the field
+  options?: ConfigFieldOption[]; // Required when type is 'select'
+  section?: string; // Optional grouping label
+  showWhen?: {
+    // Conditional display rule
+    field: string; // Key of another field
+    equals: string | boolean | number; // Value that triggers visibility
   };
 }
 
@@ -743,15 +799,15 @@ The catalog API returns one entry per known adapter type:
 
 ```typescript
 interface CatalogEntry {
-  manifest: AdapterManifest;     // Static metadata and config field definitions
-  instances: CatalogInstance[];  // Zero or more configured instances of this type
+  manifest: AdapterManifest; // Static metadata and config field definitions
+  instances: CatalogInstance[]; // Zero or more configured instances of this type
 }
 
 interface CatalogInstance {
   id: string;
   enabled: boolean;
   status: AdapterStatus;
-  config?: Record<string, unknown>;  // Masked config (secrets replaced with '***')
+  config?: Record<string, unknown>; // Masked config (secrets replaced with '***')
 }
 ```
 
@@ -785,10 +841,7 @@ import type { RelayAdapter } from '@dorkos/relay';
 import type { AdapterManifest } from '@dorkos/shared/relay-schemas';
 import { RELAY_ADAPTER_API_VERSION } from '@dorkos/relay';
 
-export default function createMyAdapter(
-  id: string,
-  config: Record<string, unknown>,
-): RelayAdapter {
+export default function createMyAdapter(id: string, config: Record<string, unknown>): RelayAdapter {
   return new MyAdapter(id, config);
 }
 
@@ -803,8 +856,16 @@ export function getManifest(): AdapterManifest {
     multiInstance: true,
     configFields: [
       { key: 'apiKey', label: 'API Key', type: 'password', required: true },
-      { key: 'region', label: 'Region', type: 'select', required: true,
-        options: [{ label: 'US', value: 'us' }, { label: 'EU', value: 'eu' }] },
+      {
+        key: 'region',
+        label: 'Region',
+        type: 'select',
+        required: true,
+        options: [
+          { label: 'US', value: 'us' },
+          { label: 'EU', value: 'eu' },
+        ],
+      },
     ],
   };
 }
@@ -855,19 +916,19 @@ Each binding links one adapter instance to one agent working directory:
 
 ```typescript
 interface AdapterBinding {
-  id: string;             // UUID, assigned on creation
-  adapterId: string;      // Matches an adapter config id (e.g., 'my-telegram')
-  agentId: string;        // Agent identity ID for display purposes
-  chatId?: string;        // Optional: restrict to a specific chat/user ID
-  channelType?: 'dm' | 'group';  // Optional: restrict to a channel type
+  id: string; // UUID, assigned on creation
+  adapterId: string; // Matches an adapter config id (e.g., 'my-telegram')
+  agentId: string; // Agent identity ID for display purposes
+  chatId?: string; // Optional: restrict to a specific chat/user ID
+  channelType?: 'dm' | 'group'; // Optional: restrict to a channel type
   sessionStrategy: 'per-chat' | 'per-user' | 'stateless';
-  permissionMode?: 'default' | 'plan' | 'bypassPermissions' | 'acceptEdits';  // Permission mode for sessions (default: 'acceptEdits')
-  canInitiate: boolean;   // Whether the adapter can start new conversations (default: false)
-  canReply: boolean;      // Whether the adapter can reply to messages (default: true)
-  canReceive: boolean;    // Whether the adapter can receive inbound messages (default: true)
-  label: string;          // Human-readable label shown in the UI
-  createdAt: string;      // ISO 8601 timestamp
-  updatedAt: string;      // ISO 8601 timestamp
+  permissionMode?: 'default' | 'plan' | 'bypassPermissions' | 'acceptEdits'; // Permission mode for sessions (default: 'acceptEdits')
+  canInitiate: boolean; // Whether the adapter can start new conversations (default: false)
+  canReply: boolean; // Whether the adapter can reply to messages (default: true)
+  canReceive: boolean; // Whether the adapter can receive inbound messages (default: true)
+  label: string; // Human-readable label shown in the UI
+  createdAt: string; // ISO 8601 timestamp
+  updatedAt: string; // ISO 8601 timestamp
 }
 ```
 
@@ -875,13 +936,13 @@ interface AdapterBinding {
 
 When an inbound message arrives from an adapter, `BindingStore.resolve()` picks the best matching binding using a scoring algorithm:
 
-| Criteria matched                            | Score |
-| ------------------------------------------- | ----- |
-| adapterId + chatId + channelType            | 7     |
-| adapterId + chatId                          | 5     |
-| adapterId + channelType                     | 3     |
-| adapterId only (wildcard / catch-all)        | 1     |
-| explicit mismatch on chatId or channelType  | 0 (excluded) |
+| Criteria matched                           | Score        |
+| ------------------------------------------ | ------------ |
+| adapterId + chatId + channelType           | 7            |
+| adapterId + chatId                         | 5            |
+| adapterId + channelType                    | 3            |
+| adapterId only (wildcard / catch-all)      | 1            |
+| explicit mismatch on chatId or channelType | 0 (excluded) |
 
 The binding with the highest score is selected. If no binding matches, the message is dropped (no dead-letter — the adapter is simply not bound to any agent).
 
@@ -890,8 +951,13 @@ The binding with the highest score is selected. If no binding matches, the messa
 ```json
 [
   { "adapterId": "my-telegram", "sessionStrategy": "per-chat", "label": "default" },
-  { "adapterId": "my-telegram", "chatId": "-1001234567890", "channelType": "group",
-    "sessionStrategy": "per-user", "label": "project-team-group" }
+  {
+    "adapterId": "my-telegram",
+    "chatId": "-1001234567890",
+    "channelType": "group",
+    "sessionStrategy": "per-user",
+    "label": "project-team-group"
+  }
 ]
 ```
 
@@ -899,11 +965,11 @@ The binding with the highest score is selected. If no binding matches, the messa
 
 The `sessionStrategy` field on each binding controls how Claude Code sessions are created for incoming messages:
 
-| Strategy    | Behavior                                                                              |
-| ----------- | ------------------------------------------------------------------------------------- |
-| `per-chat`  | One persistent session per chat ID. All messages in the same chat reuse the same session. This is the default. |
+| Strategy    | Behavior                                                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `per-chat`  | One persistent session per chat ID. All messages in the same chat reuse the same session. This is the default.                                         |
 | `per-user`  | One persistent session per user (extracted from envelope metadata, falling back to chatId). Useful when the same user can message from multiple chats. |
-| `stateless` | A fresh session is created for every inbound message. No session history is carried across messages. |
+| `stateless` | A fresh session is created for every inbound message. No session history is carried across messages.                                                   |
 
 Session mappings for `per-chat` and `per-user` strategies are persisted to `~/.dork/relay/sessions.json` and restored on server restart. The map is capped at 10,000 entries with LRU eviction. Orphaned session entries (whose binding no longer exists) are removed on startup.
 
@@ -926,11 +992,11 @@ Agent responses published back to `relay.human.*` subjects are detected by check
 ```typescript
 interface AdapterManagerDeps {
   agentManager: ClaudeCodeAgentRuntimeLike; // Required — wraps the active AgentRuntime
-  traceStore: TraceStoreLike;               // Required — records delivery spans
-  pulseStore?: PulseStoreLike;              // Optional — needed for ClaudeCodeAdapter schedule dispatching
-  relayCore?: RelayCoreLike;               // Optional — enables binding subsystem (BindingStore + BindingRouter)
-  meshCore?: AdapterMeshCoreLike;          // Optional — resolves agent CWD via getProjectPath(agentId)
-  eventRecorder?: AdapterEventRecorder;    // Optional — records adapter lifecycle events for the UI
+  traceStore: TraceStoreLike; // Required — records delivery spans
+  pulseStore?: PulseStoreLike; // Optional — needed for ClaudeCodeAdapter schedule dispatching
+  relayCore?: RelayCoreLike; // Optional — enables binding subsystem (BindingStore + BindingRouter)
+  meshCore?: AdapterMeshCoreLike; // Optional — resolves agent CWD via getProjectPath(agentId)
+  eventRecorder?: AdapterEventRecorder; // Optional — records adapter lifecycle events for the UI
 }
 ```
 
@@ -950,27 +1016,26 @@ The base class handles:
 
 Subclasses implement three methods:
 
-| Method | Purpose |
-|---|---|
-| `protected _start(relay: RelayPublisher): Promise<void>` | Connect to the external service |
-| `protected _stop(): Promise<void>` | Disconnect and drain in-flight messages |
+| Method                                                          | Purpose                                   |
+| --------------------------------------------------------------- | ----------------------------------------- |
+| `protected _start(relay: RelayPublisher): Promise<void>`        | Connect to the external service           |
+| `protected _stop(): Promise<void>`                              | Disconnect and drain in-flight messages   |
 | `deliver(subject, envelope, context?): Promise<DeliveryResult>` | Deliver a message to the external channel |
 
 ### Example
 
 ```typescript
 import { BaseRelayAdapter } from '@dorkos/relay';
-import type {
-  RelayPublisher,
-  DeliveryResult,
-  AdapterContext,
-} from '@dorkos/relay';
+import type { RelayPublisher, DeliveryResult, AdapterContext } from '@dorkos/relay';
 import type { RelayEnvelope } from '@dorkos/shared/relay-schemas';
 
 class SlackAdapter extends BaseRelayAdapter {
   private client: SlackClient | null = null;
 
-  constructor(id: string, private readonly token: string) {
+  constructor(
+    id: string,
+    private readonly token: string
+  ) {
     super(id, 'relay.human.slack', 'Slack');
   }
 
@@ -994,7 +1059,7 @@ class SlackAdapter extends BaseRelayAdapter {
   async deliver(
     subject: string,
     envelope: RelayEnvelope,
-    _context?: AdapterContext,
+    _context?: AdapterContext
   ): Promise<DeliveryResult> {
     if (!this.client) return { success: false, error: 'Not connected' };
 
@@ -1008,13 +1073,13 @@ class SlackAdapter extends BaseRelayAdapter {
 
 ### Protected helpers
 
-| Helper | Purpose |
-|---|---|
-| `trackOutbound()` | Increment outbound message count. Call after successful delivery. |
-| `trackInbound()` | Increment inbound message count. Call when receiving from external channel. |
-| `recordError(err)` | Set state to `'error'`, increment `errorCount`, set `lastError` and `lastErrorAt`. Does not catch/swallow -- the host handles isolation. |
-| `this.relay` | Reference to the `RelayPublisher`, set by `start()`, cleared by `stop()`. |
-| `makeInboundCallbacks()` | Returns an `AdapterInboundCallbacks` object with `trackInbound` and `recordError` bound to this adapter's state. Pass this to standalone inbound handler functions. |
+| Helper                    | Purpose                                                                                                                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trackOutbound()`         | Increment outbound message count. Call after successful delivery.                                                                                                       |
+| `trackInbound()`          | Increment inbound message count. Call when receiving from external channel.                                                                                             |
+| `recordError(err)`        | Set state to `'error'`, increment `errorCount`, set `lastError` and `lastErrorAt`. Does not catch/swallow -- the host handles isolation.                                |
+| `this.relay`              | Reference to the `RelayPublisher`, set by `start()`, cleared by `stop()`.                                                                                               |
+| `makeInboundCallbacks()`  | Returns an `AdapterInboundCallbacks` object with `trackInbound` and `recordError` bound to this adapter's state. Pass this to standalone inbound handler functions.     |
 | `makeOutboundCallbacks()` | Returns an `AdapterOutboundCallbacks` object with `trackOutbound` and `recordError` bound to this adapter's state. Pass this to standalone outbound delivery functions. |
 
 ### Callback factories
@@ -1042,12 +1107,13 @@ The returned callback objects contain only the methods that each direction needs
 
 Common envelope-parsing logic lives in `packages/relay/src/lib/payload-utils.ts` and is exported from the `@dorkos/relay` barrel. Adapters should import these shared helpers rather than duplicating the logic:
 
-| Utility | Purpose |
-|---|---|
-| `extractAgentIdFromEnvelope(envelope)` | Extracts the agent ID from `envelope.metadata.agentId`. Returns `undefined` if absent. |
-| `extractSessionIdFromEnvelope(envelope)` | Extracts the session ID from `envelope.metadata.sessionId`. Returns `undefined` if absent. |
-| `extractApprovalData(payload)` | Parses an `approval_required` StreamEvent payload. Returns `ApprovalData` or `null`. |
-| `formatToolDescription(toolName, input)` | Returns a human-readable summary of a tool action for approval prompts. |
+| Utility                                  | Purpose                                                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `extractAgentIdFromEnvelope(envelope)`   | Extracts the agent ID from `envelope.metadata.agentId`. Returns `undefined` if absent.                                     |
+| `extractSessionIdFromEnvelope(envelope)` | Extracts the session ID from `envelope.metadata.sessionId`. Returns `undefined` if absent.                                 |
+| `extractApprovalData(payload)`           | Parses an `approval_required` StreamEvent payload. Returns `ApprovalData` or `null`.                                       |
+| `formatToolDescription(toolName, input)` | Returns a human-readable summary of a tool action for approval prompts.                                                    |
+| `splitMessage(text, maxLength)`          | Splits text at paragraph/sentence boundaries. Platform constants: `TELEGRAM_MAX_LENGTH` (4000), `SLACK_MAX_LENGTH` (3500). |
 
 ```typescript
 import {
@@ -1084,25 +1150,22 @@ runAdapterComplianceSuite({
 
 ### What it validates
 
-| Category | Tests |
-|---|---|
-| **Shape compliance** | `id` is a non-empty string, `subjectPrefix` is string or string[], `displayName` is a non-empty string, required methods exist |
-| **Status lifecycle** | Initial state is `'disconnected'`, `getStatus()` returns a valid `AdapterStatus` shape, `getStatus()` returns a copy (not a reference) |
-| **Start/stop idempotency** | `start()` twice does not throw, `stop()` twice does not throw, `stop()` without `start()` does not throw |
-| **Delivery** | `deliver()` returns a defined `DeliveryResult` |
-| **testConnection** | If present, returns `{ ok: boolean; error?: string }` |
+| Category                   | Tests                                                                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shape compliance**       | `id` is a non-empty string, `subjectPrefix` is string or string[], `displayName` is a non-empty string, required methods exist         |
+| **Status lifecycle**       | Initial state is `'disconnected'`, `getStatus()` returns a valid `AdapterStatus` shape, `getStatus()` returns a copy (not a reference) |
+| **Start/stop idempotency** | `start()` twice does not throw, `stop()` twice does not throw, `stop()` without `start()` does not throw                               |
+| **Delivery**               | `deliver()` returns a defined `DeliveryResult`                                                                                         |
+| **testConnection**         | If present, returns `{ ok: boolean; error?: string }`                                                                                  |
 
 ### Mock utilities
 
 The `@dorkos/relay/testing` subpath also exports mock factories for adapter tests:
 
 ```typescript
-import {
-  createMockRelayPublisher,
-  createMockRelayEnvelope,
-} from '@dorkos/relay/testing';
+import { createMockRelayPublisher, createMockRelayEnvelope } from '@dorkos/relay/testing';
 
-const relay = createMockRelayPublisher();  // All methods are vi.fn() stubs
+const relay = createMockRelayPublisher(); // All methods are vi.fn() stubs
 const envelope = createMockRelayEnvelope({ subject: 'relay.test.foo' });
 ```
 
@@ -1125,7 +1188,9 @@ export function getManifest(): AdapterManifest {
     category: 'custom',
     builtin: false,
     apiVersion: RELAY_ADAPTER_API_VERSION,
-    configFields: [/* ... */],
+    configFields: [
+      /* ... */
+    ],
     multiInstance: false,
   };
 }
@@ -1220,7 +1285,10 @@ import type { RelayEnvelope } from '@dorkos/shared/relay-schemas';
 export class DiscordAdapter extends BaseRelayAdapter {
   private client: DiscordClient | null = null;
 
-  constructor(id: string, private readonly config: { token: string }) {
+  constructor(
+    id: string,
+    private readonly config: { token: string }
+  ) {
     super(id, 'relay.human.discord', 'Discord');
   }
 
@@ -1230,11 +1298,15 @@ export class DiscordAdapter extends BaseRelayAdapter {
 
     this.client.on('message', async (msg) => {
       this.trackInbound();
-      await relay.publish(`relay.human.discord.${msg.channelId}`, {
-        content: msg.content,
-        senderName: msg.author.username,
-        channelType: msg.isDM ? 'dm' : 'group',
-      }, { from: `relay.human.discord.${this.id}` });
+      await relay.publish(
+        `relay.human.discord.${msg.channelId}`,
+        {
+          content: msg.content,
+          senderName: msg.author.username,
+          channelType: msg.isDM ? 'dm' : 'group',
+        },
+        { from: `relay.human.discord.${this.id}` }
+      );
     });
   }
 
@@ -1243,13 +1315,18 @@ export class DiscordAdapter extends BaseRelayAdapter {
     this.client = null;
   }
 
-  async deliver(subject: string, envelope: RelayEnvelope, _context?: AdapterContext): Promise<DeliveryResult> {
+  async deliver(
+    subject: string,
+    envelope: RelayEnvelope,
+    _context?: AdapterContext
+  ): Promise<DeliveryResult> {
     if (!this.client) return { success: false, error: 'Not connected' };
 
     const channelId = subject.slice('relay.human.discord.'.length);
-    const content = typeof envelope.payload === 'object' && 'content' in envelope.payload
-      ? String(envelope.payload.content)
-      : JSON.stringify(envelope.payload);
+    const content =
+      typeof envelope.payload === 'object' && 'content' in envelope.payload
+        ? String(envelope.payload.content)
+        : JSON.stringify(envelope.payload);
 
     await this.client.send(channelId, content);
     this.trackOutbound();
@@ -1271,7 +1348,7 @@ export class DiscordAdapter extends BaseRelayAdapter {
 
 When publishing inbound messages, adapters should include `formattingInstructions` in the `responseContext` to tell agents how to format their responses for the target platform. The Claude Code adapter passes these instructions through to the agent's system prompt without modification — it has no knowledge of specific platforms.
 
-```typescript
+````typescript
 responseContext: {
   platform: 'discord',
   maxLength: 2000,
@@ -1285,7 +1362,7 @@ responseContext: {
     '- Keep responses under 2000 characters.',
   ].join('\n'),
 },
-```
+````
 
 If `formattingInstructions` is omitted, the agent handler falls back to a generic hint when `supportedFormats` does not include `'markdown'`. For platforms that support standard Markdown, no fallback is applied.
 
@@ -1350,11 +1427,13 @@ export async function streamingChatUpdate(
   client: WebClient,
   channel: string,
   ts: string,
-  text: string,
+  text: string
 ): Promise<void> {
   // Slack's chat.update typing doesn't expose streaming params
   await (client as unknown as StreamCapableClient).chat.update({
-    channel, ts, text,
+    channel,
+    ts,
+    text,
   });
 }
 ```
@@ -1365,30 +1444,209 @@ Both `packages/relay/src/adapters/telegram/stream-api.ts` and `packages/relay/sr
 
 As adapters grow to support streaming, tool approvals, and other features, a single file becomes unwieldy. Split by concern:
 
-| File | Responsibility |
-|---|---|
-| `{adapter}-adapter.ts` | Main adapter class, lifecycle (`_start` / `_stop`), wiring |
-| `inbound.ts` | Inbound message handling and normalization |
-| `outbound.ts` | Outbound delivery router, delegates to `stream.ts` or buffered delivery |
-| `stream.ts` | Streaming response handling (throttled updates, final flush) |
-| `stream-api.ts` | Typed wrappers for untyped streaming APIs (isolates `as unknown` casts) |
-| `approval.ts` | Tool approval state, timeout management, platform-native approval UI |
-| `index.ts` | Barrel export |
+| File                   | Responsibility                                                          |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `{adapter}-adapter.ts` | Main adapter class, lifecycle (`_start` / `_stop`), wiring              |
+| `inbound.ts`           | Inbound message handling and normalization                              |
+| `outbound.ts`          | Outbound delivery router, delegates to `stream.ts` or buffered delivery |
+| `stream.ts`            | Streaming response handling (throttled updates, final flush)            |
+| `stream-api.ts`        | Typed wrappers for untyped streaming APIs (isolates `as unknown` casts) |
+| `approval.ts`          | Tool approval state, timeout management, platform-native approval UI    |
+| `index.ts`             | Barrel export                                                           |
 
 The Slack adapter demonstrates the full split:
 
 ```
 packages/relay/src/adapters/slack/
 ├── index.ts              # Barrel
-├── slack-adapter.ts      # Main class, lifecycle
-├── inbound.ts            # Socket Mode message handling
-├── outbound.ts           # Delivery router
+├── slack-adapter.ts      # Main class, lifecycle, auth failure handling
+├── inbound.ts            # Socket Mode message handling, respond mode gating, DM policy, event dedup
+├── outbound.ts           # Delivery router, message splitting
 ├── stream.ts             # Streaming chat.update logic
 ├── stream-api.ts         # Typed wrapper for Slack streaming API
-└── approval.ts           # Approval state, Block Kit buttons, timeouts
+├── approval.ts           # Approval state, Block Kit buttons, timeouts
+└── thread-tracker.ts     # LRU thread participation tracker for thread-aware mode
 ```
 
 Each file receives its dependencies (state, callbacks, client) via function parameters rather than importing module-level singletons. This makes every function independently testable.
+
+## PlatformClient Architecture
+
+The `PlatformClient` interface separates platform-specific communication from relay orchestration:
+
+- **RelayAdapter** owns: lifecycle management, subject matching, envelope handling, status tracking, compliance
+- **PlatformClient** owns: posting messages, editing messages, streaming, typing indicators, action prompts
+
+The adapter creates and destroys its platform client during `_start()` / `_stop()`:
+
+```typescript
+// In TelegramAdapter._start():
+this.platformClient = new GrammyPlatformClient(bot, this.logger);
+
+// In SlackAdapter._start():
+this.platformClient = new SlackPlatformClient(app.client, { nativeStreaming }, this.logger);
+```
+
+PlatformClient never sees `RelayEnvelope` or relay subjects — it operates on thread IDs and content strings only.
+
+### PlatformClient Interface
+
+```typescript
+interface PlatformClient {
+  readonly platform: string;
+  postMessage(threadId: string, content: string, format?: string): Promise<{ messageId: string }>;
+  editMessage(threadId: string, messageId: string, content: string): Promise<void>;
+  deleteMessage(threadId: string, messageId: string): Promise<void>;
+  stream(threadId: string, content: AsyncIterable<string>): Promise<{ messageId: string }>;
+  postAction(
+    threadId: string,
+    prompt: string,
+    actions: Array<{ label: string; value: string }>
+  ): Promise<{ messageId: string }>;
+  startTyping(threadId: string): void;
+  stopTyping(threadId: string): void;
+  handleInbound(relay: RelayPublisher): void;
+  destroy(): Promise<void>;
+}
+```
+
+### Built-in Platform Clients
+
+| Client                 | Platform | Key Features                                                           |
+| ---------------------- | -------- | ---------------------------------------------------------------------- |
+| `GrammyPlatformClient` | Telegram | sendMessageDraft streaming at 200ms, typing indicator refresh every 4s |
+| `SlackPlatformClient`  | Slack    | Post+update streaming, hourglass emoji reactions for typing            |
+
+## AdapterStreamManager
+
+The `AdapterStreamManager` intercepts `StreamEvent` payloads in the delivery pipeline, aggregating per-event `text_delta` events into `AsyncIterable<string>` streams for adapters that implement `deliverStream()`.
+
+### How it works
+
+1. `AdapterRegistry.deliver()` detects StreamEvent payloads via `detectStreamEventType()`
+2. For adapters with `deliverStream()`, events are routed to the stream manager
+3. The stream manager creates an `AsyncQueue<string>` per `{adapterId}:{threadId}` key
+4. `text_delta` events push text chunks into the queue
+5. `done` events complete the queue, awaiting the delivery promise
+6. `error` events fail the queue with the error message
+7. `approval_required` events complete the current stream and fall through to `deliver()`
+
+### Stream lifecycle
+
+```
+text_delta → creates AsyncQueue, calls adapter.deliverStream(stream)
+text_delta → pushes to existing queue
+text_delta → pushes to existing queue
+done       → queue.complete(), await delivery result
+```
+
+### Fallback behavior
+
+- Adapters without `deliverStream()` receive all events via `deliver()` as before
+- The stream manager is optional — `AdapterRegistry` works without it
+- TTL reaping cleans up abandoned streams after 5 minutes
+
+### Implementing deliverStream()
+
+```typescript
+async deliverStream(
+  subject: string,
+  threadId: string,
+  stream: AsyncIterable<string>,
+  context?: AdapterContext
+): Promise<DeliveryResult> {
+  if (!this.platformClient) {
+    return { success: false, error: 'Adapter not started' };
+  }
+  try {
+    await this.platformClient.stream(threadId, stream);
+    this.trackOutbound();
+    return { success: true };
+  } catch (err) {
+    this.recordError(err);
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+```
+
+## ThreadIdCodec
+
+The `ThreadIdCodec` interface standardizes how adapters encode and decode relay subjects:
+
+```typescript
+interface ThreadIdCodec {
+  readonly prefix: string;
+  encode(platformId: string, channelType: 'dm' | 'group'): string;
+  decode(subject: string): { platformId: string; channelType: 'dm' | 'group' } | null;
+}
+```
+
+### Convention
+
+- DM subjects: `{prefix}.{platformId}` (e.g., `relay.human.telegram.12345`)
+- Group subjects: `{prefix}.group.{platformId}` (e.g., `relay.human.slack.group.C123`)
+- The prefix check uses `${prefix}.` to prevent false matches between similar prefixes (e.g., `telegram` vs `telegram-chatsdk`)
+
+### Built-in codecs
+
+| Codec                          | Prefix                         | Platform ID               |
+| ------------------------------ | ------------------------------ | ------------------------- |
+| `TelegramThreadIdCodec`        | `relay.human.telegram`         | Numeric chat ID           |
+| `SlackThreadIdCodec`           | `relay.human.slack`            | Channel ID (C/D/G prefix) |
+| `ChatSdkTelegramThreadIdCodec` | `relay.human.telegram-chatsdk` | Numeric chat ID           |
+
+### Usage in adapters
+
+Adapters should delegate `buildSubject()` and `extractId()` functions to their codec:
+
+```typescript
+const codec = new TelegramThreadIdCodec();
+
+export function buildSubject(chatId: number, isGroup: boolean): string {
+  return codec.encode(String(chatId), isGroup ? 'group' : 'dm');
+}
+
+export function extractChatId(subject: string): number | null {
+  const decoded = codec.decode(subject);
+  if (!decoded) return null;
+  const id = Number(decoded.platformId);
+  return Number.isInteger(id) ? id : null;
+}
+```
+
+## Chat SDK Adapter Pattern
+
+The `ChatSdkTelegramAdapter` demonstrates how to build a relay adapter backed by the Chat SDK (`chat` package). This pattern can be extended to other Chat SDK-supported platforms.
+
+### Architecture
+
+```
+Chat SDK (chat + @chat-adapter/telegram)
+  ↕ inbound events / outbound delivery
+ChatSdkTelegramAdapter (extends BaseRelayAdapter)
+  ↕ relay subjects + envelopes
+Relay bus
+```
+
+### Key differences from native adapters
+
+| Aspect            | Native (grammy/Bolt)        | Chat SDK                    |
+| ----------------- | --------------------------- | --------------------------- |
+| Bot library       | grammy / @slack/bolt        | chat + @chat-adapter/\*     |
+| Streaming quality | sendMessageDraft (200ms)    | Post+edit (~500ms)          |
+| Inline keyboards  | Full support                | Text-only fallback          |
+| State management  | Custom per-adapter          | MemoryStateAdapter          |
+| Thread handling   | Manual subject construction | Chat SDK Thread abstraction |
+
+### Building a Chat SDK adapter
+
+1. Create an adapter extending `BaseRelayAdapter`
+2. In `_start()`, create a `Chat` instance with the platform adapter and `MemoryStateAdapter`
+3. Register `onDirectMessage`, `onNewMention`, `onSubscribedMessage` handlers
+4. Forward inbound events to relay subjects via your `ThreadIdCodec`
+5. Implement `deliver()` for non-streaming payloads
+6. Implement `deliverStream()` by accumulating the stream and calling `telegramAdapter.postMessage()`
+7. Add echo prevention using the adapter's subject prefix
 
 ## Tool Approval Events
 
@@ -1408,14 +1666,18 @@ When an agent encounters a tool call requiring human approval (e.g., writing a f
 Three shared helpers in `packages/relay/src/lib/payload-utils.ts` handle the common parsing and formatting:
 
 ```typescript
-import { extractApprovalData, formatToolDescription, type ApprovalData } from '../../lib/payload-utils.js';
+import {
+  extractApprovalData,
+  formatToolDescription,
+  type ApprovalData,
+} from '../../lib/payload-utils.js';
 ```
 
-| Utility | Purpose |
-|---|---|
-| `extractApprovalData(payload)` | Parses an `approval_required` StreamEvent payload and returns `ApprovalData` (with `toolCallId`, `toolName`, `input`, `timeoutMs`) or `null` if the payload is not an approval event. |
-| `formatToolDescription(toolName, input)` | Returns a human-readable summary of the tool action (e.g., ``wants to write to `src/index.ts` ``). Extracts context from common tool input patterns. |
-| `clearApprovalTimeout(id)` | Cancels a pending auto-deny timeout when the user responds before it fires. Each adapter's outbound module exports this. |
+| Utility                                  | Purpose                                                                                                                                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extractApprovalData(payload)`           | Parses an `approval_required` StreamEvent payload and returns `ApprovalData` (with `toolCallId`, `toolName`, `input`, `timeoutMs`) or `null` if the payload is not an approval event. |
+| `formatToolDescription(toolName, input)` | Returns a human-readable summary of the tool action (e.g., ``wants to write to `src/index.ts` ``). Extracts context from common tool input patterns.                                  |
+| `clearApprovalTimeout(id)`               | Cancels a pending auto-deny timeout when the user responds before it fires. Each adapter's outbound module exports this.                                                              |
 
 ### Approval Response Payload
 
@@ -1543,7 +1805,7 @@ Individual config fields can include a `helpMarkdown` property containing Markdo
 - `apps/server/src/services/relay/adapter-manager.ts` — Server-side hot-reload, catalog, and updateConfig
 - `apps/server/src/services/relay/adapter-factory.ts` — Adapter instantiation per config type
 - `apps/server/src/services/relay/binding-store.ts` — Binding persistence and resolution scoring
-- `apps/server/src/services/relay/binding-router.ts` — Runtime routing from relay.human.> to relay.agent.*
+- `apps/server/src/services/relay/binding-router.ts` — Runtime routing from relay.human.> to relay.agent.\*
 - `packages/shared/src/relay-schemas.ts` — AdapterManifest, ConfigField, AdapterBinding, and all Relay Zod schemas
 - `packages/shared/src/transport.ts` — Transport interface including updateConfig()
 - `templates/relay-adapter/` — Starter template for new adapters

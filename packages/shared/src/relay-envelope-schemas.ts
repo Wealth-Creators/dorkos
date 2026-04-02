@@ -36,7 +36,11 @@ export const RelayBudgetSchema = z
     hopCount: z.number().int().min(0),
     maxHops: z.number().int().min(1).default(5),
     ancestorChain: z.array(z.string()),
-    ttl: z.number().int().min(0).openapi({ description: 'Absolute expiry timestamp (ms since epoch)' }),
+    ttl: z
+      .number()
+      .int()
+      .min(0)
+      .openapi({ description: 'Absolute expiry timestamp (ms since epoch)' }),
     callBudgetRemaining: z.number().int().min(0),
   })
   .openapi('RelayBudget');
@@ -172,23 +176,23 @@ export const EndpointRegistrationSchema = z
 
 export type EndpointRegistration = z.infer<typeof EndpointRegistrationSchema>;
 
-// === Pulse Dispatch ===
+// === Task Dispatch ===
 
-export const PulseDispatchPayloadSchema = z
+export const TaskDispatchPayloadSchema = z
   .object({
-    type: z.literal('pulse_dispatch'),
-    scheduleId: z.string(),
+    type: z.literal('task_dispatch'),
+    taskId: z.string(),
     runId: z.string(),
     prompt: z.string(),
     cwd: z.string().nullable(),
     permissionMode: z.string(),
-    scheduleName: z.string(),
-    cron: z.string(),
+    taskName: z.string(),
+    cron: z.string().nullable(),
     trigger: z.string(),
   })
-  .openapi('PulseDispatchPayload');
+  .openapi('TaskDispatchPayload');
 
-export type PulseDispatchPayload = z.infer<typeof PulseDispatchPayloadSchema>;
+export type TaskDispatchPayload = z.infer<typeof TaskDispatchPayloadSchema>;
 
 // === Console Relay Receipt ===
 
@@ -208,9 +212,9 @@ export const RelayProgressPayloadSchema = z
   .object({
     type: z.literal('progress'),
     step: z.number().int().min(1).describe('Monotonically increasing step counter'),
-    step_type: z.enum(['message', 'tool_result']).describe(
-      'message = assistant text block completed; tool_result = tool execution completed'
-    ),
+    step_type: z
+      .enum(['message', 'tool_result'])
+      .describe('message = assistant text block completed; tool_result = tool execution completed'),
     text: z.string().describe('Text content of this progress step'),
     done: z.literal(false),
   })

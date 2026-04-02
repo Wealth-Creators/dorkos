@@ -83,10 +83,10 @@ describe('TopologyLegend', () => {
       expect(screen.getByText('Stale')).toBeInTheDocument();
     });
 
-    it('renders Relay and Pulse indicator entries', () => {
+    it('renders Relay and Tasks indicator entries', () => {
       render(<TopologyLegend namespaces={SINGLE_NAMESPACE} />);
       expect(screen.getByText('Relay-enabled')).toBeInTheDocument();
-      expect(screen.getByText('Pulse schedules')).toBeInTheDocument();
+      expect(screen.getByText('Tasks schedules')).toBeInTheDocument();
     });
 
     it('renders zoom hint text', () => {
@@ -132,7 +132,9 @@ describe('TopologyLegend', () => {
 
     it('uses var(--color-destructive) for deny rule line', () => {
       const { container } = render(<TopologyLegend namespaces={SINGLE_NAMESPACE} />);
-      const destructiveLines = container.querySelectorAll('line[stroke="var(--color-destructive)"]');
+      const destructiveLines = container.querySelectorAll(
+        'line[stroke="var(--color-destructive)"]'
+      );
       expect(destructiveLines.length).toBeGreaterThan(0);
     });
   });

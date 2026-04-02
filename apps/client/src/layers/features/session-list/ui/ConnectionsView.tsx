@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowUpRight } from 'lucide-react';
+import { ArrowUpRight, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRelayAdapters } from '@/layers/entities/relay';
 import { useRegisteredAgents, useAgentAccess } from '@/layers/entities/mesh';
 import { useBindings } from '@/layers/entities/binding';
-import { useAppStore } from '@/layers/shared/model';
+import { useAppStore, useTransport } from '@/layers/shared/model';
 import type { AgentToolStatus, ChipState } from '@/layers/entities/agent';
 import { useMcpConfig } from '@/layers/entities/agent';
 import {
@@ -15,12 +17,16 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
   ScrollArea,
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
 } from '@/layers/shared/ui';
 import { cn } from '@/layers/shared/lib';
 
 interface ConnectionsViewProps {
   toolStatus: AgentToolStatus;
   agentId: string | null | undefined;
+  activeSessionId: string | null;
 }
 
 const ADAPTER_STATE_COLORS: Record<string, string> = {
@@ -44,7 +50,7 @@ const MCP_STATUS_COLORS: Partial<Record<string, string>> = {
 };
 
 const DORKOS_TOOLS = [
-  { key: 'pulse' as const, label: 'Pulse' },
+  { key: 'tasks' as const, label: 'Tasks' },
   { key: 'relay' as const, label: 'Relay' },
   { key: 'mesh' as const, label: 'Mesh' },
 ] as const;
@@ -83,7 +89,7 @@ const emptyStateVariants = {
 const emptyStateTransition = { duration: 0.15, ease: EASE_OUT } as const;
 
 /** Read-only adapter and agent summary for the sidebar Connections tab. */
-export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
+export function ConnectionsView({ toolStatus, agentId, activeSessionId }: ConnectionsViewProps) {
   const { setRelayOpen, setMeshOpen, setAgentDialogOpen, selectedCwd } = useAppStore();
   const relayEnabled = toolStatus.relay !== 'disabled-by-server';
   const meshEnabled = toolStatus.mesh !== 'disabled-by-server';
@@ -102,7 +108,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
   // the query from firing when agentId is absent.
   const { data: accessData, isLoading: accessLoading } = useAgentAccess(
     agentId ?? '',
-    meshEnabled && !!agentId,
+    meshEnabled && !!agentId
   );
 
   // Show only adapters that are either the built-in CCA (serves all agents) or
@@ -113,7 +119,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
       a.config.type === 'claude-code' && a.config.builtin === true;
     if (!agentId) return adapters.filter(isCca);
     const boundAdapterIds = new Set(
-      bindings.filter((b) => b.agentId === agentId).map((b) => b.adapterId),
+      bindings.filter((b) => b.agentId === agentId).map((b) => b.adapterId)
     );
     return adapters.filter((a) => isCca(a) || boundAdapterIds.has(a.config.id));
   }, [adapters, bindings, agentId]);
@@ -132,6 +138,30 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
 
   const [agentsExpanded, setAgentsExpanded] = useState(false);
   const [mcpExpanded, setMcpExpanded] = useState(false);
+  const [reloading, setReloading] = useState(false);
+
+  const transport = useTransport();
+  const queryClient = useQueryClient();
+
+  const handleReloadPlugins = useCallback(async () => {
+    if (!activeSessionId || reloading) return;
+    setReloading(true);
+    try {
+      const result = await transport.reloadPlugins(activeSessionId);
+      await queryClient.invalidateQueries({ queryKey: ['mcp-config'] });
+      if (result.errorCount > 0) {
+        toast.warning(`Plugins reloaded with ${result.errorCount} error(s)`);
+      } else {
+        toast.success(
+          `Reloaded ${result.pluginCount} plugin(s), ${result.commandCount} command(s)`
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to reload plugins');
+    } finally {
+      setReloading(false);
+    }
+  }, [activeSessionId, reloading, transport, queryClient]);
 
   const showRelaySection = relayEnabled;
   const showMeshSection = meshEnabled;
@@ -154,7 +184,10 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                 <SidebarGroupLabel className="text-2xs text-muted-foreground/70 font-medium tracking-wider uppercase">
                   Adapters
                 </SidebarGroupLabel>
-                <SidebarGroupAction aria-label="Open Relay panel" onClick={() => setRelayOpen(true)}>
+                <SidebarGroupAction
+                  aria-label="Open Relay panel"
+                  onClick={() => setRelayOpen(true)}
+                >
                   <ArrowUpRight />
                 </SidebarGroupAction>
 
@@ -206,7 +239,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                                   'size-2 shrink-0 rounded-full',
                                   ADAPTER_STATE_COLORS[adapter.status.state] ??
                                     'bg-muted-foreground/20',
-                                  adapter.status.state === 'connected' && 'animate-pulse',
+                                  adapter.status.state === 'connected' && 'animate-tasks'
                                 )}
                               />
                               <span className="truncate">{adapter.status.displayName}</span>
@@ -220,7 +253,6 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                     </motion.div>
                   )}
                 </AnimatePresence>
-
               </SidebarGroup>
             </motion.div>
           )}
@@ -290,7 +322,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                               className="text-sm"
                             >
                               {/* Registered agents show a neutral dot — health status requires a separate topology query */}
-                              <span className="size-2 shrink-0 rounded-full bg-muted-foreground/40" />
+                              <span className="bg-muted-foreground/40 size-2 shrink-0 rounded-full" />
                               <span className="truncate">{agent.name}</span>
                             </SidebarMenuButton>
                           </SidebarMenuItem>
@@ -315,7 +347,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                                     onClick={() => setMeshOpen(true)}
                                     className="text-sm"
                                   >
-                                    <span className="size-2 shrink-0 rounded-full bg-muted-foreground/40" />
+                                    <span className="bg-muted-foreground/40 size-2 shrink-0 rounded-full" />
                                     <span className="truncate">{agent.name}</span>
                                   </SidebarMenuButton>
                                 </SidebarMenuItem>
@@ -352,7 +384,6 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                     </button>
                   </div>
                 )}
-
               </SidebarGroup>
             </motion.div>
           )}
@@ -363,7 +394,10 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
           <SidebarGroupLabel className="text-2xs text-muted-foreground/70 font-medium tracking-wider uppercase">
             Tools
           </SidebarGroupLabel>
-          <SidebarGroupAction aria-label="Edit capabilities" onClick={() => setAgentDialogOpen(true)}>
+          <SidebarGroupAction
+            aria-label="Edit capabilities"
+            onClick={() => setAgentDialogOpen(true)}
+          >
             <ArrowUpRight />
           </SidebarGroupAction>
 
@@ -375,10 +409,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                 <SidebarMenuItem key={key}>
                   <SidebarMenuButton className="text-sm" onClick={() => setAgentDialogOpen(true)}>
                     <span
-                      className={cn(
-                        'size-2 shrink-0 rounded-full',
-                        TOOL_STATUS_COLORS[state],
-                      )}
+                      className={cn('size-2 shrink-0 rounded-full', TOOL_STATUS_COLORS[state])}
                     />
                     <span className="truncate">{label}</span>
                     <span className="text-muted-foreground/50 ml-auto text-xs">
@@ -399,7 +430,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                     className={cn(
                       'size-2 shrink-0 rounded-full',
                       MCP_STATUS_COLORS[server.status ?? ''] ?? 'bg-muted-foreground/40',
-                      server.status === 'connected' && 'animate-pulse',
+                      server.status === 'connected' && 'animate-tasks'
                     )}
                   />
                   <span className="truncate">{server.name}</span>
@@ -407,6 +438,28 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
+
+            {/* Reload plugins action */}
+            {activeSessionId && (
+              <SidebarMenuItem>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <SidebarMenuButton
+                      className="text-muted-foreground hover:text-foreground text-xs"
+                      onClick={handleReloadPlugins}
+                      disabled={reloading}
+                      aria-label="Reload plugins"
+                    >
+                      <RefreshCw className={cn('size-3 shrink-0', reloading && 'animate-spin')} />
+                      <span>Reload plugins</span>
+                    </SidebarMenuButton>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    Reload MCP servers and commands from disk
+                  </TooltipContent>
+                </Tooltip>
+              </SidebarMenuItem>
+            )}
           </SidebarMenu>
 
           {/* Block 3: Overflow MCP servers — height-collapse on expand/collapse */}
@@ -428,7 +481,7 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
                           className={cn(
                             'size-2 shrink-0 rounded-full',
                             MCP_STATUS_COLORS[server.status ?? ''] ?? 'bg-muted-foreground/40',
-                            server.status === 'connected' && 'animate-pulse',
+                            server.status === 'connected' && 'animate-tasks'
                           )}
                         />
                         <span className="truncate">{server.name}</span>
@@ -465,7 +518,6 @@ export function ConnectionsView({ toolStatus, agentId }: ConnectionsViewProps) {
               </button>
             </div>
           )}
-
         </SidebarGroup>
       </div>
     </ScrollArea>

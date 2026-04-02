@@ -47,6 +47,21 @@ vi.mock('react-dropzone', () => ({
   }),
 }));
 
+vi.mock('@/layers/shared/model', () => ({
+  useAppStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ isTextStreaming: false })
+  ),
+}));
+
+vi.mock('@/layers/entities/agent', () => ({
+  useCurrentAgent: () => ({ data: null }),
+  useAgentVisual: () => ({ color: '#3b82f6', emoji: '' }),
+}));
+
+vi.mock('@/layers/entities/session', () => ({
+  useDirectoryState: () => [null, vi.fn()],
+}));
+
 import { ChatInputContainer } from '../ui/ChatInputContainer';
 import type { ToolCallState } from '../model/chat-types';
 import { createRef } from 'react';
@@ -90,11 +105,15 @@ const baseProps = {
   onQueueNavigateUp: vi.fn(),
   onQueueNavigateDown: vi.fn(),
   presenceInfo: null,
-  presencePulse: false,
+  presenceTasks: false,
   activeInteraction: null,
   focusedOptionIndex: 0,
   onToolRef: vi.fn(),
   onToolDecided: vi.fn(),
+  backgroundTasks: [],
+  onStopTask: vi.fn(),
+  syncConnectionState: 'connected' as const,
+  syncFailedAttempts: 0,
 };
 
 afterEach(() => {
@@ -135,7 +154,14 @@ describe('ChatInputContainer mode switching', () => {
       input: '{}',
       status: 'pending',
       interactiveType: 'question',
-      questions: [{ question: 'Pick one', options: [{ label: 'A', description: '' }], multiSelect: false, header: 'Q' }],
+      questions: [
+        {
+          question: 'Pick one',
+          options: [{ label: 'A', description: '' }],
+          multiSelect: false,
+          header: 'Q',
+        },
+      ],
     };
     render(<ChatInputContainer {...baseProps} activeInteraction={interaction} />);
     expect(screen.getByTestId('question-prompt')).toBeInTheDocument();

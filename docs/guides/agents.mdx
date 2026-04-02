@@ -3,8 +3,8 @@ title: Agent Identity
 description: Give your projects a name, color, and emoji so you think in agents, not file paths
 ---
 
-import { Steps, Step } from 'fumadocs-ui/components/steps'
-import { Callout } from 'fumadocs-ui/components/callout'
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+import { Callout } from 'fumadocs-ui/components/callout';
 
 # Agent Identity
 
@@ -18,7 +18,7 @@ When a directory has an agent registered:
 - **Tab title** displays the agent's emoji and name
 - **Favicon** reflects the agent's color
 - **Directory picker** recents show agent names for registered directories
-- **Pulse schedules** display agent identity instead of paths
+- **Task schedules** display agent identity instead of paths
 - **Claude sessions** receive agent identity context in the system prompt
 
 Unregistered directories work exactly as before with zero changes.
@@ -30,12 +30,14 @@ Unregistered directories work exactly as before with zero changes.
 ### Quick create from the sidebar
 
 Click the **+ Agent** button next to the directory path in the sidebar. This creates a `.dork/agent.json` file with sensible defaults (name derived from the directory, a deterministic color and emoji).
+
 </Step>
 
 <Step>
 ### Customize in the Agent Dialog
 
 The Agent Settings Dialog opens automatically after creation. Edit the name, description, pick a color and emoji, then close the dialog. Changes save automatically.
+
 </Step>
 </Steps>
 
@@ -78,20 +80,21 @@ Configure how the agent shapes Claude's behavior. See the [Persona Injection](/d
 
 Per-agent tool group toggles and Mesh metadata:
 
-- **Tool Groups** — enable or disable MCP tool domains per agent (Relay tools, Mesh tools, Adapter tools, Pulse tools). Each toggle has three states: inherited (follows global config), enabled, or disabled. Changes take effect on the next session.
+- **Tool Groups** — enable or disable MCP tool domains per agent (Relay tools, Mesh tools, Adapter tools, Tasks tools). Each toggle has three states: inherited (follows global config), enabled, or disabled. Changes take effect on the next session.
 - **Capabilities** — tag-style chips used by Mesh for discovery and routing (e.g., `api-design`, `frontend`)
 - **Namespace** — subject namespace for Relay routing
 - **Response Mode** and **Budget** — behavioral constraints
 
 <Callout type="info">
-Tool group overrides layer on top of server-level feature flags. Disabling a tool group for an agent removes those tools from that agent's sessions only — other agents are unaffected.
+  Tool group overrides layer on top of server-level feature flags. Disabling a tool group for an
+  agent removes those tools from that agent's sessions only — other agents are unaffected.
 </Callout>
 
 ### Connections
 
 A read-only view linking to other subsystems:
 
-- **Pulse schedules** targeting this agent's directory
+- **Task schedules** targeting this agent's directory
 - **Relay endpoints** registered for this agent
 - **Mesh health** status and heartbeat info
 
@@ -106,22 +109,23 @@ Every agent gets a deterministic color and emoji derived from its ID. You can ov
 3. For unregistered directories: deterministic hash from the path
 
 <Callout type="info">
-Clearing a color or emoji override reverts to the deterministic default — no visual identity is ever lost.
+  Clearing a color or emoji override reverts to the deterministic default — no visual identity is
+  ever lost.
 </Callout>
 
 ## API
 
 Agent identity is available via REST endpoints at `/api/agents/`:
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/api/agents/current?path=...` | Get agent for a directory |
-| POST | `/api/agents` | Create a new agent |
-| PATCH | `/api/agents/current?path=...` | Update agent fields |
-| POST | `/api/agents/resolve` | Batch resolve agents for multiple paths |
+| Method | Endpoint                       | Purpose                                 |
+| ------ | ------------------------------ | --------------------------------------- |
+| GET    | `/api/agents/current?path=...` | Get agent for a directory               |
+| POST   | `/api/agents`                  | Create a new agent                      |
+| PATCH  | `/api/agents/current?path=...` | Update agent fields                     |
+| POST   | `/api/agents/resolve`          | Batch resolve agents for multiple paths |
 
 These endpoints are always available — no feature flag needed. All paths are boundary-validated.
 
 ## MCP Tool
 
-Claude sessions can query their own agent identity via the `get_current_agent` MCP tool. This is always available, regardless of whether Mesh is configured.
+Claude sessions can query an agent's identity via the `get_agent` MCP tool, providing either an `agent_id` (ULID) or `cwd` (working directory path). This is always available, regardless of whether Mesh is configured.

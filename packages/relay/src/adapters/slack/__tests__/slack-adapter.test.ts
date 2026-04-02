@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SlackAdapter } from '../index.js';
+import { SlackAdapter, SLACK_MANIFEST } from '../index.js';
 import type { RelayPublisher } from '../../../types.js';
 
 // Mock @slack/bolt
@@ -90,7 +90,7 @@ describe('SlackAdapter', () => {
   // Identity
   it('has correct id, subjectPrefix, and displayName', () => {
     expect(adapter.id).toBe('slack-1');
-    expect(adapter.subjectPrefix).toBe('relay.human.slack');
+    expect(adapter.subjectPrefix).toBe('relay.human.slack.slack-1');
     expect(adapter.displayName).toBe('Slack');
   });
 
@@ -98,7 +98,7 @@ describe('SlackAdapter', () => {
     const custom = new SlackAdapter(
       's2',
       { botToken: 'xoxb-x', appToken: 'xapp-x', signingSecret: 's' },
-      'Work Slack',
+      'Work Slack'
     );
     expect(custom.displayName).toBe('Work Slack');
   });
@@ -171,12 +171,55 @@ describe('SlackAdapter', () => {
     expect(adapter.getStatus().state).toBe('disconnected');
   });
 
+  // Timeout on auth.test()
+
+  it('start() rejects when auth.test() hangs beyond INIT_TIMEOUT_MS', async () => {
+    vi.useFakeTimers();
+
+    // Suppress the expected unhandled rejection from the timeout race under fake timers
+    const suppress = () => {};
+    process.on('unhandledRejection', suppress);
+
+    mockAuthTest.mockReturnValue(new Promise(() => {})); // never resolves
+
+    const startPromise = adapter.start(mockRelay);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(startPromise).rejects.toThrow('timed out');
+
+    // Reset mock so subsequent tests work
+    mockAuthTest.mockResolvedValue({ user_id: 'U_BOT', user: 'dorkos_bot' });
+    await vi.advanceTimersByTimeAsync(0);
+    process.removeListener('unhandledRejection', suppress);
+    vi.useRealTimers();
+  });
+
+  it('testConnection() rejects when auth.test() hangs beyond INIT_TIMEOUT_MS', async () => {
+    vi.useFakeTimers();
+
+    const suppress = () => {};
+    process.on('unhandledRejection', suppress);
+
+    mockAuthTest.mockReturnValue(new Promise(() => {})); // never resolves
+
+    const resultPromise = adapter.testConnection();
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const result = await resultPromise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('timed out');
+
+    mockAuthTest.mockResolvedValue({ user_id: 'U_BOT', user: 'dorkos_bot' });
+    await vi.advanceTimersByTimeAsync(0);
+    process.removeListener('unhandledRejection', suppress);
+    vi.useRealTimers();
+  });
+
   // Deliver
   it('deliver() delegates to outbound module and posts to Slack', async () => {
     await adapter.start(mockRelay);
     const envelope = {
       id: 'e1',
-      subject: 'relay.human.slack.D123',
+      subject: 'relay.human.slack.slack-1.D123',
       from: 'relay.agent.backend',
       budget: {
         hopCount: 0,
@@ -188,7 +231,7 @@ describe('SlackAdapter', () => {
       createdAt: new Date().toISOString(),
       payload: { content: 'Hello from agent!' },
     };
-    const result = await adapter.deliver('relay.human.slack.D123', envelope);
+    const result = await adapter.deliver('relay.human.slack.slack-1.D123', envelope);
     expect(result.success).toBe(true);
     expect(mockPostMessage).toHaveBeenCalled();
   });
@@ -197,7 +240,7 @@ describe('SlackAdapter', () => {
     // Never started — client is null
     const envelope = {
       id: 'e1',
-      subject: 'relay.human.slack.D123',
+      subject: 'relay.human.slack.slack-1.D123',
       from: 'relay.agent.backend',
       budget: {
         hopCount: 0,
@@ -209,9 +252,67 @@ describe('SlackAdapter', () => {
       createdAt: new Date().toISOString(),
       payload: { content: 'Hello' },
     };
-    const result = await adapter.deliver('relay.human.slack.D123', envelope);
+    const result = await adapter.deliver('relay.human.slack.slack-1.D123', envelope);
     expect(result.success).toBe(false);
     expect(result.error).toContain('not started');
+  });
+
+  // Fatal error handling
+  describe('fatal Slack error detection', () => {
+    it('stops the adapter on fatal error code (e.g. invalid_auth)', async () => {
+      await adapter.start(mockRelay);
+      expect(capturedErrorHandler).toBeDefined();
+
+      const fatalError = Object.assign(new Error('An API error occurred'), {
+        code: 'invalid_auth',
+      });
+      await capturedErrorHandler!(fatalError);
+
+      expect(mockAppStop).toHaveBeenCalled();
+      const status = adapter.getStatus();
+      expect(status.state).toBe('error');
+      expect(status.lastError).toContain('invalid_auth');
+      expect(status.lastError).toContain('Re-check your bot token');
+    });
+
+    it('stops the adapter when fatal error is in data.error field', async () => {
+      await adapter.start(mockRelay);
+
+      const fatalError = Object.assign(new Error('An API error occurred'), {
+        data: { error: 'token_revoked' },
+      });
+      await capturedErrorHandler!(fatalError);
+
+      expect(mockAppStop).toHaveBeenCalled();
+      const status = adapter.getStatus();
+      expect(status.state).toBe('error');
+      expect(status.lastError).toContain('token_revoked');
+    });
+
+    it('records non-fatal errors without stopping the adapter', async () => {
+      await adapter.start(mockRelay);
+      mockAppStop.mockClear();
+
+      await capturedErrorHandler!(new Error('rate_limited'));
+
+      expect(mockAppStop).not.toHaveBeenCalled();
+      const status = adapter.getStatus();
+      expect(status.state).toBe('error');
+      expect(status.lastError).toBe('rate_limited');
+    });
+
+    it('produces a descriptive error message mentioning bot token', async () => {
+      await adapter.start(mockRelay);
+
+      const fatalError = Object.assign(new Error('An API error occurred'), {
+        code: 'app_uninstalled',
+      });
+      await capturedErrorHandler!(fatalError);
+
+      const status = adapter.getStatus();
+      expect(status.lastError).toMatch(/Fatal Slack error: app_uninstalled/);
+      expect(status.lastError).toMatch(/Re-check your bot token and app configuration/);
+    });
   });
 
   // getStatus defensiveness
@@ -219,5 +320,60 @@ describe('SlackAdapter', () => {
     const status = adapter.getStatus();
     status.errorCount = 999;
     expect(adapter.getStatus().errorCount).toBe(0);
+  });
+
+  // SLACK_MANIFEST configFields
+  describe('SLACK_MANIFEST configFields', () => {
+    const fieldByKey = (key: string) => SLACK_MANIFEST.configFields.find((f) => f.key === key);
+
+    it('includes respondMode, dmPolicy, dmAllowlist, and channelOverrides fields', () => {
+      expect(fieldByKey('respondMode')).toBeDefined();
+      expect(fieldByKey('dmPolicy')).toBeDefined();
+      expect(fieldByKey('dmAllowlist')).toBeDefined();
+      expect(fieldByKey('channelOverrides')).toBeDefined();
+    });
+
+    it('respondMode is a select field with radio-cards display', () => {
+      const field = fieldByKey('respondMode')!;
+      expect(field.type).toBe('select');
+      expect(field.displayAs).toBe('radio-cards');
+      expect(field.options).toHaveLength(3);
+      expect(field.options!.map((o) => o.value)).toEqual([
+        'thread-aware',
+        'mention-only',
+        'always',
+      ]);
+    });
+
+    it('dmPolicy is a select field with radio-cards display', () => {
+      const field = fieldByKey('dmPolicy')!;
+      expect(field.type).toBe('select');
+      expect(field.displayAs).toBe('radio-cards');
+      expect(field.options).toHaveLength(2);
+      expect(field.options!.map((o) => o.value)).toEqual(['open', 'allowlist']);
+    });
+
+    it('dmAllowlist is a textarea shown only when dmPolicy equals allowlist', () => {
+      const field = fieldByKey('dmAllowlist')!;
+      expect(field.type).toBe('textarea');
+      expect(field.showWhen).toEqual({ field: 'dmPolicy', equals: 'allowlist' });
+    });
+
+    it('channelOverrides is a textarea field', () => {
+      const field = fieldByKey('channelOverrides')!;
+      expect(field.type).toBe('textarea');
+    });
+
+    it('all new fields are in the Access Control section', () => {
+      const newKeys = ['respondMode', 'dmPolicy', 'dmAllowlist', 'channelOverrides'];
+      for (const key of newKeys) {
+        expect(fieldByKey(key)!.section).toBe('Access Control');
+      }
+    });
+
+    it('typingIndicator description mentions enabled by default', () => {
+      const field = fieldByKey('typingIndicator')!;
+      expect(field.description).toContain('Enabled by default');
+    });
   });
 });

@@ -1,11 +1,15 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { PanInfo } from 'motion/react';
-import type { SessionStatusEvent, PresenceUpdateEvent } from '@dorkos/shared/types';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useIsMobile, useAppStore, useTransport } from '@/layers/shared/model';
+import type {
+  SessionStatusEvent,
+  PresenceUpdateEvent,
+  ConnectionState,
+} from '@dorkos/shared/types';
+import { SlidersHorizontal } from 'lucide-react';
+import { useIsMobile, useAppStore } from '@/layers/shared/model';
 import { STORAGE_KEYS, TIMING } from '@/layers/shared/lib';
-import { useSessionStatus } from '@/layers/entities/session';
+import { useSessionStatus, useSessionChatStore, useSubagents } from '@/layers/entities/session';
 import { ShortcutChips } from './ShortcutChips';
 import { DragHandle } from './DragHandle';
 import {
@@ -17,11 +21,27 @@ import {
   CostItem,
   ContextItem,
   NotificationSoundItem,
-  TunnelItem,
-  VersionItem,
+  SyncItem,
+  PollingItem,
   ClientsItem,
+  ConnectionItem,
+  SubagentsItem,
   useGitStatus,
+  StatusBarConfigurePopover,
+  STATUS_BAR_REGISTRY,
+  resetStatusBarPreferences,
 } from '@/layers/features/status';
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from '@/layers/shared/ui';
 
 interface ChatStatusSectionProps {
   sessionId: string;
@@ -29,7 +49,50 @@ interface ChatStatusSectionProps {
   isStreaming: boolean;
   onChipClick: (trigger: string) => void;
   presenceInfo: PresenceUpdateEvent | null;
-  presencePulse: boolean;
+  presenceTasks: boolean;
+  /** SSE sync connection state for the ConnectionItem indicator. */
+  syncConnectionState: ConnectionState;
+  /** Number of failed reconnection attempts. */
+  syncFailedAttempts: number;
+  /** Agent display name for the shortcut chips row. */
+  agentName?: string;
+  /** Agent color (HSL or hex) for the shortcut chips row. */
+  agentColor?: string;
+  /** Agent emoji for the shortcut chips row. */
+  agentEmoji?: string;
+}
+
+interface ItemContextMenuProps {
+  /** The item label from the registry, e.g. "Git Status". Null for non-registry items. */
+  itemLabel: string | null;
+  /** Callback to hide this specific item. Null for non-registry items. */
+  onHide: (() => void) | null;
+  /** Callback to open the configure popover. */
+  onConfigure: () => void;
+  children: React.ReactNode;
+}
+
+function ItemContextMenu({ itemLabel, onHide, onConfigure, children }: ItemContextMenuProps) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger className="inline-flex items-center">{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        {itemLabel && onHide && (
+          <>
+            <ContextMenuItem onClick={onHide}>Hide &ldquo;{itemLabel}&rdquo;</ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem onClick={onConfigure}>Configure status bar...</ContextMenuItem>
+        <ContextMenuItem onClick={resetStatusBarPreferences}>Reset to defaults</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** Look up the human-readable label for a registry item key. */
+function getItemLabel(key: string): string | null {
+  return STATUS_BAR_REGISTRY.find((r) => r.key === key)?.label ?? null;
 }
 
 const SWIPE_THRESHOLD = 80;
@@ -48,7 +111,12 @@ export function ChatStatusSection({
   isStreaming,
   onChipClick,
   presenceInfo,
-  presencePulse,
+  presenceTasks,
+  syncConnectionState,
+  syncFailedAttempts,
+  agentName,
+  agentColor,
+  agentEmoji,
 }: ChatStatusSectionProps) {
   const isMobile = useIsMobile();
 
@@ -57,39 +125,38 @@ export function ChatStatusSection({
   const {
     showShortcutChips,
     showStatusBarCwd,
+    setShowStatusBarCwd,
     showStatusBarPermission,
+    setShowStatusBarPermission,
     showStatusBarModel,
+    setShowStatusBarModel,
     showStatusBarCost,
+    setShowStatusBarCost,
     showStatusBarContext,
+    setShowStatusBarContext,
     showStatusBarGit,
+    setShowStatusBarGit,
     showStatusBarSound,
-    showStatusBarTunnel,
-    showStatusBarVersion,
+    setShowStatusBarSound,
+    showStatusBarSync,
+    setShowStatusBarSync,
+    showStatusBarPolling,
+    setShowStatusBarPolling,
     enableNotificationSound,
     setEnableNotificationSound,
+    enableCrossClientSync,
+    setEnableCrossClientSync,
+    enableMessagePolling,
+    setEnableMessagePolling,
   } = useAppStore();
+  const contextUsage = useSessionChatStore(
+    useCallback((s) => s.sessions[sessionId]?.contextUsage ?? null, [sessionId])
+  );
   const { data: gitStatus } = useGitStatus(status.cwd);
-  const transport = useTransport();
-  const queryClient = useQueryClient();
-  const { data: serverConfig } = useQuery({
-    queryKey: ['config'],
-    queryFn: () => transport.getConfig(),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: subagents } = useSubagents();
 
-  const dismissedVersions = useMemo(
-    () => serverConfig?.dismissedUpgradeVersions ?? [],
-    [serverConfig?.dismissedUpgradeVersions]
-  );
-
-  const handleDismissVersion = useCallback(
-    async (version: string) => {
-      const updated = [...dismissedVersions, version];
-      await transport.updateConfig({ ui: { dismissedUpgradeVersions: updated } });
-      queryClient.invalidateQueries({ queryKey: ['config'] });
-    },
-    [dismissedVersions, transport, queryClient]
-  );
+  // Configure popover state — opened by icon click or from context menus
+  const [configureOpen, setConfigureOpen] = useState(false);
 
   // Mobile-only gesture state
   const [collapsed, setCollapsed] = useState(false);
@@ -125,80 +192,175 @@ export function ChatStatusSection({
   };
 
   // Extracted to avoid duplicating the full JSX tree across mobile/desktop branches
+  const configureIcon = (
+    <TooltipProvider>
+      <Tooltip>
+        <StatusBarConfigurePopover open={configureOpen} onOpenChange={setConfigureOpen}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="Configure status bar"
+              className="text-muted-foreground/50 hover:text-muted-foreground inline-flex shrink-0 items-center transition-colors duration-150"
+            >
+              <SlidersHorizontal className="size-3" />
+            </button>
+          </TooltipTrigger>
+        </StatusBarConfigurePopover>
+        <TooltipContent side="top">
+          <p>Configure status bar</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+
   const statusLineContent = (
-    <StatusLine sessionId={sessionId} isStreaming={isStreaming}>
-      <StatusLine.Item itemKey="cwd" visible={showStatusBarCwd && !!status.cwd}>
-        {status.cwd && <CwdItem cwd={status.cwd} />}
-      </StatusLine.Item>
-      <StatusLine.Item itemKey="git" visible={showStatusBarGit}>
-        <GitStatusItem data={gitStatus} />
-      </StatusLine.Item>
-      <StatusLine.Item itemKey="permission" visible={showStatusBarPermission}>
-        <PermissionModeItem
-          mode={status.permissionMode}
-          onChangeMode={(mode) => status.updateSession({ permissionMode: mode })}
-          disabled={!sessionId}
-        />
-      </StatusLine.Item>
-      <StatusLine.Item itemKey="model" visible={showStatusBarModel}>
-        <ModelItem
-          model={status.model}
-          onChangeModel={(model) => status.updateSession({ model })}
-          disabled={!sessionId}
-        />
-      </StatusLine.Item>
-      <StatusLine.Item itemKey="cost" visible={showStatusBarCost && status.costUsd !== null}>
-        {status.costUsd !== null && <CostItem costUsd={status.costUsd} />}
-      </StatusLine.Item>
-      <StatusLine.Item
-        itemKey="context"
-        visible={showStatusBarContext && status.contextPercent !== null}
-      >
-        {status.contextPercent !== null && <ContextItem percent={status.contextPercent} />}
-      </StatusLine.Item>
-      <StatusLine.Item itemKey="sound" visible={showStatusBarSound}>
-        <NotificationSoundItem
-          enabled={enableNotificationSound}
-          onToggle={() => setEnableNotificationSound(!enableNotificationSound)}
-        />
-      </StatusLine.Item>
-      <StatusLine.Item itemKey="tunnel" visible={showStatusBarTunnel && !!serverConfig?.tunnel}>
-        {/*
-         * serverConfig?.tunnel is safe here: visible guard ensures this only renders
-         * when tunnel exists, but JSX children are evaluated eagerly so we use optional
-         * chaining to avoid crashes when serverConfig is undefined during loading.
-         */}
-        {serverConfig?.tunnel && <TunnelItem tunnel={serverConfig.tunnel} />}
-      </StatusLine.Item>
-      <StatusLine.Item itemKey="version" visible={showStatusBarVersion && !!serverConfig}>
-        {serverConfig && (
-          <VersionItem
-            version={serverConfig.version}
-            latestVersion={serverConfig.latestVersion}
-            isDevMode={serverConfig.isDevMode}
-            isDismissed={
-              serverConfig.latestVersion
-                ? dismissedVersions.includes(serverConfig.latestVersion)
-                : false
-            }
-            onDismiss={handleDismissVersion}
-          />
-        )}
-      </StatusLine.Item>
-      <StatusLine.Item
-        itemKey="clients"
-        visible={!!presenceInfo && presenceInfo.clientCount > 1}
-      >
-        {presenceInfo && (
-          <ClientsItem
-            clientCount={presenceInfo.clientCount}
-            clients={presenceInfo.clients}
-            lockInfo={presenceInfo.lockInfo}
-            pulse={presencePulse}
-          />
-        )}
-      </StatusLine.Item>
-    </StatusLine>
+    <div className="flex items-center gap-2 pt-2">
+      <ContextMenu>
+        <ContextMenuTrigger className="min-w-0 flex-1">
+          <StatusLine sessionId={sessionId} isStreaming={isStreaming}>
+            <StatusLine.Item itemKey="cwd" visible={showStatusBarCwd && !!status.cwd}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('cwd')}
+                onHide={() => setShowStatusBarCwd(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                {status.cwd && <CwdItem cwd={status.cwd} />}
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="git" visible={showStatusBarGit}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('git')}
+                onHide={() => setShowStatusBarGit(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                <GitStatusItem data={gitStatus} />
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="permission" visible={showStatusBarPermission}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('permission')}
+                onHide={() => setShowStatusBarPermission(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                <PermissionModeItem
+                  mode={status.permissionMode}
+                  onChangeMode={(mode) => status.updateSession({ permissionMode: mode })}
+                  disabled={!sessionId}
+                />
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="model" visible={showStatusBarModel}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('model')}
+                onHide={() => setShowStatusBarModel(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                <ModelItem
+                  model={status.model}
+                  onChangeModel={(model) => status.updateSession({ model })}
+                  effort={status.effort}
+                  onChangeEffort={(effort) => status.updateSession({ effort: effort ?? undefined })}
+                  disabled={!sessionId}
+                />
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="cost" visible={showStatusBarCost && status.costUsd !== null}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('cost')}
+                onHide={() => setShowStatusBarCost(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                {status.costUsd !== null && <CostItem costUsd={status.costUsd} />}
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item
+              itemKey="context"
+              visible={showStatusBarContext && status.contextPercent !== null}
+            >
+              <ItemContextMenu
+                itemLabel={getItemLabel('context')}
+                onHide={() => setShowStatusBarContext(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                {status.contextPercent !== null && (
+                  <ContextItem percent={status.contextPercent} contextUsage={contextUsage} />
+                )}
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="sound" visible={showStatusBarSound}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('sound')}
+                onHide={() => setShowStatusBarSound(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                <NotificationSoundItem
+                  enabled={enableNotificationSound}
+                  onToggle={() => setEnableNotificationSound(!enableNotificationSound)}
+                />
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="sync" visible={showStatusBarSync}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('sync')}
+                onHide={() => setShowStatusBarSync(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                <SyncItem
+                  enabled={enableCrossClientSync}
+                  onToggle={() => setEnableCrossClientSync(!enableCrossClientSync)}
+                />
+              </ItemContextMenu>
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="polling" visible={showStatusBarPolling}>
+              <ItemContextMenu
+                itemLabel={getItemLabel('polling')}
+                onHide={() => setShowStatusBarPolling(false)}
+                onConfigure={() => setConfigureOpen(true)}
+              >
+                <PollingItem
+                  enabled={enableMessagePolling}
+                  onToggle={() => setEnableMessagePolling(!enableMessagePolling)}
+                />
+              </ItemContextMenu>
+            </StatusLine.Item>
+            {/*
+             * System-managed items: connection and clients are not user-toggleable.
+             * They are not wrapped with ItemContextMenu — they will fall through to
+             * the background ContextMenu if right-clicked.
+             */}
+            <ConnectionItem
+              connectionState={syncConnectionState}
+              failedAttempts={syncFailedAttempts}
+            />
+            <StatusLine.Item
+              itemKey="clients"
+              visible={!!presenceInfo && presenceInfo.clientCount > 1}
+            >
+              {presenceInfo && (
+                <ClientsItem
+                  clientCount={presenceInfo.clientCount}
+                  clients={presenceInfo.clients}
+                  lockInfo={presenceInfo.lockInfo}
+                  tasks={presenceTasks}
+                />
+              )}
+            </StatusLine.Item>
+            <StatusLine.Item itemKey="subagents" visible={!!subagents && subagents.length > 0}>
+              {subagents && subagents.length > 0 && <SubagentsItem subagents={subagents} />}
+            </StatusLine.Item>
+          </StatusLine>
+        </ContextMenuTrigger>
+        {/* Background context menu — fires when right-clicking the status bar but not on a specific item */}
+        <ContextMenuContent>
+          <ContextMenuItem onClick={() => setConfigureOpen(true)}>
+            Configure status bar...
+          </ContextMenuItem>
+          <ContextMenuItem onClick={resetStatusBarPreferences}>Reset to defaults</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {/* Configure icon — right-aligned, stable position independent of item changes */}
+      {configureIcon}
+    </div>
   );
 
   if (isMobile) {
@@ -237,7 +399,14 @@ export function ChatStatusSection({
               onDragEnd={handleDragEnd}
               style={{ touchAction: 'pan-y' }}
             >
-              {showShortcutChips && <ShortcutChips onChipClick={onChipClick} />}
+              {showShortcutChips && (
+                <ShortcutChips
+                  onChipClick={onChipClick}
+                  agentName={agentName}
+                  agentColor={agentColor}
+                  agentEmoji={agentEmoji}
+                />
+              )}
               {statusLineContent}
             </motion.div>
           )}
@@ -249,7 +418,14 @@ export function ChatStatusSection({
   return (
     <>
       <AnimatePresence>
-        {showShortcutChips && <ShortcutChips onChipClick={onChipClick} />}
+        {showShortcutChips && (
+          <ShortcutChips
+            onChipClick={onChipClick}
+            agentName={agentName}
+            agentColor={agentColor}
+            agentEmoji={agentEmoji}
+          />
+        )}
       </AnimatePresence>
       {statusLineContent}
     </>

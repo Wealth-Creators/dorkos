@@ -1,10 +1,24 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { ChevronDown, Loader2, Search, FolderSearch } from 'lucide-react';
-import { useMeshScanRoots, useRegisteredAgents, useRegisterAgent, useDenyAgent } from '@/layers/entities/mesh';
-import { useDiscoveryScan, useDiscoveryStore, CandidateCard } from '@/layers/entities/discovery';
-import type { DiscoveryCandidate } from '@dorkos/shared/mesh-schemas';
-import { ScanRootInput } from './ScanRootInput';
+import {
+  useMeshScanRoots,
+  useRegisteredAgents,
+  useRegisterAgent,
+  useDenyAgent,
+} from '@/layers/entities/mesh';
+import {
+  useDiscoveryScan,
+  useDiscoveryStore,
+  useActedPaths,
+  buildRegistrationOverrides,
+  sortCandidates,
+  CandidateCard,
+  ExistingAgentCard,
+  ScanRootInput,
+} from '@/layers/entities/discovery';
+import type { DiscoveryCandidate, ExistingAgent } from '@dorkos/shared/mesh-schemas';
+import { Button } from '@/layers/shared/ui';
 
 const DETECTION_STRATEGIES = [
   { name: 'claude-code', signal: 'CLAUDE.md', label: 'Claude Code project' },
@@ -25,10 +39,18 @@ export function DiscoveryView({ fullBleed = false }: DiscoveryViewProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [depth, setDepth] = useState(3);
   const { startScan } = useDiscoveryScan();
-  const { candidates, isScanning: isPending } = useDiscoveryStore();
+  const {
+    candidates,
+    existingAgents,
+    isScanning: isPending,
+    progress,
+    error,
+    lastScanAt,
+  } = useDiscoveryStore();
   const { mutate: registerAgent } = useRegisterAgent();
   const { mutate: denyAgent } = useDenyAgent();
   const { data: agentsResult } = useRegisteredAgents();
+  const { actedPaths, markActed, resetActed } = useActedPaths();
 
   // Use local edits if user has modified, otherwise use persisted roots
   const displayRoots = localRoots ?? roots;
@@ -40,23 +62,30 @@ export function DiscoveryView({ fullBleed = false }: DiscoveryViewProps) {
 
   function handleScan() {
     if (displayRoots.length > 0) {
+      resetActed();
       startScan({ roots: displayRoots, maxDepth: depth });
     }
   }
 
-  const [actedPaths, setActedPaths] = useState<Set<string>>(new Set());
-  const visibleCandidates = candidates.filter((c) => !actedPaths.has(c.path));
+  // Sort candidates after scan completes for stable display
+  const displayCandidates = useMemo(
+    () => (isPending ? candidates : sortCandidates(candidates)),
+    [candidates, isPending]
+  );
 
-  function markActed(path: string) {
-    setActedPaths((prev) => new Set([...prev, path]));
-  }
+  const visibleCandidates = displayCandidates.filter((c) => !actedPaths.has(c.path));
+  const hasRegistered = (agentsResult?.agents?.length ?? 0) > 0;
+  const hasExisting = existingAgents.length > 0;
+  const hasCandidates = candidates.length > 0;
+  const hasResults = hasExisting || hasCandidates;
+  const scanComplete = !isPending && lastScanAt !== null;
 
   return (
     <div className={fullBleed ? 'flex h-full flex-col p-6' : 'space-y-4 p-4'}>
       {fullBleed && (
         <div className="mb-4 space-y-1">
           <h2 className="text-lg font-semibold">Discover Agents</h2>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             Scan directories to find agents on your computer.
           </p>
         </div>
@@ -68,7 +97,7 @@ export function DiscoveryView({ fullBleed = false }: DiscoveryViewProps) {
           <button
             type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
           >
             <ChevronDown
               className={`size-3 transition-transform ${showAdvanced ? '' : '-rotate-90'}`}
@@ -76,10 +105,10 @@ export function DiscoveryView({ fullBleed = false }: DiscoveryViewProps) {
             Advanced
           </button>
           {showAdvanced && (
-            <div className="mt-2 space-y-3 rounded-lg border bg-muted/30 p-3">
+            <div className="bg-muted/30 mt-2 space-y-3 rounded-lg border p-3">
               <ScanRootInput roots={displayRoots} onChange={handleRootsChange} />
               <div className="flex items-center gap-3">
-                <label htmlFor="scan-depth" className="text-xs text-muted-foreground">
+                <label htmlFor="scan-depth" className="text-muted-foreground text-xs">
                   Scan depth
                 </label>
                 <input
@@ -94,15 +123,15 @@ export function DiscoveryView({ fullBleed = false }: DiscoveryViewProps) {
                 <span className="min-w-[1.5rem] text-center text-xs font-medium">{depth}</span>
               </div>
               <div className="space-y-1.5">
-                <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                <p className="text-muted-foreground flex items-center gap-1 text-xs">
                   <FolderSearch className="size-3" />
                   Detection strategies
                 </p>
                 <ul className="space-y-1 pl-4">
                   {DETECTION_STRATEGIES.map((s) => (
                     <li key={s.name} className="flex items-baseline gap-1.5">
-                      <code className="text-[10px] text-foreground/70">{s.signal}</code>
-                      <span className="text-[10px] text-muted-foreground">→ {s.label}</span>
+                      <code className="text-foreground/70 text-[10px]">{s.signal}</code>
+                      <span className="text-muted-foreground text-[10px]">→ {s.label}</span>
                     </li>
                   ))}
                 </ul>
@@ -111,46 +140,69 @@ export function DiscoveryView({ fullBleed = false }: DiscoveryViewProps) {
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={handleScan}
-          disabled={isPending || displayRoots.length === 0}
-          className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-        >
-          {isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Search className="size-4" />
-          )}
+        <Button onClick={handleScan} disabled={isPending || displayRoots.length === 0}>
+          {isPending ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
           Scan for Agents
-        </button>
+        </Button>
       </div>
 
       {/* Results */}
       <div className={fullBleed ? 'mt-4 flex-1 overflow-y-auto' : ''}>
         {isPending && (
-          <div className="flex items-center justify-center p-8">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          <div className="flex flex-col items-center justify-center gap-2 p-8">
+            <Loader2 className="text-muted-foreground size-5 animate-spin" />
+            {progress && (
+              <div className="text-muted-foreground space-y-0.5 text-center text-xs">
+                <p>Scanned {progress.scannedDirs} directories</p>
+                <p>
+                  Found {progress.foundAgents} agent{progress.foundAgents === 1 ? '' : 's'}
+                </p>
+              </div>
+            )}
           </div>
         )}
 
-        {!isPending && visibleCandidates && visibleCandidates.length === 0 && (() => {
-          const hasRegistered = (agentsResult?.agents?.length ?? 0) > 0;
-          return (
-            <div className="rounded-xl border border-dashed p-8 text-center">
-              <p className="text-sm font-medium">
-                {hasRegistered ? 'No new agents found' : 'No agents found'}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {hasRegistered
-                  ? 'All discovered agents are already registered. Check the Agents tab to see them.'
-                  : 'Try scanning deeper directories or adding different paths.'}
-              </p>
-            </div>
-          );
-        })()}
+        {/* Error banner */}
+        {error && (
+          <div className="border-destructive/30 bg-destructive/5 text-destructive mb-3 rounded-lg border px-4 py-3 text-sm">
+            {error}
+          </div>
+        )}
 
-        {!isPending && visibleCandidates && visibleCandidates.length > 0 && (
+        {/* Existing agents — already registered, display-only */}
+        {scanComplete && hasExisting && (
+          <div className="mb-3 space-y-2">
+            {existingAgents.map((agent: ExistingAgent) => (
+              <ExistingAgentCard key={agent.path} agent={agent} />
+            ))}
+          </div>
+        )}
+
+        {/* No-results messaging — only after a scan has completed */}
+        {scanComplete && !hasCandidates && hasExisting && (
+          <div className="rounded-xl border border-dashed p-8 text-center">
+            <p className="text-sm font-medium">All agents already registered</p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              All discovered agents are already configured. Check the Agents tab to see them.
+            </p>
+          </div>
+        )}
+
+        {scanComplete && !hasResults && (
+          <div className="rounded-xl border border-dashed p-8 text-center">
+            <p className="text-sm font-medium">
+              {hasRegistered ? 'No new agents found' : 'No agents found'}
+            </p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              {hasRegistered
+                ? 'All discovered agents are already registered. Check the Agents tab to see them.'
+                : 'Try scanning deeper directories or adding different paths.'}
+            </p>
+          </div>
+        )}
+
+        {/* New candidates — require user action */}
+        {scanComplete && visibleCandidates.length > 0 && (
           <AnimatePresence mode="popLayout">
             {visibleCandidates.map((c: DiscoveryCandidate) => (
               <CandidateCard
@@ -161,16 +213,12 @@ export function DiscoveryView({ fullBleed = false }: DiscoveryViewProps) {
                   registerAgent(
                     {
                       path: cand.path,
-                      overrides: {
-                        name: cand.hints.suggestedName,
-                        runtime: cand.hints.detectedRuntime,
-                        ...(cand.hints.inferredCapabilities ? { capabilities: cand.hints.inferredCapabilities } : {}),
-                        ...(cand.hints.description ? { description: cand.hints.description } : {}),
-                      },
+                      overrides: buildRegistrationOverrides(cand),
                     },
-                    { onSuccess: () => markActed(cand.path) },
+                    { onSuccess: () => markActed(cand.path) }
                   )
                 }
+                onSkip={(cand) => markActed(cand.path)}
                 onDeny={(cand) =>
                   denyAgent({ path: cand.path }, { onSuccess: () => markActed(cand.path) })
                 }

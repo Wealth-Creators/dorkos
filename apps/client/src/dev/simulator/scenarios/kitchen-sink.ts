@@ -1,7 +1,7 @@
 import { createUserMessage, createAssistantMessage, createToolCall } from '../../mock-chat-data';
 import { buildStreamingTextSteps } from '../sim-helpers';
 import type { SimScenario } from '../sim-types';
-import type { SubagentPart } from '@dorkos/shared/types';
+import type { BackgroundTaskPart } from '@dorkos/shared/types';
 
 const USER_MSG = createUserMessage({
   id: 'sim-ks-user',
@@ -14,7 +14,8 @@ const ASST_MSG = createAssistantMessage({
   parts: [{ type: 'text', text: '' }],
 });
 
-const INTRO_TEXT = "I'll build a complete auth system with JWT access tokens, refresh token rotation, and comprehensive test coverage. Let me start by exploring the codebase to understand the existing structure and dependencies.\n\n";
+const INTRO_TEXT =
+  "I'll build a complete auth system with JWT access tokens, refresh token rotation, and comprehensive test coverage. Let me start by exploring the codebase to understand the existing structure and dependencies.\n\n";
 
 const READ_TOOL = createToolCall({
   toolCallId: 'sim-ks-read',
@@ -23,17 +24,20 @@ const READ_TOOL = createToolCall({
   status: 'pending',
 });
 
-const SUBAGENT_PART: SubagentPart = {
-  type: 'subagent',
+const SUBAGENT_PART: BackgroundTaskPart = {
+  type: 'background_task',
   taskId: 'sim-ks-sub',
-  description: 'Research JWT best practices and token rotation patterns',
+  taskType: 'agent',
   status: 'running',
+  startedAt: Date.now(),
+  description: 'Research JWT best practices and token rotation patterns',
   toolUses: 3,
   lastToolName: 'WebSearch',
   durationMs: 8200,
 };
 
-const MIDDLE_TEXT = "\n\nBased on the research, here's the implementation plan. I want to confirm the token storage approach before proceeding — this is an important security decision.\n\n";
+const MIDDLE_TEXT =
+  "\n\nBased on the research, here's the implementation plan. I want to confirm the token storage approach before proceeding — this is an important security decision.\n\n";
 
 const QUESTION_TOOL = createToolCall({
   toolCallId: 'sim-ks-question',
@@ -57,7 +61,8 @@ const QUESTION_TOOL = createToolCall({
   ],
 });
 
-const POST_QUESTION_TEXT = "\n\nPerfect. I'll use httpOnly cookies for refresh tokens — that's the most secure approach since they can't be accessed via JavaScript. Now let me implement the auth module.\n\n";
+const POST_QUESTION_TEXT =
+  "\n\nPerfect. I'll use httpOnly cookies for refresh tokens — that's the most secure approach since they can't be accessed via JavaScript. Now let me implement the auth module.\n\n";
 
 const WRITE_TOOL = createToolCall({
   toolCallId: 'sim-ks-write',
@@ -66,7 +71,8 @@ const WRITE_TOOL = createToolCall({
   status: 'pending',
 });
 
-const POST_WRITE_TEXT = "\n\nThe auth module is written. Now I need to run the test suite, which requires executing shell commands. Let me ask for approval.\n\n";
+const POST_WRITE_TEXT =
+  '\n\nThe auth module is written. Now I need to run the test suite, which requires executing shell commands. Let me ask for approval.\n\n';
 
 const APPROVAL_TOOL = createToolCall({
   toolCallId: 'sim-ks-approval',
@@ -76,7 +82,8 @@ const APPROVAL_TOOL = createToolCall({
   interactiveType: 'approval',
 });
 
-const FINAL_TEXT = "Authentication system is complete. All tests pass and the JWT implementation follows best practices:\n\n- **Access tokens** use RS256 signing with 15-minute expiry\n- **Refresh tokens** stored in httpOnly cookies with 7-day expiry and automatic rotation\n- **Key rotation** happens every 24 hours with graceful old-key acceptance\n- **12 tests** cover token generation, validation, refresh flow, rotation, and error cases\n\nThe system is production-ready and resistant to common attack vectors like XSS token theft and replay attacks.";
+const FINAL_TEXT =
+  'Authentication system is complete. All tests pass and the JWT implementation follows best practices:\n\n- **Access tokens** use RS256 signing with 15-minute expiry\n- **Refresh tokens** stored in httpOnly cookies with 7-day expiry and automatic rotation\n- **Key rotation** happens every 24 hours with graceful old-key acceptance\n- **12 tests** cover token generation, validation, refresh flow, rotation, and error cases\n\nThe system is production-ready and resistant to common attack vectors like XSS token theft and replay attacks.';
 
 /** Demonstrates all message types in sequence: text → tools → subagent → question → approval → done. */
 export const kitchenSink: SimScenario = {
@@ -94,12 +101,22 @@ export const kitchenSink: SimScenario = {
 
     // Read tool
     { type: 'append_tool_call', messageId: 'sim-ks-asst', toolCall: READ_TOOL, delayMs: 200 },
-    { type: 'update_tool_call', messageId: 'sim-ks-asst', toolCallId: 'sim-ks-read', patch: { status: 'running' }, delayMs: 1200 },
     {
       type: 'update_tool_call',
       messageId: 'sim-ks-asst',
       toolCallId: 'sim-ks-read',
-      patch: { status: 'complete', result: 'export const config = {\n  jwtSecret: process.env.JWT_SECRET,\n  tokenExpiry: "15m",\n  refreshExpiry: "7d",\n}' },
+      patch: { status: 'running' },
+      delayMs: 1200,
+    },
+    {
+      type: 'update_tool_call',
+      messageId: 'sim-ks-asst',
+      toolCallId: 'sim-ks-read',
+      patch: {
+        status: 'complete',
+        result:
+          'export const config = {\n  jwtSecret: process.env.JWT_SECRET,\n  tokenExpiry: "15m",\n  refreshExpiry: "7d",\n}',
+      },
       delayMs: 600,
     },
 
@@ -133,7 +150,13 @@ export const kitchenSink: SimScenario = {
 
     // Write tool
     { type: 'append_tool_call', messageId: 'sim-ks-asst', toolCall: WRITE_TOOL, delayMs: 200 },
-    { type: 'update_tool_call', messageId: 'sim-ks-asst', toolCallId: 'sim-ks-write', patch: { status: 'running' }, delayMs: 1600 },
+    {
+      type: 'update_tool_call',
+      messageId: 'sim-ks-asst',
+      toolCallId: 'sim-ks-write',
+      patch: { status: 'running' },
+      delayMs: 1600,
+    },
     {
       type: 'update_tool_call',
       messageId: 'sim-ks-asst',
@@ -151,7 +174,13 @@ export const kitchenSink: SimScenario = {
     { type: 'append_tool_call', messageId: 'sim-ks-asst', toolCall: APPROVAL_TOOL },
     { type: 'set_waiting', isWaiting: true, waitingType: 'approval', delayMs: 4000 },
     { type: 'set_waiting', isWaiting: false },
-    { type: 'update_tool_call', messageId: 'sim-ks-asst', toolCallId: 'sim-ks-approval', patch: { status: 'running' }, delayMs: 2400 },
+    {
+      type: 'update_tool_call',
+      messageId: 'sim-ks-asst',
+      toolCallId: 'sim-ks-approval',
+      patch: { status: 'running' },
+      delayMs: 2400,
+    },
     {
       type: 'update_tool_call',
       messageId: 'sim-ks-asst',

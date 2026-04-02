@@ -23,7 +23,9 @@ vi.mock('@/layers/entities/mesh/model/use-mesh-agents', () => ({
 }));
 
 // Mock useAgentAccess
-const mockAgentAccess = vi.fn<() => { data: { agents: AgentManifest[] } | undefined; isLoading: boolean }>(() => ({
+const mockAgentAccess = vi.fn<
+  () => { data: { agents: AgentManifest[] } | undefined; isLoading: boolean }
+>(() => ({
   data: undefined,
   isLoading: false,
 }));
@@ -39,12 +41,33 @@ vi.mock('@/layers/entities/binding/model/use-bindings', () => ({
 }));
 
 // Mock useMcpConfig
-const mockMcpConfig = vi.fn<() => { data: { servers: { name: string; type: string; status?: string }[] } | undefined }>(() => ({
+const mockMcpConfig = vi.fn<
+  () => { data: { servers: { name: string; type: string; status?: string }[] } | undefined }
+>(() => ({
   data: { servers: [] },
 }));
 vi.mock('@/layers/entities/agent/model/use-mcp-config', () => ({
   useMcpConfig: () => mockMcpConfig(),
 }));
+
+// Mock useTransport
+vi.mock('@/layers/shared/model/TransportContext', () => ({
+  useTransport: () => ({
+    reloadPlugins: vi.fn().mockResolvedValue({ commandCount: 0, pluginCount: 0, errorCount: 0 }),
+  }),
+}));
+
+// Mock useQueryClient
+vi.mock('@tanstack/react-query', async () => {
+  const actual =
+    await vi.importActual<typeof import('@tanstack/react-query')>('@tanstack/react-query');
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      invalidateQueries: vi.fn().mockResolvedValue(undefined),
+    }),
+  };
+});
 
 // Mock app store — capture setRelayOpen / setMeshOpen / setAgentDialogOpen calls
 const mockSetRelayOpen = vi.fn();
@@ -89,7 +112,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 }
 
 const enabledToolStatus: AgentToolStatus = {
-  pulse: 'enabled',
+  tasks: 'enabled',
   relay: 'enabled',
   mesh: 'enabled',
   adapter: 'enabled',
@@ -99,7 +122,7 @@ const enabledToolStatus: AgentToolStatus = {
 function makeAdapter(
   id: string,
   displayName: string,
-  state: 'connected' | 'disconnected' | 'error' | 'starting' | 'stopping',
+  state: 'connected' | 'disconnected' | 'error' | 'starting' | 'stopping'
 ): AdapterListItem {
   return {
     config: {
@@ -142,7 +165,10 @@ function makeAgent(id: string, name: string): AgentManifest {
 }
 
 /** Build a minimal MCP server entry for testing. */
-function makeMcpServer(name: string, status?: string): { name: string; type: string; status?: string } {
+function makeMcpServer(
+  name: string,
+  status?: string
+): { name: string; type: string; status?: string } {
   return { name, type: 'stdio', ...(status !== undefined && { status }) };
 }
 
@@ -172,7 +198,12 @@ describe('ConnectionsView', () => {
     mockBindings.mockReturnValue({
       data: [makeBinding('a1', AGENT_ID), makeBinding('a2', AGENT_ID)],
     });
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByText('Adapters')).toBeInTheDocument();
     expect(screen.getByText('Telegram')).toBeInTheDocument();
     expect(screen.getByText('Slack')).toBeInTheDocument();
@@ -187,7 +218,12 @@ describe('ConnectionsView', () => {
     });
     // Only a1 is bound to AGENT_ID
     mockBindings.mockReturnValue({ data: [makeBinding('a1', AGENT_ID)] });
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByText('Telegram')).toBeInTheDocument();
     expect(screen.queryByText('Slack')).not.toBeInTheDocument();
   });
@@ -196,26 +232,37 @@ describe('ConnectionsView', () => {
     mockRegisteredAgents.mockReturnValue({
       data: { agents: [makeAgent('ag1', 'Deployer')] },
     });
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByText('Agents')).toBeInTheDocument();
     expect(screen.getByText('Deployer')).toBeInTheDocument();
   });
 
   it('hides Adapters section when Relay is disabled-by-server', () => {
     const toolStatus: AgentToolStatus = { ...enabledToolStatus, relay: 'disabled-by-server' };
-    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} activeSessionId={null} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.queryByText('Adapters')).not.toBeInTheDocument();
   });
 
   it('shows disabled state when Relay is disabled-by-agent', () => {
     const toolStatus: AgentToolStatus = { ...enabledToolStatus, relay: 'disabled-by-agent' };
-    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} activeSessionId={null} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText('Relay disabled for this agent')).toBeInTheDocument();
   });
 
   it('shows disabled state when Mesh is disabled-by-agent', () => {
     const toolStatus: AgentToolStatus = { ...enabledToolStatus, mesh: 'disabled-by-agent' };
-    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} activeSessionId={null} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.getByText('Mesh disabled for this agent')).toBeInTheDocument();
   });
 
@@ -225,40 +272,67 @@ describe('ConnectionsView', () => {
       relay: 'disabled-by-server',
       mesh: 'disabled-by-server',
     };
-    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(<ConnectionsView toolStatus={toolStatus} agentId={AGENT_ID} activeSessionId={null} />, {
+      wrapper: Wrapper,
+    });
     expect(screen.queryByText('Adapters')).not.toBeInTheDocument();
     expect(screen.queryByText('Agents')).not.toBeInTheDocument();
     expect(screen.getByText('Tools')).toBeInTheDocument();
   });
 
   it('Open Relay button calls setRelayOpen(true)', () => {
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     const btn = screen.getByRole('button', { name: /Open Relay/ });
     fireEvent.click(btn);
     expect(mockSetRelayOpen).toHaveBeenCalledWith(true);
   });
 
   it('Open Mesh button calls setMeshOpen(true)', () => {
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     const btn = screen.getByRole('button', { name: /Open Mesh/ });
     fireEvent.click(btn);
     expect(mockSetMeshOpen).toHaveBeenCalledWith(true);
   });
 
   it('Edit capabilities button calls setAgentDialogOpen(true)', () => {
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     const btn = screen.getByRole('button', { name: /Edit capabilities/ });
     fireEvent.click(btn);
     expect(mockSetAgentDialogOpen).toHaveBeenCalledWith(true);
   });
 
   it('renders empty adapter state when no adapters configured', () => {
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByText('No adapters configured')).toBeInTheDocument();
   });
 
   it('renders empty agents state when no agents registered', () => {
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByText('No agents registered')).toBeInTheDocument();
   });
 
@@ -267,7 +341,12 @@ describe('ConnectionsView', () => {
       data: [makeAdapter('a1', 'Telegram', 'connected')],
     });
     mockBindings.mockReturnValue({ data: [makeBinding('a1', AGENT_ID)] });
-    render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+    render(
+      <ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} activeSessionId={null} />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByText('connected')).toBeInTheDocument();
   });
 
@@ -276,21 +355,37 @@ describe('ConnectionsView', () => {
       mockRegisteredAgents.mockReturnValue({
         data: { agents: [makeAgent('ag1', 'Alpha'), makeAgent('ag2', 'Beta')] },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('Alpha')).toBeInTheDocument();
       expect(screen.getByText('Beta')).toBeInTheDocument();
     });
 
     it('shows only reachable agents when agentId is set and access data is resolved', () => {
       mockRegisteredAgents.mockReturnValue({
-        data: { agents: [makeAgent('ag1', 'Alpha'), makeAgent('ag2', 'Beta'), makeAgent('ag3', 'Gamma')] },
+        data: {
+          agents: [makeAgent('ag1', 'Alpha'), makeAgent('ag2', 'Beta'), makeAgent('ag3', 'Gamma')],
+        },
       });
       // Only ag1 and ag3 are reachable
       mockAgentAccess.mockReturnValue({
         data: { agents: [makeAgent('ag1', 'Alpha'), makeAgent('ag3', 'Gamma')] },
         isLoading: false,
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView
+          toolStatus={enabledToolStatus}
+          agentId={AGENT_ID}
+          activeSessionId={null}
+        />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('Alpha')).toBeInTheDocument();
       expect(screen.queryByText('Beta')).not.toBeInTheDocument();
       expect(screen.getByText('Gamma')).toBeInTheDocument();
@@ -301,7 +396,16 @@ describe('ConnectionsView', () => {
         data: { agents: [makeAgent('ag1', 'Alpha'), makeAgent('ag2', 'Beta')] },
       });
       mockAgentAccess.mockReturnValue({ data: undefined, isLoading: true });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView
+          toolStatus={enabledToolStatus}
+          agentId={AGENT_ID}
+          activeSessionId={null}
+        />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('Alpha')).toBeInTheDocument();
       expect(screen.getByText('Beta')).toBeInTheDocument();
     });
@@ -312,7 +416,16 @@ describe('ConnectionsView', () => {
       });
       // Error state: data is undefined, isLoading is false
       mockAgentAccess.mockReturnValue({ data: undefined, isLoading: false });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={AGENT_ID} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView
+          toolStatus={enabledToolStatus}
+          agentId={AGENT_ID}
+          activeSessionId={null}
+        />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('Alpha')).toBeInTheDocument();
       expect(screen.getByText('Beta')).toBeInTheDocument();
     });
@@ -325,7 +438,12 @@ describe('ConnectionsView', () => {
           agents: [makeAgent('ag1', 'Alpha'), makeAgent('ag2', 'Beta'), makeAgent('ag3', 'Gamma')],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('Alpha')).toBeInTheDocument();
       expect(screen.getByText('Beta')).toBeInTheDocument();
       expect(screen.getByText('Gamma')).toBeInTheDocument();
@@ -344,7 +462,12 @@ describe('ConnectionsView', () => {
           ],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('Alpha')).toBeInTheDocument();
       expect(screen.getByText('Beta')).toBeInTheDocument();
       expect(screen.getByText('Gamma')).toBeInTheDocument();
@@ -364,7 +487,12 @@ describe('ConnectionsView', () => {
           ],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.queryByText('Delta')).not.toBeInTheDocument();
       fireEvent.click(screen.getByText('+ 1 more agent reachable →'));
       expect(screen.getByText('Delta')).toBeInTheDocument();
@@ -382,7 +510,12 @@ describe('ConnectionsView', () => {
           ],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       fireEvent.click(screen.getByText('+ 1 more agent reachable →'));
       expect(screen.getByText('Delta')).toBeInTheDocument();
       fireEvent.click(screen.getByText('Show less'));
@@ -403,7 +536,12 @@ describe('ConnectionsView', () => {
           ],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('alpha')).toBeInTheDocument();
       expect(screen.getByText('beta')).toBeInTheDocument();
       expect(screen.getByText('gamma')).toBeInTheDocument();
@@ -424,7 +562,12 @@ describe('ConnectionsView', () => {
           ],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.getByText('alpha')).toBeInTheDocument();
       expect(screen.getByText('beta')).toBeInTheDocument();
       expect(screen.getByText('gamma')).toBeInTheDocument();
@@ -446,7 +589,12 @@ describe('ConnectionsView', () => {
           ],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       expect(screen.queryByText('epsilon')).not.toBeInTheDocument();
       fireEvent.click(screen.getByText('+ 1 more server →'));
       expect(screen.getByText('epsilon')).toBeInTheDocument();
@@ -465,7 +613,12 @@ describe('ConnectionsView', () => {
           ],
         },
       });
-      render(<ConnectionsView toolStatus={enabledToolStatus} agentId={null} />, { wrapper: Wrapper });
+      render(
+        <ConnectionsView toolStatus={enabledToolStatus} agentId={null} activeSessionId={null} />,
+        {
+          wrapper: Wrapper,
+        }
+      );
       fireEvent.click(screen.getByText('+ 1 more server →'));
       expect(screen.getByText('epsilon')).toBeInTheDocument();
       fireEvent.click(screen.getByText('Show less'));

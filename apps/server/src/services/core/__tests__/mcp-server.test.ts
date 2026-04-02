@@ -43,10 +43,10 @@ vi.mock('../../runtimes/claude-code/mcp-tools/core-tools.js', () => ({
   handlePing: stubHandler,
   handleGetServerInfo: stubHandler,
   createGetSessionCountHandler: stubFactory,
-  createGetCurrentAgentHandler: stubFactory,
+  createGetAgentHandler: stubFactory,
 }));
 
-vi.mock('../../runtimes/claude-code/mcp-tools/pulse-tools.js', () => ({
+vi.mock('../../runtimes/claude-code/mcp-tools/task-tools.js', () => ({
   createListSchedulesHandler: stubFactory,
   createCreateScheduleHandler: stubFactory,
   createUpdateScheduleHandler: stubFactory,
@@ -82,6 +82,10 @@ vi.mock('../../runtimes/claude-code/mcp-tools/trace-tools.js', () => ({
   createRelayGetMetricsHandler: stubFactory,
 }));
 
+vi.mock('../../runtimes/claude-code/mcp-tools/agent-tools.js', () => ({
+  createCreateAgentHandler: stubFactory,
+}));
+
 vi.mock('../../runtimes/claude-code/mcp-tools/mesh-tools.js', () => ({
   createMeshDiscoverHandler: stubFactory,
   createMeshRegisterHandler: stubFactory,
@@ -91,6 +95,15 @@ vi.mock('../../runtimes/claude-code/mcp-tools/mesh-tools.js', () => ({
   createMeshStatusHandler: stubFactory,
   createMeshInspectHandler: stubFactory,
   createMeshQueryTopologyHandler: stubFactory,
+}));
+
+vi.mock('../../runtimes/claude-code/mcp-tools/extension-tools.js', () => ({
+  createListExtensionsHandler: stubFactory,
+  createGetExtensionErrorsHandler: stubFactory,
+  createGetExtensionApiHandler: stubFactory,
+  createCreateExtensionHandler: stubFactory,
+  createReloadExtensionsHandler: stubFactory,
+  createTestExtensionHandler: stubFactory,
 }));
 
 import { createExternalMcpServer } from '../mcp-server.js';
@@ -110,7 +123,7 @@ function createMinimalDeps(): McpToolDeps {
 function createFullDeps(): McpToolDeps {
   return {
     ...createMinimalDeps(),
-    pulseStore: {} as unknown as McpToolDeps['pulseStore'],
+    taskStore: {} as unknown as McpToolDeps['taskStore'],
     relayCore: {} as unknown as McpToolDeps['relayCore'],
     adapterManager: {} as unknown as McpToolDeps['adapterManager'],
     bindingStore: {} as unknown as McpToolDeps['bindingStore'],
@@ -139,11 +152,11 @@ describe('createExternalMcpServer', () => {
     expect(typeof server.connect).toBe('function');
   });
 
-  it('registers all 33 tools', () => {
+  it('registers all 41 tools', () => {
     // Purpose: regression guard against accidental tool omissions or additions.
     // This count changes intentionally when new MCP tools are added.
     createExternalMcpServer(createMinimalDeps());
-    expect(registeredTools).toHaveLength(33);
+    expect(registeredTools).toHaveLength(40);
   });
 
   it('registers all expected tool names', () => {
@@ -154,22 +167,22 @@ describe('createExternalMcpServer', () => {
     expect(toolNames).toContain('ping');
     expect(toolNames).toContain('get_server_info');
     expect(toolNames).toContain('get_session_count');
-    expect(toolNames).toContain('get_current_agent');
+    expect(toolNames).toContain('get_agent');
 
-    // Pulse tools (5)
-    expect(toolNames).toContain('pulse_list_schedules');
-    expect(toolNames).toContain('pulse_create_schedule');
-    expect(toolNames).toContain('pulse_update_schedule');
-    expect(toolNames).toContain('pulse_delete_schedule');
-    expect(toolNames).toContain('pulse_get_run_history');
+    // Tasks tools (5)
+    expect(toolNames).toContain('tasks_list');
+    expect(toolNames).toContain('tasks_create');
+    expect(toolNames).toContain('tasks_update');
+    expect(toolNames).toContain('tasks_delete');
+    expect(toolNames).toContain('tasks_get_run_history');
 
     // Relay tools (7)
     expect(toolNames).toContain('relay_send');
     expect(toolNames).toContain('relay_inbox');
     expect(toolNames).toContain('relay_list_endpoints');
     expect(toolNames).toContain('relay_register_endpoint');
-    expect(toolNames).toContain('relay_query');
-    expect(toolNames).toContain('relay_dispatch');
+    expect(toolNames).toContain('relay_send_and_wait');
+    expect(toolNames).toContain('relay_send_async');
     expect(toolNames).toContain('relay_unregister_endpoint');
 
     // Adapter tools (4)
@@ -196,6 +209,17 @@ describe('createExternalMcpServer', () => {
     expect(toolNames).toContain('mesh_status');
     expect(toolNames).toContain('mesh_inspect');
     expect(toolNames).toContain('mesh_query_topology');
+
+    // Agent tools (1)
+    expect(toolNames).toContain('create_agent');
+
+    // Extension tools (6)
+    expect(toolNames).toContain('get_extension_api');
+    expect(toolNames).toContain('list_extensions');
+    expect(toolNames).toContain('get_extension_errors');
+    expect(toolNames).toContain('create_extension');
+    expect(toolNames).toContain('reload_extensions');
+    expect(toolNames).toContain('test_extension');
   });
 
   it('registers no duplicate tool names', () => {
@@ -239,15 +263,19 @@ describe('createExternalMcpServer', () => {
     const toolNames = registeredTools.map((t) => t.name);
 
     const coreTools = toolNames.filter(
-      (n) => !n.startsWith('pulse_') && !n.startsWith('relay_') && !n.startsWith('binding_') && !n.startsWith('mesh_')
+      (n) =>
+        !n.startsWith('tasks_') &&
+        !n.startsWith('relay_') &&
+        !n.startsWith('binding_') &&
+        !n.startsWith('mesh_')
     );
-    const pulseTools = toolNames.filter((n) => n.startsWith('pulse_'));
+    const taskTools = toolNames.filter((n) => n.startsWith('tasks_'));
     const relayTools = toolNames.filter((n) => n.startsWith('relay_'));
     const bindingTools = toolNames.filter((n) => n.startsWith('binding_'));
     const meshTools = toolNames.filter((n) => n.startsWith('mesh_'));
 
-    expect(coreTools).toHaveLength(4);
-    expect(pulseTools).toHaveLength(5);
+    expect(coreTools).toHaveLength(11); // 4 core + 1 agent (create_agent) + 6 extension (get_extension_api, list_extensions, get_extension_errors, create_extension, reload_extensions, test_extension)
+    expect(taskTools).toHaveLength(5);
     expect(relayTools).toHaveLength(13); // 7 relay + 4 adapter + 2 trace
     expect(bindingTools).toHaveLength(3);
     expect(meshTools).toHaveLength(8);

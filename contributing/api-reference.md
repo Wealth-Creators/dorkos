@@ -57,9 +57,14 @@ Event types are documented in the `StreamEventType` enum in the OpenAPI spec. Th
 
 - `X-Client-Id` (optional) - Client identifier for session locking. If another client holds the lock, returns 409 `SESSION_LOCKED`.
 
+**Request body:** `SendMessageRequest` (from `@dorkos/shared/schemas`)
+
+- `content` (string, required) - User message text
+- `uiState` (optional) - `UiState` object describing the current client UI state (canvas visibility, content, dimensions). Passed to the agent runtime so agents can reason about UI context.
+
 **Responses:**
 
-- `200` - SSE stream. Event types: `text_delta`, `thinking_delta`, `tool_call_start`, `tool_call_delta`, `tool_call_end`, `tool_result`, `tool_progress`, `approval_required`, `question_prompt`, `error`, `done`, `session_status`, `task_update`, `subagent_started`, `subagent_progress`, `subagent_done`, `rate_limit`, `system_status`, `compact_boundary`, `prompt_suggestion`
+- `200` - SSE stream. Event types: `text_delta`, `thinking_delta`, `tool_call_start`, `tool_call_delta`, `tool_call_end`, `tool_result`, `tool_progress`, `approval_required`, `question_prompt`, `error`, `done`, `session_status`, `task_update`, `background_task_started`, `background_task_progress`, `background_task_done`, `rate_limit`, `system_status`, `compact_boundary`, `prompt_suggestion`, `ui_command`
 - `409` - Session locked by another client. Response body: `{ error: 'Session locked', code: 'SESSION_LOCKED', lockedBy: string, lockedAt: string }`
 
 ### GET /api/sessions/:id/stream
@@ -82,6 +87,31 @@ Persistent SSE connection for session sync. Broadcasts updates when the session'
 - `sync_update` - Sent when JSONL file changes. Data: `{ sessionId: string, timestamp: string }`
 
 **Usage:** Clients should close the connection when no longer viewing the session.
+
+### GET /api/events
+
+Unified SSE stream for all real-time system events. Replaces individual per-resource SSE endpoints (`GET /api/tunnel/stream`, `GET /api/extensions/events`, `GET /api/relay/stream`) with a single multiplexed connection. Clients filter by the SSE `event:` field.
+
+**Events:**
+
+| Event                | Description                      | Payload                                       |
+| -------------------- | -------------------------------- | --------------------------------------------- |
+| `connected`          | Sent on initial connection       | `{ connectedAt: string }` (ISO timestamp)     |
+| `heartbeat`          | Keepalive (every 15 s)           | _(empty)_                                     |
+| `tunnel_status`      | Tunnel state changed             | Tunnel status object                          |
+| `extension_reloaded` | Extension(s) recompiled          | `{ type, extensionIds: string[], timestamp }` |
+| `relay_connected`    | Relay SSE connection established | Connection metadata                           |
+| `relay_message`      | New relay message published      | Relay envelope                                |
+| `relay_backpressure` | Relay back-pressure signal       | Back-pressure details                         |
+| `relay_signal`       | Relay control signal             | Signal payload                                |
+
+**Error responses:**
+
+- `503` - `{ error: 'Too many SSE clients' }` when `SSE.MAX_TOTAL_CLIENTS` (500) is exceeded
+
+**Keepalive:** `event: heartbeat\ndata: \n\n` every 15 seconds.
+
+**Usage:** Open one `EventSource` to `/api/events` and filter on `event.type`. Close when the application unmounts.
 
 ### GET /api/sessions/:id/messages
 
@@ -119,6 +149,25 @@ Fetch the current task list (TodoWrite state) for a session.
 - `304` - Not Modified (when `If-None-Match` matches current `ETag`)
 - `404` - Session not found
 
+### POST /api/sessions/:id/tasks/:taskId/stop
+
+Stop a running background task (subagent or bash command). Delegates to the active runtime's `stopTask` implementation.
+
+**Path params:**
+
+- `id` - Session ID
+- `taskId` - Background task ID
+
+**Headers:**
+
+- `X-Client-Id` (optional) - Client identifier for session locking
+
+**Responses:**
+
+- `200` - `{ ok: true }` — task stop signal sent
+- `404` - Session or task not found
+- `500` - Runtime error stopping task
+
 ### GET /api/config
 
 Returns server runtime information (version, port, uptime, working directory, tunnel status, Claude CLI path).
@@ -129,12 +178,12 @@ Returns server runtime information (version, port, uptime, working directory, tu
 
 **Notable response fields:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `version` | `string` | Current server version string |
-| `latestVersion` | `string \| null` | Latest version from npm, or `null` if dev mode or lookup failed |
-| `isDevMode` | `boolean` | Whether the server is running a development build (from `pnpm dev` or `tsx watch`). When `true`, `latestVersion` will be `null` and upgrade notifications are suppressed in the UI. |
-| `dismissedUpgradeVersions` | `string[]` | List of version strings the user has dismissed upgrade notifications for. Managed via `PATCH /api/config` with `{ ui: { dismissedUpgradeVersions: [...] } }`. |
+| Field                      | Type             | Description                                                                                                                                                                         |
+| -------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                  | `string`         | Current server version string                                                                                                                                                       |
+| `latestVersion`            | `string \| null` | Latest version from npm, or `null` if dev mode or lookup failed                                                                                                                     |
+| `isDevMode`                | `boolean`        | Whether the server is running a development build (from `pnpm dev` or `tsx watch`). When `true`, `latestVersion` will be `null` and upgrade notifications are suppressed in the UI. |
+| `dismissedUpgradeVersions` | `string[]`       | List of version strings the user has dismissed upgrade notifications for. Managed via `PATCH /api/config` with `{ ui: { dismissedUpgradeVersions: [...] } }`.                       |
 
 ### PATCH /api/config
 
@@ -150,7 +199,7 @@ Update user configuration. Accepts a partial config object that is deep-merged w
     "relayTools": true,
     "meshTools": true,
     "adapterTools": true,
-    "pulseTools": false
+    "tasksTools": false
   }
 }
 ```
@@ -170,7 +219,9 @@ The `agentContext` section controls global tool domain toggles. Each toggle dete
     "tunnel": { "enabled": false, "domain": null, "authtoken": null, "auth": null },
     "ui": { "theme": "dark" }
   },
-  "warnings": ["'tunnel.authtoken' contains sensitive data. Consider using environment variables instead."]
+  "warnings": [
+    "'tunnel.authtoken' contains sensitive data. Consider using environment variables instead."
+  ]
 }
 ```
 
@@ -193,21 +244,20 @@ The `warnings` field is only present when the patch includes keys listed in `SEN
 }
 ```
 
-## Pulse Scheduler (`routes/pulse.ts`)
+## Task Scheduler (`routes/tasks.ts`)
 
-Feature-flag guarded via `DORKOS_PULSE_ENABLED`. Router is mounted at `/api/pulse`.
+Feature-flag guarded via `DORKOS_TASKS_ENABLED`. Router is mounted at `/api/tasks`.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/pulse/schedules` | List all schedules |
-| POST | `/api/pulse/schedules` | Create a schedule |
-| PATCH | `/api/pulse/schedules/:id` | Update a schedule |
-| DELETE | `/api/pulse/schedules/:id` | Delete a schedule |
-| POST | `/api/pulse/schedules/:id/trigger` | Trigger a schedule run |
-| GET | `/api/pulse/runs` | Get run history |
-| GET | `/api/pulse/runs/:id` | Get a specific run |
-| POST | `/api/pulse/runs/:id/cancel` | Cancel an active run |
-| GET | `/api/pulse/presets` | List default schedule presets |
+| Method | Path                         | Description               |
+| ------ | ---------------------------- | ------------------------- |
+| GET    | `/api/tasks`                 | List all task definitions |
+| POST   | `/api/tasks`                 | Create a task definition  |
+| PATCH  | `/api/tasks/:id`             | Update a task definition  |
+| DELETE | `/api/tasks/:id`             | Delete a task definition  |
+| POST   | `/api/tasks/:id/trigger`     | Trigger a task run        |
+| GET    | `/api/tasks/runs`            | Get run history           |
+| GET    | `/api/tasks/runs/:id`        | Get a specific run        |
+| POST   | `/api/tasks/runs/:id/cancel` | Cancel an active run      |
 
 Schedules support an optional `agentId` field for agent-linked scheduling. When `agentId` is set, the schedule's CWD is resolved from the agent's registered project path via MeshCore.
 
@@ -215,20 +265,22 @@ Schedules support an optional `agentId` field for agent-linked scheduling. When 
 
 The Relay route group is guarded by an environment variable feature flag. When disabled, the router is not mounted and all requests to those paths return 404. Mesh routes are always mounted (no feature flag).
 
-| Flag                       | Default | Guards                              |
-| -------------------------- | ------- | ----------------------------------- |
-| `DORKOS_RELAY_ENABLED`     | `false` | `/api/relay/*` routes               |
+| Flag                   | Default | Guards                                                        |
+| ---------------------- | ------- | ------------------------------------------------------------- |
+| `DORKOS_RELAY_ENABLED` | `false` | `/api/relay/*` routes                                         |
+| `DORKOS_A2A_ENABLED`   | `false` | `/.well-known/agent.json`, `/a2a/*` (requires Relay to be on) |
 
 This flag also controls the behavior of `POST /api/sessions/:id/messages`:
+
 - `DORKOS_RELAY_ENABLED` enables relay infrastructure for external adapters (Telegram, webhooks). The web client always uses direct SSE streaming regardless of this flag.
 
 Other relevant environment variables:
 
-| Variable              | Default | Description                                                  |
-| --------------------- | ------- | ------------------------------------------------------------ |
-| `DORKOS_PORT`         | `4242` (dev: `6242`)  | Express server port                                          |
-| `DORKOS_CORS_ORIGIN`  | `*`     | CORS `Access-Control-Allow-Origin` value. Set to a specific origin (e.g. `https://app.example.com`) to restrict cross-origin requests. |
-| `DORKOS_PULSE_ENABLED`| `false` | `/api/schedules/*` and `/api/runs/*` routes                  |
+| Variable               | Default              | Description                                                                                                                            |
+| ---------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `DORKOS_PORT`          | `4242` (dev: `6242`) | Express server port                                                                                                                    |
+| `DORKOS_CORS_ORIGIN`   | `*`                  | CORS `Access-Control-Allow-Origin` value. Set to a specific origin (e.g. `https://app.example.com`) to restrict cross-origin requests. |
+| `DORKOS_TASKS_ENABLED` | `true`               | `/api/tasks/*` routes (task definitions and runs)                                                                                      |
 
 ## Agent Endpoints
 
@@ -456,6 +508,8 @@ Relay system metrics.
 
 ### GET /api/relay/stream
 
+> **Deprecated** — Use `GET /api/events` (event names: `relay_connected`, `relay_message`, `relay_backpressure`, `relay_signal`).
+
 SSE event stream for real-time relay activity. Supports server-side subject filtering.
 
 **Query params:**
@@ -596,11 +650,11 @@ All of `type`, `id`, and `config` are required. `enabled` defaults to `true`.
 
 **Error codes** (in `code` field):
 
-| Code                     | HTTP | Description                                    |
-| ------------------------ | ---- | ---------------------------------------------- |
-| `DUPLICATE_ID`           | 409  | An adapter with this ID already exists          |
-| `UNKNOWN_TYPE`           | 400  | The adapter type is not recognized              |
-| `MULTI_INSTANCE_DENIED`  | 400  | Adapter type does not support multiple instances |
+| Code                    | HTTP | Description                                      |
+| ----------------------- | ---- | ------------------------------------------------ |
+| `DUPLICATE_ID`          | 409  | An adapter with this ID already exists           |
+| `UNKNOWN_TYPE`          | 400  | The adapter type is not recognized               |
+| `MULTI_INSTANCE_DENIED` | 400  | Adapter type does not support multiple instances |
 
 ### DELETE /api/relay/adapters/:id
 
@@ -873,9 +927,7 @@ Update access control rules for the topology. Defines which agents may communica
 
 ```json
 {
-  "rules": [
-    { "from": "agent-abc123", "to": "agent-def456" }
-  ]
+  "rules": [{ "from": "agent-abc123", "to": "agent-def456" }]
 }
 ```
 
@@ -965,6 +1017,28 @@ No feature flag required — always mounted.
 }
 ```
 
+### GET /api/subagents
+
+Returns available subagents reported by the SDK. Delegates to `runtimeRegistry.getDefault().getSupportedSubagents()`. Values are cached by `RuntimeCache` and refreshed on `reloadPlugins()`.
+
+No feature flag required — always mounted.
+
+**Responses:**
+
+- `200` - `{ subagents: SubagentInfo[] }`:
+
+```json
+{
+  "subagents": [
+    {
+      "name": "Explore",
+      "description": "Fast agent specialized for exploring codebases",
+      "model": "claude-haiku-4-5"
+    }
+  ]
+}
+```
+
 ## Capabilities Endpoint
 
 ### GET /api/capabilities
@@ -1034,9 +1108,9 @@ Upload files to a session's working directory for agent access. Files are stored
 
 **Query parameters:**
 
-| Parameter | Type   | Required | Description                                                       |
-| --------- | ------ | -------- | ----------------------------------------------------------------- |
-| `cwd`     | string | Yes      | Working directory where files will be stored                      |
+| Parameter | Type   | Required | Description                                  |
+| --------- | ------ | -------- | -------------------------------------------- |
+| `cwd`     | string | Yes      | Working directory where files will be stored |
 
 **Form field:** `files` (one or more files)
 
@@ -1075,15 +1149,15 @@ Serve an uploaded file by filename. Used by the client to render image thumbnail
 
 **Path parameters:**
 
-| Parameter  | Type   | Description                                           |
-| ---------- | ------ | ----------------------------------------------------- |
-| `filename` | string | Sanitized filename (as returned by POST upload)       |
+| Parameter  | Type   | Description                                     |
+| ---------- | ------ | ----------------------------------------------- |
+| `filename` | string | Sanitized filename (as returned by POST upload) |
 
 **Query parameters:**
 
-| Parameter | Type   | Required | Description                                    |
-| --------- | ------ | -------- | ---------------------------------------------- |
-| `cwd`     | string | Yes      | Working directory where files were uploaded     |
+| Parameter | Type   | Required | Description                                 |
+| --------- | ------ | -------- | ------------------------------------------- |
+| `cwd`     | string | Yes      | Working directory where files were uploaded |
 
 **Success response (200):** File content with appropriate MIME type.
 
@@ -1123,10 +1197,10 @@ The MCP endpoint is a protocol endpoint, not a REST API. It speaks JSON-RPC and 
 
 ### Endpoint
 
-| Method | Path   | Description                                         |
-| ------ | ------ | --------------------------------------------------- |
-| POST   | `/mcp` | JSON-RPC requests (tool calls, initialize, etc.)    |
-| GET    | `/mcp` | Returns 405 (stateless mode, no SSE)                |
+| Method | Path   | Description                                          |
+| ------ | ------ | ---------------------------------------------------- |
+| POST   | `/mcp` | JSON-RPC requests (tool calls, initialize, etc.)     |
+| GET    | `/mcp` | Returns 405 (stateless mode, no SSE)                 |
 | DELETE | `/mcp` | Returns 405 (stateless mode, no session termination) |
 
 The server operates in **stateless mode** — each POST request creates a fresh transport. There are no persistent sessions or SSE streams on the MCP endpoint.
@@ -1155,7 +1229,79 @@ Requests to `/mcp` pass through this middleware chain in order:
 
 ### Available Tools
 
-All DorkOS tools are registered on the external MCP server: core tools (ping, server info, session count, agent identity), Pulse scheduling tools, Relay messaging tools, adapter management tools, binding tools, trace/metrics tools, and Mesh discovery tools. Feature-guarded tools return descriptive errors when their service is disabled rather than being omitted from the tool list.
+All DorkOS tools are registered on the external MCP server: core tools (ping, server info, session count, agent identity), Pulse scheduling tools, Relay messaging tools, adapter management tools, binding tools, trace/metrics tools, Mesh discovery tools, UI control tools (`controlUI` — opens/updates/closes the canvas panel), and extension management tools. Feature-guarded tools return descriptive errors when their service is disabled rather than being omitted from the tool list.
+
+The `open_canvas` UI command accepts an optional `content` field. When `content` is omitted, the canvas opens with a splash screen. When provided, `content` is a `UiCanvasContent` object (markdown, code, etc.) displayed immediately. `preferredWidth` (20-80, percentage) is also optional.
+
+### Extension MCP Tools
+
+Six tools enable agents to autonomously build and manage extensions:
+
+#### `list_extensions`
+
+- **Parameters**: None
+- **Returns**: `{ extensions: ExtensionInfo[], count: number }`
+
+Each extension includes: `id`, `name`, `version`, `status`, `scope`, `bundleReady`, optionally `description` and `error`.
+
+#### `create_extension`
+
+- **Parameters**:
+  - `name` (string, required): Extension ID, kebab-case (e.g. `github-prs`). Must match `/^[a-z0-9][a-z0-9-]*$/`.
+  - `description` (string, optional): Short description shown in settings UI
+  - `template` (enum, optional): `dashboard-card` | `command` | `settings-panel` (default: `dashboard-card`)
+  - `scope` (enum, optional): `global` | `local` (default: `global`)
+- **Returns**: `{ created: true, id, path, scope, template, status, bundleReady, files, message }`
+- **Errors**: Directory already exists, no CWD for local scope, compilation failure (returns `created: true` with `status: 'compile_error'`)
+
+#### `reload_extensions`
+
+- **Parameters**:
+  - `id` (string, optional): Extension ID for targeted hot-reload. Omit for full re-scan.
+- **Returns** (single): `{ ok: true, extension: ReloadResult }`
+- **Returns** (all): `{ ok: true, extensions: ExtensionRecordPublic[], count: number }`
+
+Broadcasts an `extension_reloaded` SSE event to connected clients when extensions are successfully compiled.
+
+#### `get_extension_errors`
+
+- **Parameters**: None
+- **Returns**: `{ errors: ExtensionInfo[], count: number }`
+
+Filters to extensions with status `invalid`, `incompatible`, `compile_error`, or `activate_error`. Each error includes structured details.
+
+#### `get_extension_api`
+
+- **Parameters**: None
+- **Returns**: Full ExtensionAPI type definitions and usage examples as markdown text
+
+Always available even when the extension system is not initialized.
+
+#### `test_extension`
+
+- **Parameters**:
+  - `id` (string, required): Extension ID to test
+- **Returns** (success): `{ status: 'ok', id, contributions: Record<ExtensionPointId, number> }`
+- **Returns** (error): `{ status: 'error', id, phase: 'compilation' | 'activation', errors?, error?, stack? }`
+
+Compiles the extension and activates it against a server-side mock API. Reports per-slot contribution counts on success, or structured errors with file/line/column on failure.
+
+### SSE Extension Events
+
+**Endpoint**: `GET /api/extensions/events`
+
+> **Deprecated** — Use `GET /api/events` (event name: `extension_reloaded`).
+
+**Event**: `extension_reloaded`
+
+```json
+{ "type": "extension_reloaded", "extensionIds": ["ext-id"], "timestamp": 1711461000000 }
+```
+
+- `extensionIds` — array of extension IDs that were reloaded
+- `timestamp` — numeric epoch milliseconds (`Date.now()`)
+
+Sent when extensions are recompiled via `reload_extensions` or `create_extension`. The client uses this to trigger a live reload of the extension bundle.
 
 ### Client Configuration
 
@@ -1205,3 +1351,70 @@ Via ngrok tunnel:
 ```
 
 **Cursor / Windsurf:** Add an MCP server in settings with URL `http://localhost:6242/mcp` and type `http`. If using an API key, configure the `Authorization: Bearer <key>` header in the MCP server settings.
+
+## A2A Gateway
+
+The A2A gateway implements Google's Agent-to-Agent protocol, exposing DorkOS agents to external A2A-compatible clients. Feature-flag gated via `DORKOS_A2A_ENABLED` (requires `DORKOS_RELAY_ENABLED=true`).
+
+Like the MCP endpoint, A2A is a protocol endpoint — it speaks JSON-RPC, not REST.
+
+### Authentication
+
+Same as MCP: optional `MCP_API_KEY` via `Authorization: Bearer <key>`. When `MCP_API_KEY` is not set, authentication is disabled.
+
+### GET /.well-known/agent.json
+
+Fleet-level Agent Card describing all registered DorkOS agents as a single A2A-compatible agent. This is the standard A2A discovery endpoint.
+
+**Responses:**
+
+- `200` - A2A Agent Card (JSON) with agent name, description, URL, and supported capabilities
+
+### GET /a2a/agents/:id/card
+
+Per-agent Agent Card for a specific registered agent.
+
+**Path parameters:**
+
+| Parameter | Type   | Description                     |
+| --------- | ------ | ------------------------------- |
+| `id`      | string | Agent ID from the Mesh registry |
+
+**Responses:**
+
+- `200` - A2A Agent Card (JSON) for the specified agent
+- `404` - Agent not found in the Mesh registry
+
+### POST /a2a
+
+JSON-RPC 2.0 endpoint for A2A protocol messages. Supports the standard A2A methods:
+
+| Method           | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| `message/send`   | Send a message and receive a complete response |
+| `message/stream` | Send a message and stream the response via SSE |
+| `tasks/get`      | Get the current state of a task                |
+| `tasks/cancel`   | Cancel an in-progress task                     |
+
+**Request body:** JSON-RPC 2.0 envelope:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-1",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "role": "user",
+      "parts": [{ "type": "text", "text": "Run the tests" }]
+    }
+  }
+}
+```
+
+**Responses:**
+
+- `200` - JSON-RPC 2.0 response (for `message/send`, `tasks/get`, `tasks/cancel`)
+- `200` - SSE stream (for `message/stream`, `Content-Type: text/event-stream`)
+- `400` - Invalid JSON-RPC request
+- `404` - Unknown method

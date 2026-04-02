@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Button, Input, Textarea, DirectoryPicker, Label } from '@/layers/shared/ui';
-import { useCreateAgent } from '@/layers/entities/agent';
-import { FolderOpen, Loader2, CheckCircle2, Bot } from 'lucide-react';
+import { useInitAgent } from '@/layers/entities/agent';
+import { FolderOpen, Loader2, CheckCircle2 } from 'lucide-react';
 import { shortenHomePath } from '@/layers/shared/lib';
 
 interface NoAgentsFoundProps {
@@ -22,12 +22,12 @@ export function NoAgentsFound({ onAgentCreated }: NoAgentsFoundProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [created, setCreated] = useState(false);
 
-  const createAgent = useCreateAgent();
+  const initAgent = useInitAgent();
 
   const handleCreate = useCallback(() => {
     if (!directory || !name.trim()) return;
 
-    createAgent.mutate(
+    initAgent.mutate(
       {
         path: directory,
         name: name.trim(),
@@ -39,9 +39,9 @@ export function NoAgentsFound({ onAgentCreated }: NoAgentsFoundProps) {
           // Brief delay so user sees the success state before callback
           setTimeout(onAgentCreated, 1200);
         },
-      },
+      }
     );
-  }, [directory, name, persona, createAgent, onAgentCreated]);
+  }, [directory, name, persona, initAgent, onAgentCreated]);
 
   if (created) {
     return (
@@ -57,20 +57,8 @@ export function NoAgentsFound({ onAgentCreated }: NoAgentsFoundProps) {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center space-y-6 py-8">
-      {/* Header */}
-      <div className="space-y-2 text-center">
-        <div className="bg-muted mx-auto flex size-12 items-center justify-center rounded-full">
-          <Bot className="text-muted-foreground size-6" />
-        </div>
-        <h3 className="text-lg font-semibold">No agents found</h3>
-        <p className="text-muted-foreground mx-auto max-w-sm text-sm">
-          Agents give your projects an identity. Each agent lives in a project directory and can have
-          its own name, persona, and scheduled tasks.
-        </p>
-      </div>
-
-      {/* Creation form */}
+    <div className="flex flex-col items-center justify-center">
+      {/* Creation form — header context is provided by the parent step */}
       <div className="w-full max-w-sm space-y-4">
         {/* Directory picker */}
         <div className="space-y-1.5">
@@ -88,11 +76,7 @@ export function NoAgentsFound({ onAgentCreated }: NoAgentsFoundProps) {
               {directory ? shortenHomePath(directory) : 'Select a directory...'}
             </span>
           </button>
-          <DirectoryPicker
-            open={pickerOpen}
-            onOpenChange={setPickerOpen}
-            onSelect={setDirectory}
-          />
+          <DirectoryPicker open={pickerOpen} onOpenChange={setPickerOpen} onSelect={setDirectory} />
         </div>
 
         {/* Agent name */}
@@ -125,9 +109,9 @@ export function NoAgentsFound({ onAgentCreated }: NoAgentsFoundProps) {
         <Button
           className="w-full"
           onClick={handleCreate}
-          disabled={!directory || !name.trim() || createAgent.isPending}
+          disabled={!directory || !name.trim() || initAgent.isPending}
         >
-          {createAgent.isPending ? (
+          {initAgent.isPending ? (
             <>
               <Loader2 className="size-4 animate-spin" />
               Creating...
@@ -138,9 +122,9 @@ export function NoAgentsFound({ onAgentCreated }: NoAgentsFoundProps) {
         </Button>
 
         {/* Error message */}
-        {createAgent.isError && (
+        {initAgent.isError && (
           <p className="text-destructive text-center text-sm">
-            Failed to create agent. {createAgent.error?.message ?? 'Please try again.'}
+            Failed to initialize agent. {initAgent.error?.message ?? 'Please try again.'}
           </p>
         )}
       </div>

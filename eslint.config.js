@@ -9,6 +9,7 @@ export default defineConfig([
       'node_modules/**',
       '.scratch/**',
       'coverage/**',
+      'examples/**',
     ],
   },
   ...baseConfig,

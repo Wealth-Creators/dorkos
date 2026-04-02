@@ -1,15 +1,22 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { StreamEvent, ErrorCategory } from '@dorkos/shared/types';
 import type { AgentSession, ToolState } from './agent-types.js';
-import { buildTaskEvent, TASK_TOOL_NAMES } from './build-task-event.js';
+import { buildTaskEvent, buildTodoWriteEvent, TASK_TOOL_NAMES } from './build-task-event.js';
 import { logger } from '../../../lib/logger.js';
 
+/** Extract text from a tool_result content field (file-local, loosely-typed for SDK messages). */
+function extractToolResultText(content: unknown): string {
+  if (!content) return '';
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return (content as Array<Record<string, unknown>>)
+    .filter((b) => b.type === 'text' && b.text)
+    .map((b) => b.text as string)
+    .join('\n');
+}
+
 /** Hook events that correlate to a specific tool call and render inside ToolCallCard. */
-const TOOL_CONTEXTUAL_HOOK_EVENTS = new Set([
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-]);
+const TOOL_CONTEXTUAL_HOOK_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure']);
 
 /** Map SDK result subtypes to user-facing error categories. */
 function mapErrorCategory(subtype: string): ErrorCategory {
@@ -53,15 +60,18 @@ export async function* mapSdkMessage(
     return;
   }
 
-  // Handle subagent lifecycle messages (task_started, task_progress, task_notification)
+  // Handle background task lifecycle messages (task_started, task_progress, task_notification)
   if (message.type === 'system' && 'subtype' in message) {
     if (message.subtype === 'task_started') {
       const msg = message as Record<string, unknown>;
       yield {
-        type: 'subagent_started',
+        type: 'background_task_started',
         data: {
           taskId: msg.task_id as string,
+          taskType: message.session_id ? ('agent' as const) : ('bash' as const),
+          startedAt: Date.now(),
           subagentSessionId: message.session_id,
+          command: message.session_id ? undefined : (msg.command as string | undefined),
           toolUseId: msg.tool_use_id as string | undefined,
           description: msg.description as string,
         },
@@ -73,12 +83,13 @@ export async function* mapSdkMessage(
       const msg = message as Record<string, unknown>;
       const usage = msg.usage as { tool_uses: number; duration_ms: number };
       yield {
-        type: 'subagent_progress',
+        type: 'background_task_progress',
         data: {
           taskId: msg.task_id as string,
           toolUses: usage.tool_uses,
           lastToolName: msg.last_tool_name as string | undefined,
           durationMs: usage.duration_ms,
+          summary: msg.summary as string | undefined,
         },
       };
       return;
@@ -88,7 +99,7 @@ export async function* mapSdkMessage(
       const msg = message as Record<string, unknown>;
       const usage = msg.usage as { tool_uses: number; duration_ms: number } | undefined;
       yield {
-        type: 'subagent_done',
+        type: 'background_task_done',
         data: {
           taskId: msg.task_id as string,
           status: msg.status as 'completed' | 'failed' | 'stopped',
@@ -118,6 +129,45 @@ export async function* mapSdkMessage(
       yield {
         type: 'compact_boundary',
         data: {},
+      };
+      return;
+    }
+
+    // Handle SDK session state changes (idle/running/requires_action)
+    if (message.subtype === 'session_state_changed') {
+      const msg = message as Record<string, unknown>;
+      const state = msg.state as 'idle' | 'running' | 'requires_action';
+      yield {
+        type: 'session_state_changed' as const,
+        data: { state },
+      };
+      return;
+    }
+
+    // Handle MCP elicitation completion (URL-mode auth confirmed by MCP server)
+    if (message.subtype === 'elicitation_complete') {
+      const msg = message as Record<string, unknown>;
+      yield {
+        type: 'elicitation_complete',
+        data: {
+          serverName: msg.mcp_server_name as string,
+          elicitationId: msg.elicitation_id as string,
+        },
+      };
+      return;
+    }
+
+    // Handle API retry events (SDK 0.2.77+)
+    if (message.subtype === 'api_retry') {
+      const msg = message as Record<string, unknown>;
+      yield {
+        type: 'api_retry',
+        data: {
+          attempt: msg.attempt as number,
+          maxRetries: msg.max_retries as number,
+          retryDelayMs: msg.retry_delay_ms as number,
+          errorStatus: (msg.error_status as number) ?? null,
+        },
       };
       return;
     }
@@ -202,7 +252,7 @@ export async function* mapSdkMessage(
 
   // Handle stream events (content blocks)
   if (message.type === 'stream_event') {
-    const event = (message as { event: Record<string, unknown> }).event;
+    const event = (message as unknown as { event: Record<string, unknown> }).event;
     const eventType = event.type as string;
 
     if (eventType === 'content_block_start') {
@@ -230,6 +280,7 @@ export async function* mapSdkMessage(
       } else if (delta?.type === 'text_delta' && !toolState.inTool) {
         yield { type: 'text_delta', data: { text: delta.text as string } };
       } else if (delta?.type === 'input_json_delta' && toolState.inTool) {
+        toolState.toolInputReceived.add(toolState.currentToolId);
         if (TASK_TOOL_NAMES.has(toolState.currentToolName)) {
           toolState.appendTaskInput(delta.partial_json as string);
         }
@@ -280,7 +331,10 @@ export async function* mapSdkMessage(
         if (wasTaskTool && toolState.taskToolInput) {
           try {
             const input = JSON.parse(toolState.taskToolInput);
-            const taskEvent = buildTaskEvent(taskToolName, input);
+            const taskEvent =
+              taskToolName === 'TodoWrite'
+                ? buildTodoWriteEvent(input)
+                : buildTaskEvent(taskToolName, input);
             if (taskEvent) {
               yield { type: 'task_update', data: taskEvent };
             }
@@ -294,10 +348,70 @@ export async function* mapSdkMessage(
     return;
   }
 
+  // Backfill tool input from completed assistant message (for MCP tools with empty input)
+  if (message.type === 'assistant') {
+    const content = (message as Record<string, unknown>).message;
+    const contentBlocks = (content as Record<string, unknown>)?.content;
+    if (Array.isArray(contentBlocks)) {
+      for (const block of contentBlocks as Array<Record<string, unknown>>) {
+        if (
+          block.type === 'tool_use' &&
+          typeof block.id === 'string' &&
+          !toolState.toolInputReceived.has(block.id) &&
+          toolState.toolNameById.has(block.id)
+        ) {
+          const inputStr = JSON.stringify(block.input ?? {});
+          yield {
+            type: 'tool_call_delta',
+            data: {
+              toolCallId: block.id,
+              toolName: toolState.toolNameById.get(block.id) ?? '',
+              input: inputStr,
+              status: 'running',
+            },
+          };
+        }
+      }
+    }
+    return;
+  }
+
+  // Extract tool results from user messages (MCP tools deliver results here, not via tool_use_summary)
+  if (message.type === 'user') {
+    // Skip replay messages during session resume
+    if ((message as Record<string, unknown>).isReplay) return;
+
+    const content = (message as Record<string, unknown>).message;
+    const contentBlocks = (content as Record<string, unknown>)?.content;
+    if (Array.isArray(contentBlocks)) {
+      for (const block of contentBlocks as Array<Record<string, unknown>>) {
+        if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+          // Skip tools already resolved via tool_use_summary (built-in tools)
+          if (toolState.resolvedResultIds.has(block.tool_use_id)) continue;
+
+          const resultText = extractToolResultText(block.content);
+          if (resultText) {
+            yield {
+              type: 'tool_result',
+              data: {
+                toolCallId: block.tool_use_id,
+                toolName: toolState.toolNameById.get(block.tool_use_id) ?? '',
+                result: resultText,
+                status: 'complete',
+              },
+            };
+          }
+        }
+      }
+    }
+    return;
+  }
+
   // Handle tool use summaries
   if (message.type === 'tool_use_summary') {
     const summary = message as { summary: string; preceding_tool_use_ids: string[] };
     for (const toolUseId of summary.preceding_tool_use_ids) {
+      toolState.resolvedResultIds.add(toolUseId);
       yield {
         type: 'tool_result',
         data: {
@@ -313,7 +427,7 @@ export async function* mapSdkMessage(
 
   // Handle tool progress (intermediate output from long-running tools)
   if (message.type === 'tool_progress') {
-    const progress = message as { tool_use_id: string; content: string };
+    const progress = message as unknown as { tool_use_id: string; content: string };
     yield {
       type: 'tool_progress',
       data: {
@@ -324,13 +438,13 @@ export async function* mapSdkMessage(
     return;
   }
 
-  // Handle prompt suggestion messages
+  // Handle prompt suggestion messages (SDK 0.2.86: singular `suggestion` field)
   if (message.type === 'prompt_suggestion') {
-    const suggestions = (message as Record<string, unknown>).suggestions as string[];
-    if (Array.isArray(suggestions) && suggestions.length > 0) {
+    const suggestion = (message as Record<string, unknown>).suggestion as string;
+    if (suggestion) {
       yield {
         type: 'prompt_suggestion',
-        data: { suggestions },
+        data: { suggestions: [suggestion] },
       };
     }
     return;
@@ -350,9 +464,7 @@ export async function* mapSdkMessage(
   if (message.type === 'result') {
     const result = message as Record<string, unknown>;
     const usage = result.usage as Record<string, unknown> | undefined;
-    const modelUsageMap = result.modelUsage as
-      | Record<string, Record<string, unknown>>
-      | undefined;
+    const modelUsageMap = result.modelUsage as Record<string, Record<string, unknown>> | undefined;
     const firstModelUsage = modelUsageMap ? Object.values(modelUsageMap)[0] : undefined;
 
     // Always emit session_status with final cost/token/model data

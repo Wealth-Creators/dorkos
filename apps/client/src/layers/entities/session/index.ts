@@ -11,3 +11,13 @@ export { useDefaultCwd } from './model/use-default-cwd';
 export { useDirectoryState } from './model/use-directory-state';
 export type { SetDirOptions } from './model/use-directory-state';
 export { useModels } from './model/use-models';
+export { useSubagents } from './model/use-subagents';
+export { useSessionSearch } from './model/use-session-search';
+export {
+  useSessionChatStore,
+  useSessionChatState,
+  useSessionMessages,
+  useSessionStatus as useSessionChatStatus,
+  DEFAULT_SESSION_STATE,
+} from './model/session-chat-store';
+export type { SessionState } from './model/session-chat-store';

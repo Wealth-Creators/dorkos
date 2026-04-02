@@ -1,10 +1,5 @@
 import { memo, useCallback } from 'react';
-import {
-  Handle,
-  Position,
-  NodeToolbar,
-  type NodeProps,
-} from '@xyflow/react';
+import { Handle, Position, NodeToolbar, type NodeProps } from '@xyflow/react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Zap, Clock, Settings, Heart, Copy, MessageCircle } from 'lucide-react';
 import { usePrefersReducedMotion } from '../lib/use-reduced-motion';
@@ -13,6 +8,7 @@ import { relativeTime } from '../lib/relative-time';
 import { toast } from 'sonner';
 import { cn } from '@/layers/shared/lib';
 import { Badge } from '@/layers/shared/ui/badge';
+import { AgentAvatar } from '@/layers/entities/agent';
 
 /**
  * Data shape stored in each agent node for React Flow rendering.
@@ -28,26 +24,21 @@ export interface AgentNodeData extends Record<string, unknown> {
   description?: string;
   relayAdapters?: string[];
   relaySubject?: string | null;
-  pulseScheduleCount?: number;
+  taskCount?: number;
   lastSeenAt?: string | null;
   lastSeenEvent?: string | null;
   budget?: { maxHopsPerMessage: number; maxCallsPerHour: number };
   behavior?: { responseMode: string };
   color?: string | null;
-  emoji?: string | null;
+  /** Resolved agent visual color (from resolveAgentVisual) for the AgentAvatar. */
+  avatarColor: string;
+  emoji: string;
   /** Absolute filesystem path for the agent's project directory. */
   projectPath?: string;
   onOpenSettings?: (agentId: string) => void;
   onViewHealth?: (agentId: string) => void;
   onOpenChat?: (agentId: string, projectPath: string) => void;
 }
-
-const STATUS_COLORS: Record<AgentNodeData['healthStatus'], string> = {
-  active: 'bg-green-500',
-  inactive: 'bg-amber-500',
-  stale: 'bg-zinc-400',
-  unreachable: 'bg-red-500',
-};
 
 /** Resolve the left-border color: agent color overrides namespace color. */
 function resolveBorderColor(d: AgentNodeData): string | undefined {
@@ -69,37 +60,23 @@ const AGENT_BAND_WIDTHS: Record<string, number> = {
 
 /**
  * Shared card header used by both DefaultCard and ExpandedCard.
- * Renders the health status dot, agent name (with optional emoji), the "Agent"
- * badge, and the runtime + capability badge row.
+ * Renders the AgentAvatar (with health ring), agent name, and the
+ * runtime + capability badge row.
  */
-function CardHeader({
-  d,
-  dotColor,
-  prefersReducedMotion,
-}: {
-  d: AgentNodeData;
-  dotColor: string;
-  prefersReducedMotion: boolean;
-}) {
+function CardHeader({ d }: { d: AgentNodeData }) {
   const overflowCount = Math.max(0, d.capabilities.length - 3);
 
   return (
     <>
-      {/* Header row: health dot + name + type badge */}
+      {/* Header row: avatar + name */}
       <div className="flex items-center gap-2">
-        <span className="relative flex shrink-0">
-          <span className={`h-2.5 w-2.5 rounded-full ${dotColor}`} />
-          {d.healthStatus === 'active' && !prefersReducedMotion && (
-            <span className="absolute inset-0 animate-ping rounded-full bg-green-500 opacity-30" />
-          )}
-        </span>
-        <span className="truncate text-sm font-medium text-foreground">
-          {d.emoji ? `${d.emoji} ` : ''}
-          {d.label}
-        </span>
-        <Badge variant="outline" className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-          Agent
-        </Badge>
+        <AgentAvatar
+          color={d.avatarColor}
+          emoji={d.emoji}
+          healthStatus={d.healthStatus}
+          size="sm"
+        />
+        <span className="text-foreground truncate text-sm font-medium">{d.label}</span>
       </div>
 
       {/* Runtime + capability badges */}
@@ -113,7 +90,7 @@ function CardHeader({
           </Badge>
         ))}
         {overflowCount > 0 && (
-          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+          <Badge variant="outline" className="text-muted-foreground text-[10px]">
             +{overflowCount}
           </Badge>
         )}
@@ -123,64 +100,51 @@ function CardHeader({
 }
 
 /** Compact pill rendered when zoom < 0.6 (~120x28px). */
-function CompactPill({ d, dotColor, selected }: { d: AgentNodeData; dotColor: string; selected?: boolean }) {
+function CompactPill({ d, selected }: { d: AgentNodeData; selected?: boolean }) {
   const borderColor = resolveBorderColor(d);
 
   return (
     <div
       className={cn(
-        'flex w-[120px] items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 shadow-sm',
-        selected && 'ring-2 ring-primary',
+        'bg-card flex w-[120px] items-center gap-1.5 rounded-full border px-2 py-0.5 shadow-sm',
+        selected && 'ring-primary ring-2'
       )}
       style={borderColor ? { borderLeft: `3px solid ${borderColor}` } : undefined}
     >
       <Handle type="target" position={Position.Left} className="bg-muted-foreground!" />
-      <span className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`} />
-      <span className="truncate text-xs font-medium text-foreground">
-        {d.emoji ? `${d.emoji} ` : ''}
-        {d.label}
-      </span>
+      <AgentAvatar color={d.avatarColor} emoji={d.emoji} healthStatus={d.healthStatus} size="xs" />
+      <span className="text-foreground truncate text-xs font-medium">{d.label}</span>
       <Handle type="source" position={Position.Right} className="bg-muted-foreground!" />
     </div>
   );
 }
 
 /** Default card rendered when zoom is 0.6-1.2 (~200x72px). */
-function DefaultCard({
-  d,
-  dotColor,
-  prefersReducedMotion,
-  selected,
-}: {
-  d: AgentNodeData;
-  dotColor: string;
-  prefersReducedMotion: boolean;
-  selected?: boolean;
-}) {
+function DefaultCard({ d, selected }: { d: AgentNodeData; selected?: boolean }) {
   const borderColor = resolveBorderColor(d);
   const hasRelay = d.relayAdapters && d.relayAdapters.length > 0;
-  const hasPulse = d.pulseScheduleCount != null && d.pulseScheduleCount > 0;
+  const hasTasks = d.taskCount != null && d.taskCount > 0;
 
   return (
     <div
       className={cn(
-        'w-[200px] rounded-lg border bg-card px-3 py-2 shadow-sm hover:shadow-md',
-        selected && 'ring-2 ring-primary',
+        'bg-card w-[200px] rounded-lg border px-3 py-2 shadow-sm hover:shadow-md',
+        selected && 'ring-primary ring-2'
       )}
       style={borderColor ? { borderLeft: `3px solid ${borderColor}` } : undefined}
     >
       <Handle type="target" position={Position.Left} className="bg-muted-foreground!" />
 
-      <CardHeader d={d} dotColor={dotColor} prefersReducedMotion={prefersReducedMotion} />
+      <CardHeader d={d} />
 
       {/* Bottom indicator row */}
-      {(hasRelay || hasPulse) && (
-        <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
+      {(hasRelay || hasTasks) && (
+        <div className="text-muted-foreground mt-1.5 flex items-center gap-2">
           {hasRelay && <Zap className="size-3" />}
-          {hasPulse && (
+          {hasTasks && (
             <span className="flex items-center gap-0.5">
               <Clock className="size-3" />
-              <span className="text-[10px]">{d.pulseScheduleCount}</span>
+              <span className="text-[10px]">{d.taskCount}</span>
             </span>
           )}
         </div>
@@ -192,41 +156,31 @@ function DefaultCard({
 }
 
 /** Expanded card rendered when zoom > 1.2 (~240x120px). */
-function ExpandedCard({
-  d,
-  dotColor,
-  prefersReducedMotion,
-  selected,
-}: {
-  d: AgentNodeData;
-  dotColor: string;
-  prefersReducedMotion: boolean;
-  selected?: boolean;
-}) {
+function ExpandedCard({ d, selected }: { d: AgentNodeData; selected?: boolean }) {
   const borderColor = resolveBorderColor(d);
   const hasRelay = d.relayAdapters && d.relayAdapters.length > 0;
-  const hasPulse = d.pulseScheduleCount != null && d.pulseScheduleCount > 0;
+  const hasTasks = d.taskCount != null && d.taskCount > 0;
 
   return (
     <div
       className={cn(
-        'w-[240px] rounded-lg border bg-card px-3 py-2 shadow-sm hover:shadow-md',
-        selected && 'ring-2 ring-primary',
+        'bg-card w-[240px] rounded-lg border px-3 py-2 shadow-sm hover:shadow-md',
+        selected && 'ring-primary ring-2'
       )}
       style={borderColor ? { borderLeft: `3px solid ${borderColor}` } : undefined}
     >
       <Handle type="target" position={Position.Left} className="bg-muted-foreground!" />
 
-      <CardHeader d={d} dotColor={dotColor} prefersReducedMotion={prefersReducedMotion} />
+      <CardHeader d={d} />
 
       {/* Description */}
       {d.description && (
-        <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{d.description}</p>
+        <p className="text-muted-foreground mt-1.5 line-clamp-2 text-xs">{d.description}</p>
       )}
 
-      {/* Relay adapters + Pulse schedule count */}
-      {(hasRelay || hasPulse) && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-muted-foreground">
+      {/* Relay adapters + Tasks schedule count */}
+      {(hasRelay || hasTasks) && (
+        <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-2">
           {hasRelay &&
             d.relayAdapters!.map((adapter) => (
               <span key={adapter} className="flex items-center gap-0.5">
@@ -234,10 +188,10 @@ function ExpandedCard({
                 <span className="text-[10px]">{adapter}</span>
               </span>
             ))}
-          {hasPulse && (
+          {hasTasks && (
             <span className="flex items-center gap-0.5">
               <Clock className="size-3" />
-              <span className="text-[10px]">{d.pulseScheduleCount}</span>
+              <span className="text-[10px]">{d.taskCount}</span>
             </span>
           )}
         </div>
@@ -245,7 +199,7 @@ function ExpandedCard({
 
       {/* Budget display */}
       {d.budget && (
-        <p className="mt-1 text-[10px] text-muted-foreground">
+        <p className="text-muted-foreground mt-1 text-[10px]">
           {d.budget.maxCallsPerHour} calls/hr &middot; {d.budget.maxHopsPerMessage} max hops
         </p>
       )}
@@ -253,7 +207,7 @@ function ExpandedCard({
       {/* Bottom row: last seen + behavior mode */}
       <div className="mt-1 flex items-center gap-2">
         {d.lastSeenAt && (
-          <span className="text-[10px] text-muted-foreground">{relativeTime(d.lastSeenAt)}</span>
+          <span className="text-muted-foreground text-[10px]">{relativeTime(d.lastSeenAt)}</span>
         )}
         {d.behavior && (
           <Badge variant="outline" className="text-[10px]">
@@ -281,7 +235,7 @@ function ToolbarButton({
     <button
       onClick={onClick}
       title={label}
-      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="text-muted-foreground hover:bg-muted hover:text-foreground rounded-md p-1.5"
     >
       <Icon className="size-3.5" />
     </button>
@@ -291,7 +245,6 @@ function ToolbarButton({
 /** React Flow custom node that renders a mesh agent with contextual zoom LOD. */
 function AgentNodeComponent({ data, selected, id }: NodeProps) {
   const d = data as unknown as AgentNodeData;
-  const dotColor = STATUS_COLORS[d.healthStatus] ?? STATUS_COLORS.stale;
   const band = useLodBand();
   const prefersReducedMotion = usePrefersReducedMotion();
 
@@ -302,7 +255,7 @@ function AgentNodeComponent({ data, selected, id }: NodeProps) {
 
   const toolbar = (
     <NodeToolbar position={Position.Top} isVisible={selected}>
-      <div className="flex items-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-md">
+      <div className="bg-card flex items-center gap-0.5 rounded-lg border px-1 py-0.5 shadow-md">
         {d.onOpenSettings && (
           <ToolbarButton icon={Settings} label="Settings" onClick={() => d.onOpenSettings?.(id)} />
         )}
@@ -311,7 +264,11 @@ function AgentNodeComponent({ data, selected, id }: NodeProps) {
         )}
         <ToolbarButton icon={Copy} label="Copy ID" onClick={handleCopyId} />
         {d.onOpenChat && d.projectPath && (
-          <ToolbarButton icon={MessageCircle} label="Chat" onClick={() => d.onOpenChat?.(id, d.projectPath ?? '')} />
+          <ToolbarButton
+            icon={MessageCircle}
+            label="Chat"
+            onClick={() => d.onOpenChat?.(id, d.projectPath ?? '')}
+          />
         )}
       </div>
     </NodeToolbar>
@@ -321,11 +278,11 @@ function AgentNodeComponent({ data, selected, id }: NodeProps) {
 
   let content: React.ReactNode;
   if (band === 'compact') {
-    content = <CompactPill d={d} dotColor={dotColor} selected={selected} />;
+    content = <CompactPill d={d} selected={selected} />;
   } else if (band === 'expanded') {
-    content = <ExpandedCard d={d} dotColor={dotColor} prefersReducedMotion={prefersReducedMotion} selected={selected} />;
+    content = <ExpandedCard d={d} selected={selected} />;
   } else {
-    content = <DefaultCard d={d} dotColor={dotColor} prefersReducedMotion={prefersReducedMotion} selected={selected} />;
+    content = <DefaultCard d={d} selected={selected} />;
   }
 
   return (

@@ -2,7 +2,13 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { readManifest, writeManifest, removeManifest, MANIFEST_DIR, MANIFEST_FILE } from '../manifest.js';
+import {
+  readManifest,
+  writeManifest,
+  removeManifest,
+  MANIFEST_DIR,
+  MANIFEST_FILE,
+} from '../manifest.js';
 import type { AgentManifest } from '../mesh-schemas.js';
 
 // === Helpers ===
@@ -19,6 +25,7 @@ function makeManifest(overrides?: Partial<AgentManifest>): AgentManifest {
     registeredAt: '2026-02-24T00:00:00.000Z',
     registeredBy: 'test-suite',
     personaEnabled: true,
+    isSystem: false,
     enabledToolGroups: {},
     ...overrides,
   };
@@ -74,7 +81,7 @@ describe('readManifest', () => {
     await fs.writeFile(
       path.join(dorkDir, 'agent.json'),
       JSON.stringify({ name: 'incomplete' }),
-      'utf-8',
+      'utf-8'
     );
 
     const result = await readManifest(projectDir);
@@ -89,7 +96,7 @@ describe('readManifest', () => {
     await fs.writeFile(
       path.join(dorkDir, 'agent.json'),
       JSON.stringify(manifest, null, 2),
-      'utf-8',
+      'utf-8'
     );
 
     const result = await readManifest(projectDir);

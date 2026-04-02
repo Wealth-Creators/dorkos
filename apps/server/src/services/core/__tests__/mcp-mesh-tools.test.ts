@@ -11,6 +11,12 @@ import {
   type McpToolDeps,
 } from '../../runtimes/claude-code/mcp-tools/index.js';
 
+vi.mock('@dorkos/shared/manifest', () => ({
+  readManifest: vi.fn().mockResolvedValue(null),
+}));
+
+import { readManifest } from '@dorkos/shared/manifest';
+
 function createMockDeps(meshEnabled = true): McpToolDeps {
   const mockMeshCore = {
     discover: vi.fn(),
@@ -43,7 +49,7 @@ describe('Mesh MCP Tools', () => {
       const result = await handler({ roots: ['/test'] });
       expect(result.isError).toBe(true);
       expect(JSON.parse(result.content[0].text)).toEqual(
-        expect.objectContaining({ code: 'MESH_DISABLED' }),
+        expect.objectContaining({ code: 'MESH_DISABLED' })
       );
     });
 
@@ -116,8 +122,28 @@ describe('Mesh MCP Tools', () => {
       expect(meshCore.registerByPath).toHaveBeenCalledWith(
         '/test/bot',
         expect.objectContaining({ name: 'Bot', runtime: 'claude-code' }),
-        'mcp-tool',
+        'mcp-tool'
       );
+    });
+
+    it('mesh_register rejects re-registration over system agent', async () => {
+      const deps = createMockDeps(true);
+      vi.mocked(readManifest).mockResolvedValueOnce({
+        id: 'sys1',
+        name: 'dorkbot',
+        isSystem: true,
+        namespace: 'system',
+      } as Awaited<ReturnType<typeof readManifest>>);
+
+      const handler = createMeshRegisterHandler(deps);
+      const result = await handler({ path: '/test/dorkbot', name: 'overwrite' });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        error: 'Cannot re-register over a system agent',
+        code: 'SYSTEM_AGENT',
+      });
+      const meshCore = deps.meshCore as unknown as Record<string, ReturnType<typeof vi.fn>>;
+      expect(meshCore.registerByPath).not.toHaveBeenCalled();
     });
 
     it('mesh_list returns agents with filters', async () => {
@@ -165,6 +191,21 @@ describe('Mesh MCP Tools', () => {
       expect(result.isError).toBe(true);
     });
 
+    it('mesh_unregister rejects system agents with SYSTEM_AGENT error', async () => {
+      const deps = createMockDeps(true);
+      const meshCore = deps.meshCore as unknown as Record<string, ReturnType<typeof vi.fn>>;
+      meshCore.get.mockReturnValue({ id: 'sys1', name: 'dorkbot', isSystem: true });
+
+      const handler = createMeshUnregisterHandler(deps);
+      const result = await handler({ agentId: 'sys1' });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        error: 'System agents cannot be unregistered',
+        code: 'SYSTEM_AGENT',
+      });
+      expect(meshCore.unregister).not.toHaveBeenCalled();
+    });
+
     it('mesh_status returns aggregate stats', async () => {
       const deps = createMockDeps(true);
       const meshCore = deps.meshCore as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -193,7 +234,16 @@ describe('Mesh MCP Tools', () => {
       const meshCore = deps.meshCore as unknown as Record<string, ReturnType<typeof vi.fn>>;
       const mockInspect = {
         agent: { id: 'a1', name: 'Bot', runtime: 'claude-code', capabilities: [] },
-        health: { agentId: 'a1', name: 'Bot', status: 'active', lastSeenAt: null, lastSeenEvent: null, registeredAt: '2026-01-01T00:00:00.000Z', runtime: 'claude-code', capabilities: [] },
+        health: {
+          agentId: 'a1',
+          name: 'Bot',
+          status: 'active',
+          lastSeenAt: null,
+          lastSeenEvent: null,
+          registeredAt: '2026-01-01T00:00:00.000Z',
+          runtime: 'claude-code',
+          capabilities: [],
+        },
         relaySubject: 'relay.agent.default.a1',
       };
       meshCore.inspect.mockReturnValue(mockInspect);
@@ -223,7 +273,10 @@ describe('Mesh MCP Tools', () => {
       const meshCore = deps.meshCore as unknown as Record<string, ReturnType<typeof vi.fn>>;
       const mockTopology = {
         namespaces: ['ns-a', 'ns-b'],
-        agents: [{ id: 'a1', namespace: 'ns-a' }, { id: 'a2', namespace: 'ns-b' }],
+        agents: [
+          { id: 'a1', namespace: 'ns-a' },
+          { id: 'a2', namespace: 'ns-b' },
+        ],
         accessRules: [{ from: 'ns-a', to: 'ns-b' }],
       };
       meshCore.getTopology.mockReturnValue(mockTopology);

@@ -58,8 +58,17 @@ const telegramManifest: AdapterManifest = {
   multiInstance: true,
   configFields: [
     { key: 'token', label: 'Bot Token', type: 'password', required: true },
-    { key: 'mode', label: 'Mode', type: 'select', required: true, default: 'polling',
-      options: [{ label: 'Long Polling', value: 'polling' }, { label: 'Webhook', value: 'webhook' }] },
+    {
+      key: 'mode',
+      label: 'Mode',
+      type: 'select',
+      required: true,
+      default: 'polling',
+      options: [
+        { label: 'Long Polling', value: 'polling' },
+        { label: 'Webhook', value: 'webhook' },
+      ],
+    },
   ],
 };
 
@@ -75,20 +84,6 @@ const existingInstance: CatalogInstance & { config?: Record<string, unknown> } =
     errorCount: 0,
   },
   config: { token: 'secret', channel: '#dev', timeout: 30 },
-};
-
-const telegramExistingInstance: CatalogInstance & { config?: Record<string, unknown> } = {
-  id: 'telegram-1',
-  enabled: true,
-  status: {
-    id: 'telegram-1',
-    type: 'webhook',
-    displayName: 'Telegram',
-    state: 'connected',
-    messageCount: { inbound: 0, outbound: 0 },
-    errorCount: 0,
-  },
-  config: { token: 'secret', mode: 'polling' },
 };
 
 // ---------------------------------------------------------------------------
@@ -115,19 +110,6 @@ function createWrapper(agentsData?: { agents: { id: string; name: string }[] }) 
   return { Wrapper, mockTransport, queryClient };
 }
 
-/** Advance from configure to diagnostic step and wait for the connection check to resolve. */
-async function advanceToDiagnosticSuccess(
-  tokenLabel: RegExp,
-  tokenValue: string,
-) {
-  fireEvent.change(screen.getByLabelText(tokenLabel), { target: { value: tokenValue } });
-  fireEvent.click(screen.getByRole('button', { name: /continue/i }));
-  // Wait until the diagnostic step signals ready (Continue becomes enabled).
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: /continue/i })).not.toBeDisabled(),
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -143,14 +125,9 @@ describe('AdapterSetupWizard', () => {
 
   it('opens in add mode with empty form and no adapter ID field (auto-generated)', () => {
     const { Wrapper } = createWrapper();
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={baseManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
     expect(screen.getByText('Add Slack')).toBeInTheDocument();
     // Adapter ID is auto-generated — no input field shown
@@ -168,7 +145,7 @@ describe('AdapterSetupWizard', () => {
         manifest={baseManifest}
         existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
     expect(screen.getByText('Edit Slack')).toBeInTheDocument();
@@ -189,7 +166,7 @@ describe('AdapterSetupWizard', () => {
         manifest={baseManifest}
         existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
     const tokenInput = screen.getByLabelText(/api token/i);
@@ -204,12 +181,8 @@ describe('AdapterSetupWizard', () => {
   it('displays setup instructions when provided', () => {
     const { Wrapper } = createWrapper();
     render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={manifestWithInstructions}
-      />,
-      { wrapper: Wrapper },
+      <AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={manifestWithInstructions} />,
+      { wrapper: Wrapper }
     );
 
     expect(screen.getByText('Go to slack.com/api to get your token.')).toBeInTheDocument();
@@ -217,14 +190,9 @@ describe('AdapterSetupWizard', () => {
 
   it('blocks Continue when required fields are empty', () => {
     const { Wrapper } = createWrapper();
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={baseManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
     // Token is required and empty — clicking Continue should show error
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
@@ -233,36 +201,38 @@ describe('AdapterSetupWizard', () => {
     expect(screen.getByLabelText(/channel/i)).toBeInTheDocument();
   });
 
-  it('shows spinner during pending test, verified check on success', async () => {
+  it('shows spinner during pending test, green check on success', async () => {
     const { Wrapper, mockTransport } = createWrapper();
+    // Make testRelayAdapterConnection resolve after a tick
     mockTransport.testRelayAdapterConnection = vi.fn().mockResolvedValue({ ok: true });
 
     render(
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
-    const tokenInput = screen.getByLabelText(/bot token/i);
+    // Fill required token field and continue
+    const tokenInput = screen.getByLabelText(/api token/i);
     fireEvent.change(tokenInput, { target: { value: 'test-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
-    // Should show diagnostic pending state
+    // Should show test step
     await waitFor(() => {
       expect(screen.getByText('Testing connection...')).toBeInTheDocument();
     });
 
-    // After resolving, should show the verified state
+    // After resolving, should show success
     await waitFor(() => {
-      expect(screen.getByText('Ready to save.')).toBeInTheDocument();
+      expect(screen.getByText('Connection successful')).toBeInTheDocument();
     });
   });
 
-  it('shows bot identity detail when botUsername is returned', async () => {
+  it('shows bot identity card when botUsername is returned', async () => {
     const { Wrapper, mockTransport } = createWrapper();
     mockTransport.testRelayAdapterConnection = vi
       .fn()
@@ -272,23 +242,23 @@ describe('AdapterSetupWizard', () => {
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
-    const tokenInput = screen.getByLabelText(/bot token/i);
+    const tokenInput = screen.getByLabelText(/api token/i);
     fireEvent.change(tokenInput, { target: { value: 'test-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Ready to save.')).toBeInTheDocument();
+      expect(screen.getByText('Connection successful')).toBeInTheDocument();
     });
     expect(screen.getByText('@mybot')).toBeInTheDocument();
   });
 
-  it('shows error state on connection failure', async () => {
+  it('shows red X on test failure', async () => {
     const { Wrapper, mockTransport } = createWrapper();
     mockTransport.testRelayAdapterConnection = vi.fn().mockRejectedValue(new Error('Auth failed'));
 
@@ -296,23 +266,23 @@ describe('AdapterSetupWizard', () => {
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
-    const tokenInput = screen.getByLabelText(/bot token/i);
+    const tokenInput = screen.getByLabelText(/api token/i);
     fireEvent.change(tokenInput, { target: { value: 'bad-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => {
-      expect(screen.getByText("Couldn't connect")).toBeInTheDocument();
+      expect(screen.getByText('Connection failed')).toBeInTheDocument();
     });
     expect(screen.getByText('Auth failed')).toBeInTheDocument();
   });
 
-  it('Continue is enabled after connection resolves and advances to confirm', async () => {
+  it('Skip navigates from test step to confirm step', async () => {
     const { Wrapper, mockTransport } = createWrapper();
     mockTransport.testRelayAdapterConnection = vi.fn().mockResolvedValue({ ok: true });
 
@@ -320,14 +290,21 @@ describe('AdapterSetupWizard', () => {
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'test-token');
+    const tokenInput = screen.getByLabelText(/api token/i);
+    fireEvent.change(tokenInput, { target: { value: 'test-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     // Should be on confirm step now
     await waitFor(() => {
@@ -343,22 +320,28 @@ describe('AdapterSetupWizard', () => {
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
-    fireEvent.change(screen.getByLabelText(/bot token/i), { target: { value: 'my-secret-token' } });
-    await advanceToDiagnosticSuccess(/bot token/i, 'my-secret-token');
+    const tokenInput = screen.getByLabelText(/api token/i);
+    fireEvent.change(tokenInput, { target: { value: 'my-secret-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    // Skip test
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     // On confirm step: password should be masked with partial reveal (last 4 chars).
     // 'my-secret-token' → '•••• oken'
     await waitFor(() => {
       expect(screen.getByText('•••• oken')).toBeInTheDocument();
     });
-    expect(screen.getByText('polling')).toBeInTheDocument();
+    expect(screen.getByText('#dev')).toBeInTheDocument();
   });
 
   it('save calls addAdapter mutation in add mode', async () => {
@@ -366,18 +349,22 @@ describe('AdapterSetupWizard', () => {
     mockTransport.testRelayAdapterConnection = vi.fn().mockResolvedValue({ ok: true });
     mockTransport.addRelayAdapter = vi.fn().mockResolvedValue({ ok: true });
 
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'new-token');
+    // Fill required fields
+    const tokenInput = screen.getByLabelText(/api token/i);
+    fireEvent.change(tokenInput, { target: { value: 'new-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
+    // Skip test
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
+
+    // Save
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /add adapter/i })).toBeInTheDocument();
     });
@@ -385,23 +372,18 @@ describe('AdapterSetupWizard', () => {
 
     await waitFor(() => {
       expect(mockTransport.addRelayAdapter).toHaveBeenCalledWith(
-        'telegram',
-        'telegram',
-        expect.objectContaining({ token: 'new-token', mode: 'polling' }),
+        'slack',
+        'slack',
+        expect.objectContaining({ token: 'new-token', channel: '#general' })
       );
     });
   });
 
   it('label input renders on configure step', () => {
     const { Wrapper } = createWrapper();
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={baseManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
     expect(screen.getByLabelText(/name \(optional\)/i)).toBeInTheDocument();
     // Placeholder should be the manifest displayName
@@ -413,19 +395,21 @@ describe('AdapterSetupWizard', () => {
     mockTransport.testRelayAdapterConnection = vi.fn().mockResolvedValue({ ok: true });
     mockTransport.addRelayAdapter = vi.fn().mockResolvedValue({ ok: true });
 
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
-    fireEvent.change(screen.getByLabelText(/bot token/i), { target: { value: 'my-token' } });
-    fireEvent.change(screen.getByLabelText(/name \(optional\)/i), { target: { value: 'My Bot' } });
-    await advanceToDiagnosticSuccess(/bot token/i, 'my-token');
+    // Fill required fields and set label
+    fireEvent.change(screen.getByLabelText(/api token/i), { target: { value: 'my-token' } });
+    fireEvent.change(screen.getByLabelText(/name \(optional\)/i), {
+      target: { value: 'My Slack Bot' },
+    });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /add adapter/i })).toBeInTheDocument();
@@ -434,9 +418,9 @@ describe('AdapterSetupWizard', () => {
 
     await waitFor(() => {
       expect(mockTransport.addRelayAdapter).toHaveBeenCalledWith(
-        'telegram',
-        'telegram',
-        expect.objectContaining({ token: 'my-token', label: 'My Bot' }),
+        'slack',
+        'slack',
+        expect.objectContaining({ token: 'my-token', label: 'My Slack Bot' })
       );
     });
   });
@@ -446,17 +430,18 @@ describe('AdapterSetupWizard', () => {
     mockTransport.testRelayAdapterConnection = vi.fn().mockResolvedValue({ ok: true });
     mockTransport.addRelayAdapter = vi.fn().mockResolvedValue({ ok: true });
 
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'my-token');
+    fireEvent.change(screen.getByLabelText(/api token/i), { target: { value: 'my-token' } });
+    // Leave label empty
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /add adapter/i })).toBeInTheDocument();
@@ -465,9 +450,9 @@ describe('AdapterSetupWizard', () => {
 
     await waitFor(() => {
       expect(mockTransport.addRelayAdapter).toHaveBeenCalledWith(
-        'telegram',
-        'telegram',
-        expect.not.objectContaining({ label: expect.anything() }),
+        'slack',
+        'slack',
+        expect.not.objectContaining({ label: expect.anything() })
       );
     });
   });
@@ -482,15 +467,22 @@ describe('AdapterSetupWizard', () => {
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'token');
+    // Leave label empty and proceed to test step
+    fireEvent.change(screen.getByLabelText(/api token/i), { target: { value: 'token' } });
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
-    // Navigate back to configure to verify label was auto-set from botUsername
+    // After test succeeds, label should be auto-populated
+    await waitFor(() => {
+      expect(screen.getByText('Connection successful')).toBeInTheDocument();
+    });
+
+    // Navigate back to configure to verify label was set
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
 
     await waitFor(() => {
@@ -508,17 +500,22 @@ describe('AdapterSetupWizard', () => {
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
     // Set a label before testing
     fireEvent.change(screen.getByLabelText(/name \(optional\)/i), {
       target: { value: 'My Custom Name' },
     });
-    await advanceToDiagnosticSuccess(/bot token/i, 'token');
+    fireEvent.change(screen.getByLabelText(/api token/i), { target: { value: 'token' } });
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Connection successful')).toBeInTheDocument();
+    });
 
     // Navigate back to confirm label wasn't overwritten
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
@@ -537,15 +534,23 @@ describe('AdapterSetupWizard', () => {
       <AdapterSetupWizard
         open={true}
         onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-        existingInstance={telegramExistingInstance}
+        manifest={baseManifest}
+        existingInstance={existingInstance}
       />,
-      { wrapper: Wrapper },
+      { wrapper: Wrapper }
     );
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'updated-token');
+    const tokenInput = screen.getByLabelText(/api token/i);
+    fireEvent.change(tokenInput, { target: { value: 'updated-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
+    // Skip test
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
+
+    // Save
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument();
     });
@@ -553,8 +558,8 @@ describe('AdapterSetupWizard', () => {
 
     await waitFor(() => {
       expect(mockTransport.updateRelayAdapterConfig).toHaveBeenCalledWith(
-        'telegram-1',
-        expect.objectContaining({ token: 'updated-token', mode: 'polling' }),
+        'slack-1',
+        expect.objectContaining({ token: 'updated-token', channel: '#dev' })
       );
     });
   });
@@ -564,17 +569,17 @@ describe('AdapterSetupWizard', () => {
     mockTransport.testRelayAdapterConnection = vi.fn().mockResolvedValue({ ok: true });
     mockTransport.addRelayAdapter = vi.fn().mockResolvedValue({ ok: true });
 
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'my-token');
+    fireEvent.change(screen.getByLabelText(/api token/i), { target: { value: 'my-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /add adapter/i })).toBeInTheDocument();
@@ -593,17 +598,17 @@ describe('AdapterSetupWizard', () => {
     mockTransport.testRelayAdapterConnection = vi.fn().mockResolvedValue({ ok: true });
     mockTransport.addRelayAdapter = vi.fn().mockResolvedValue({ ok: true });
 
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={baseManifest} />, {
+      wrapper: Wrapper,
+    });
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'my-token');
+    fireEvent.change(screen.getByLabelText(/api token/i), { target: { value: 'my-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /add adapter/i })).toBeInTheDocument();
@@ -623,17 +628,17 @@ describe('AdapterSetupWizard', () => {
       .mockResolvedValue({ ok: true, botUsername: 'mybot' });
     mockTransport.addRelayAdapter = vi.fn().mockResolvedValue({ ok: true });
 
-    render(
-      <AdapterSetupWizard
-        open={true}
-        onOpenChange={vi.fn()}
-        manifest={telegramManifest}
-      />,
-      { wrapper: Wrapper },
-    );
+    render(<AdapterSetupWizard open={true} onOpenChange={vi.fn()} manifest={telegramManifest} />, {
+      wrapper: Wrapper,
+    });
 
-    await advanceToDiagnosticSuccess(/bot token/i, 'my-token');
+    fireEvent.change(screen.getByLabelText(/bot token/i), { target: { value: 'my-token' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /skip/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /add adapter/i })).toBeInTheDocument();

@@ -113,6 +113,13 @@ export {
   useNavigationLayout,
 } from './navigation-layout';
 export {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from './context-menu';
+export {
   ResponsiveDialog,
   ResponsiveDialogTrigger,
   ResponsiveDialogContent,
@@ -125,6 +132,13 @@ export {
   ResponsiveDialogFullscreenToggle,
   useResponsiveDialog,
 } from './responsive-dialog';
+export {
+  ResponsivePopover,
+  ResponsivePopoverTrigger,
+  ResponsivePopoverContent,
+  ResponsivePopoverTitle,
+  useResponsivePopover,
+} from './responsive-popover';
 export { ScanLine } from './ScanLine';
 export { ScrollArea, ScrollBar } from './scroll-area';
 export {
@@ -148,6 +162,18 @@ export { Separator } from './separator';
 export { Slider } from './slider';
 export { Switch } from './switch';
 export type { SwitchSize, SwitchProps } from './switch';
+export {
+  Table,
+  TableHeader,
+  TableBody,
+  TableFooter,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableCaption,
+} from './table';
+export { DataTable } from './data-table';
+export type { DataTableProps } from './data-table';
 export { Tabs, TabsList, TabsTrigger, TabsContent } from './tabs';
 export type { TabsListProps } from './tabs';
 export { DirectoryPicker } from './DirectoryPicker';
@@ -155,6 +181,7 @@ export { Skeleton } from './skeleton';
 export { Textarea } from './textarea';
 export { Toaster } from './sonner';
 export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from './tooltip';
+export { ConnectionStatusBanner } from './ConnectionStatusBanner';
 export { FeatureDisabledState } from './FeatureDisabledState';
 export { MarkdownContent } from './markdown-content';
 export {
@@ -167,6 +194,15 @@ export {
   SheetTitle,
   SheetDescription,
 } from './sheet';
+export {
+  TextField,
+  TextareaField,
+  SelectField,
+  SwitchField,
+  CheckboxField,
+  PasswordField,
+  SubmitButton,
+} from './form-fields';
 export {
   Sidebar,
   SidebarContent,
@@ -194,3 +230,7 @@ export {
   useSidebar,
   SidebarContext,
 } from './sidebar';
+export { FilterBar } from './filter-bar';
+export { RouteErrorFallback } from './route-error-fallback';
+export { NotFoundFallback } from './not-found-fallback';
+export { AppCrashFallback } from './app-crash-fallback';

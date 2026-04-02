@@ -1,0 +1,18 @@
+{
+  "team": {
+    "slug": "dorkos",
+    "name": "DorkOS",
+    "id": "a171dbd5-3ccc-40ab-b58b-1fae7644fba8",
+    "key": "DOR"
+  },
+  "filter": {
+    "ownership": "unassigned"
+  },
+  "pm": {
+    "autoLimit": 5,
+    "approvalGates": ["hypothesis-review", "pivot-decision", "project-creation"]
+  },
+  "relay": {
+    "channel": null
+  }
+}

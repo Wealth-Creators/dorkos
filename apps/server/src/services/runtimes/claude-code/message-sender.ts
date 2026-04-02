@@ -18,16 +18,19 @@ import type { MessageOpts, AgentRegistryPort } from '@dorkos/shared/agent-runtim
 import type { McpServerEntry } from '@dorkos/shared/transport';
 import type { AgentSession } from './agent-types.js';
 import { createToolState } from './agent-types.js';
-import { createCanUseTool } from './interactive-handlers.js';
+import { createCanUseTool, handleElicitation } from './interactive-handlers.js';
 import { mapSdkMessage } from './sdk-event-mapper.js';
 import { makeUserPrompt } from './sdk-utils.js';
-import { buildSystemPromptAppend } from './context-builder.js';
+import { buildSystemPromptAppend, type RelayContextDeps } from './context-builder.js';
+import type { BindingRouter } from '../../relay/binding-router.js';
+import type { BindingStore } from '../../relay/binding-store.js';
+import type { AdapterManager } from '../../relay/adapter-manager.js';
 import { resolveToolConfig, buildAllowedTools } from './tool-filter.js';
 import { validateBoundary } from '../../../lib/boundary.js';
 import { logger } from '../../../lib/logger.js';
 import { readManifest } from '@dorkos/shared/manifest';
 import { isRelayEnabled } from '../../relay/relay-state.js';
-import { isPulseEnabled } from '../../pulse/pulse-state.js';
+import { isTasksEnabled } from '../../tasks/task-state.js';
 import { configManager } from '../../core/config-manager.js';
 
 /** Lightweight projection of the SDK's SlashCommand type — avoids leaking SDK types. */
@@ -43,12 +46,24 @@ export interface MessageSenderOpts {
   sessionCwd?: string;
   claudeCliPath?: string;
   meshCore?: AgentRegistryPort | null;
-  mcpServerFactory?: (() => Record<string, McpServerConfig>) | null;
+  bindingRouter?: BindingRouter;
+  bindingStore?: BindingStore;
+  adapterManager?: AdapterManager;
+  mcpServerFactory?: ((session: AgentSession) => Record<string, McpServerConfig>) | null;
   onModelsReceived?: (
-    models: Array<{ value: string; displayName: string; description: string }>
+    models: Array<{
+      value: string;
+      displayName: string;
+      description: string;
+      supportsEffort?: boolean;
+      supportedEffortLevels?: ('low' | 'medium' | 'high' | 'max')[];
+    }>
   ) => void;
   onMcpStatusReceived?: (servers: McpServerEntry[]) => void;
   onCommandsReceived?: (commands: SdkCommandEntry[]) => void;
+  onSubagentsReceived?: (
+    agents: Array<{ name: string; description: string; model?: string }>
+  ) => void;
   sdkSessionIndex: Map<string, string>;
   sessionMapKey: string;
 }
@@ -58,7 +73,6 @@ const RESUME_FAILURE_PATTERNS = [
   'session not found',
   'no such file',
   'enoent',
-  'no conversation found',
 ];
 
 /** Max transparent retries for stale session recovery before surfacing error. */
@@ -90,7 +104,7 @@ export async function* executeSdkQuery(
   session: AgentSession,
   opts: MessageSenderOpts,
   messageOpts?: MessageOpts,
-  retryDepth = 0,
+  retryDepth = 0
 ): AsyncGenerator<StreamEvent> {
   session.lastActivity = Date.now();
   session.eventQueue = [];
@@ -125,7 +139,7 @@ export async function* executeSdkQuery(
   }
 
   const globalConfig = configManager.get('agentContext') ?? {
-    pulseTools: true,
+    tasksTools: true,
     relayTools: true,
     meshTools: true,
     adapterTools: true,
@@ -133,12 +147,28 @@ export async function* executeSdkQuery(
 
   const toolConfig = resolveToolConfig(manifest?.enabledToolGroups, {
     relayEnabled: isRelayEnabled(),
-    pulseEnabled: isPulseEnabled(),
+    tasksEnabled: isTasksEnabled(),
     globalConfig,
   });
 
-  const baseAppend = await buildSystemPromptAppend(effectiveCwd, opts.meshCore ?? undefined, toolConfig);
-  // Concatenate caller-supplied append (e.g. Pulse scheduler context) after the base
+  const relayContext: RelayContextDeps | undefined =
+    opts.bindingRouter && opts.bindingStore && opts.adapterManager && meshAgentId
+      ? {
+          agentId: meshAgentId,
+          bindingRouter: opts.bindingRouter,
+          bindingStore: opts.bindingStore,
+          adapterManager: opts.adapterManager,
+        }
+      : undefined;
+
+  const baseAppend = await buildSystemPromptAppend(
+    effectiveCwd,
+    opts.meshCore ?? undefined,
+    toolConfig,
+    relayContext,
+    session.uiState
+  );
+  // Concatenate caller-supplied append (e.g. Tasks scheduler context) after the base
   const systemPromptAppend = messageOpts?.systemPromptAppend
     ? `${baseAppend}\n\n${messageOpts.systemPromptAppend}`
     : baseAppend;
@@ -147,11 +177,20 @@ export async function* executeSdkQuery(
     cwd: effectiveCwd,
     includePartialMessages: true,
     promptSuggestions: true,
-    settingSources: ['project', 'user'],
+    agentProgressSummaries: true,
+    settingSources: ['local', 'project', 'user'],
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
       append: systemPromptAppend,
+    },
+    toolConfig: {
+      askUserQuestion: { previewFormat: 'html' },
+    },
+    env: {
+      // eslint-disable-next-line no-restricted-syntax -- full env needed for SDK subprocess inheritance
+      ...process.env,
+      CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
     },
     ...(opts.claudeCliPath ? { pathToClaudeCodeExecutable: opts.claudeCliPath } : {}),
   };
@@ -159,9 +198,12 @@ export async function* executeSdkQuery(
   if (session.hasStarted) {
     sdkOptions.resume = session.sdkSessionId;
     if (session.sdkSessionId === sessionId) {
-      logger.debug('[sendMessage] resuming with sdkSessionId === sessionId (expected after server restart)', {
-        session: sessionId,
-      });
+      logger.debug(
+        '[sendMessage] resuming with sdkSessionId === sessionId (expected after server restart)',
+        {
+          session: sessionId,
+        }
+      );
     }
   }
 
@@ -191,11 +233,14 @@ export async function* executeSdkQuery(
   if (session.model) {
     sdkOptions.model = session.model;
   }
+  if (session.effort) {
+    sdkOptions.effort = session.effort;
+  }
 
   // Inject MCP tool servers -- create fresh instances per query to avoid
   // "Already connected to a transport" errors from reused Protocol objects.
   if (opts.mcpServerFactory) {
-    sdkOptions.mcpServers = opts.mcpServerFactory();
+    sdkOptions.mcpServers = opts.mcpServerFactory(session);
   }
 
   // Apply per-agent MCP tool filtering (undefined = no filter = all tools available)
@@ -205,6 +250,14 @@ export async function* executeSdkQuery(
   }
 
   sdkOptions.canUseTool = createCanUseTool(session, logger.debug.bind(logger));
+  sdkOptions.onElicitation = (request, { signal }) => {
+    logger.debug('[sendMessage] elicitation request', {
+      session: sessionId,
+      serverName: request.serverName,
+      mode: request.mode,
+    });
+    return handleElicitation(session, request, signal);
+  };
 
   const agentQuery = query({ prompt: makeUserPrompt(content), options: sdkOptions });
   session.activeQuery = agentQuery;
@@ -219,6 +272,8 @@ export async function* executeSdkQuery(
             value: m.value,
             displayName: m.displayName,
             description: m.description,
+            supportsEffort: m.supportsEffort,
+            supportedEffortLevels: m.supportedEffortLevels,
           }))
         );
       })
@@ -244,7 +299,7 @@ export async function* executeSdkQuery(
               status: s.status,
               error: s.error,
               scope: s.scope,
-            })),
+            }))
         );
       })
       .catch((err) => {
@@ -262,11 +317,29 @@ export async function* executeSdkQuery(
             name: c.name,
             description: c.description,
             argumentHint: c.argumentHint,
-          })),
+          }))
         );
       })
       .catch((err) => {
         logger.debug('[sendMessage] failed to fetch supported commands', { err });
+      });
+  }
+
+  // Non-blocking subagent discovery — fires on first query, caches on runtime
+  if (opts.onSubagentsReceived) {
+    agentQuery
+      .supportedAgents?.()
+      ?.then((agents) => {
+        opts.onSubagentsReceived!(
+          agents.map((a) => ({
+            name: a.name,
+            description: a.description,
+            model: a.model,
+          }))
+        );
+      })
+      .catch((err) => {
+        logger.debug('[sendMessage] failed to fetch supported agents', { err });
       });
   }
 
@@ -304,9 +377,7 @@ export async function* executeSdkQuery(
       });
 
       if (!pendingSdkPromise) {
-        pendingSdkPromise = sdkIterator
-          .next()
-          .then((result) => ({ sdk: true as const, result }));
+        pendingSdkPromise = sdkIterator.next().then((result) => ({ sdk: true as const, result }));
       }
 
       const winner = await Promise.race([queuePromise, pendingSdkPromise]);
@@ -328,7 +399,9 @@ export async function* executeSdkQuery(
           }
         }
         // Track content events for empty-stream detection
-        if (['text_delta', 'tool_call_start', 'tool_result', 'thinking_delta'].includes(event.type)) {
+        if (
+          ['text_delta', 'tool_call_start', 'tool_result', 'thinking_delta'].includes(event.type)
+        ) {
           contentEventCount++;
         }
         if (['approval_required', 'question_prompt'].includes(event.type)) {
@@ -341,6 +414,29 @@ export async function* executeSdkQuery(
       if (session.sdkSessionId !== prevSdkId) {
         opts.sdkSessionIndex.delete(prevSdkId);
         opts.sdkSessionIndex.set(session.sdkSessionId, opts.sessionMapKey);
+      }
+    }
+
+    // Fetch context usage breakdown after stream completes (before finally clears activeQuery)
+    if (session.activeQuery) {
+      try {
+        const usage = await session.activeQuery.getContextUsage();
+        yield {
+          type: 'context_usage',
+          data: {
+            totalTokens: usage.totalTokens,
+            maxTokens: usage.maxTokens,
+            percentage: usage.percentage,
+            model: usage.model,
+            categories: usage.categories.map((c) => ({
+              name: c.name,
+              tokens: c.tokens,
+              color: c.color,
+            })),
+          },
+        };
+      } catch (err) {
+        logger.debug('[sendMessage] failed to fetch context usage', { err });
       }
     }
   } catch (err) {
@@ -366,13 +462,16 @@ export async function* executeSdkQuery(
     yield {
       type: 'error',
       data: {
-        message: 'The agent stopped unexpectedly. The service may be temporarily overloaded — try again in a moment.',
+        message:
+          'The agent stopped unexpectedly. The service may be temporarily overloaded — try again in a moment.',
         category: 'execution_error' as ErrorCategory,
         details: errMsg,
       },
     };
     emittedError = true;
   } finally {
+    // Preserve the query reference for post-stream control methods (e.g. reloadPlugins)
+    session.lastQuery = session.activeQuery;
     session.activeQuery = undefined;
   }
 

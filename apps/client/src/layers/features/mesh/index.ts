@@ -8,3 +8,5 @@
  * @module features/mesh
  */
 export { MeshPanel } from './ui/MeshPanel';
+export { DiscoveryView } from './ui/DiscoveryView';
+export { ScanRootInput } from '@/layers/entities/discovery';

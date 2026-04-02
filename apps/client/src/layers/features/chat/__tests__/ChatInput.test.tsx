@@ -33,7 +33,7 @@ describe('ChatInput', () => {
 
   it('renders textarea with placeholder', () => {
     render(<ChatInput {...defaultProps} />);
-    expect(screen.getByPlaceholderText(/Message Claude/)).toBeDefined();
+    expect(screen.getByPlaceholderText(/Send a message/)).toBeDefined();
   });
 
   it('renders custom placeholder when provided', () => {
@@ -43,7 +43,7 @@ describe('ChatInput', () => {
 
   it('uses default placeholder when not provided', () => {
     render(<ChatInput {...defaultProps} />);
-    expect(screen.getByPlaceholderText('Message Claude...')).toBeDefined();
+    expect(screen.getByPlaceholderText('Send a message...')).toBeDefined();
   });
 
   it('calls onChange when typing', () => {
@@ -464,7 +464,9 @@ describe('ChatInput', () => {
     });
 
     it('send button shows Update icon when editing queue item', () => {
-      render(<ChatInput {...defaultProps} editingQueueItem={true} value="text" onSaveEdit={vi.fn()} />);
+      render(
+        <ChatInput {...defaultProps} editingQueueItem={true} value="text" onSaveEdit={vi.fn()} />
+      );
       expect(screen.getByLabelText('Save edit')).toBeDefined();
     });
 
@@ -505,7 +507,14 @@ describe('ChatInput', () => {
 
     it('Enter key saves edit when editingQueueItem is true', () => {
       const onSaveEdit = vi.fn();
-      render(<ChatInput {...defaultProps} editingQueueItem={true} value="edited" onSaveEdit={onSaveEdit} />);
+      render(
+        <ChatInput
+          {...defaultProps}
+          editingQueueItem={true}
+          value="edited"
+          onSaveEdit={onSaveEdit}
+        />
+      );
       fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' });
       expect(onSaveEdit).toHaveBeenCalled();
     });

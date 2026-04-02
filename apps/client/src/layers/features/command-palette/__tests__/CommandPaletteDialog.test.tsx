@@ -41,10 +41,11 @@ afterEach(cleanup);
 
 const mockSetGlobalPaletteOpen = vi.fn();
 const mockSetSettingsOpen = vi.fn();
-const mockSetPulseOpen = vi.fn();
+const mockSetTasksOpen = vi.fn();
 const mockSetRelayOpen = vi.fn();
 const mockSetMeshOpen = vi.fn();
 const mockSetPickerOpen = vi.fn();
+const mockSetAgentDialogOpen = vi.fn();
 
 let mockGlobalPaletteOpen = true;
 
@@ -55,10 +56,11 @@ vi.mock('@/layers/shared/model', () => ({
   useAppStore: (selector?: (s: Record<string, unknown>) => unknown) => {
     const state = {
       setSettingsOpen: mockSetSettingsOpen,
-      setPulseOpen: mockSetPulseOpen,
+      setTasksOpen: mockSetTasksOpen,
       setRelayOpen: mockSetRelayOpen,
       setMeshOpen: mockSetMeshOpen,
       setPickerOpen: mockSetPickerOpen,
+      setAgentDialogOpen: mockSetAgentDialogOpen,
       setPreviousCwd: mockSetPreviousCwd,
       globalPaletteInitialSearch: null,
       clearGlobalPaletteInitialSearch: mockClearGlobalPaletteInitialSearch,
@@ -67,6 +69,7 @@ vi.mock('@/layers/shared/model', () => ({
   },
   useTheme: () => ({ theme: 'light', setTheme: vi.fn() }),
   useIsMobile: () => false,
+  useNow: () => Date.now(),
 }));
 
 const mockSetDir = vi.fn();
@@ -86,9 +89,15 @@ vi.mock('../model/use-preview-data', () => ({
 // Mock motion/react to render plain elements (avoids animation-related test issues)
 vi.mock('motion/react', () => ({
   motion: {
-    div: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement> & { children?: React.ReactNode }) =>
+    div: ({
+      children,
+      ...props
+    }: React.HTMLAttributes<HTMLDivElement> & { children?: React.ReactNode }) =>
       React.createElement('div', props, children),
-    span: ({ children, ...props }: React.HTMLAttributes<HTMLSpanElement> & { children?: React.ReactNode }) =>
+    span: ({
+      children,
+      ...props
+    }: React.HTMLAttributes<HTMLSpanElement> & { children?: React.ReactNode }) =>
       React.createElement('span', props, children),
   },
   AnimatePresence: ({ children }: { children?: React.ReactNode }) => children,
@@ -104,6 +113,19 @@ vi.mock('../model/use-agent-frecency', () => ({
   }),
 }));
 
+const mockOpenAgentDialog = vi.fn();
+vi.mock('@/layers/features/agent-settings', () => ({
+  useAgentDialog: (selector?: (s: Record<string, unknown>) => unknown) => {
+    const state = {
+      openDialog: mockOpenAgentDialog,
+      closeDialog: vi.fn(),
+      open: false,
+      projectPath: null,
+    };
+    return selector ? selector(state) : state;
+  },
+}));
+
 const mockAgents: AgentPathEntry[] = [
   { id: 'agent-1', name: 'Auth Service', projectPath: '/projects/auth' },
   { id: 'agent-2', name: 'API Gateway', projectPath: '/projects/api' },
@@ -115,7 +137,7 @@ vi.mock('../model/use-palette-items', () => ({
     recentAgents: [mockAgents[2], mockAgents[0]],
     allAgents: mockAgents,
     features: [
-      { id: 'pulse', label: 'Pulse Scheduler', icon: 'Clock', action: 'openPulse' },
+      { id: 'tasks', label: 'Tasks Scheduler', icon: 'Clock', action: 'openTasks' },
       { id: 'relay', label: 'Relay Messaging', icon: 'Radio', action: 'openRelay' },
       { id: 'mesh', label: 'Mesh Network', icon: 'Globe', action: 'openMesh' },
       { id: 'settings', label: 'Settings', icon: 'Settings', action: 'openSettings' },
@@ -131,8 +153,14 @@ vi.mock('../model/use-palette-items', () => ({
       { id: 'theme', label: 'Toggle Theme', icon: 'Moon', action: 'toggleTheme' },
     ],
     searchableItems: [
-      ...mockAgents.map((a) => ({ id: a.id, name: a.name, type: 'agent', keywords: [a.projectPath], data: a })),
-      { id: 'pulse', name: 'Pulse Scheduler', type: 'feature', data: {} },
+      ...mockAgents.map((a) => ({
+        id: a.id,
+        name: a.name,
+        type: 'agent',
+        keywords: [a.projectPath],
+        data: a,
+      })),
+      { id: 'tasks', name: 'Tasks Scheduler', type: 'feature', data: {} },
       { id: 'relay', name: 'Relay Messaging', type: 'feature', data: {} },
       { id: 'mesh', name: 'Mesh Network', type: 'feature', data: {} },
       { id: 'settings', name: 'Settings', type: 'feature', data: {} },
@@ -208,7 +236,7 @@ describe('CommandPaletteDialog', () => {
   it('renders Features group with all feature items', () => {
     render(<CommandPaletteDialog />);
     expect(screen.getByText('Features')).toBeInTheDocument();
-    expect(screen.getByText('Pulse Scheduler')).toBeInTheDocument();
+    expect(screen.getByText('Tasks Scheduler')).toBeInTheDocument();
     expect(screen.getByText('Relay Messaging')).toBeInTheDocument();
     expect(screen.getByText('Mesh Network')).toBeInTheDocument();
     expect(screen.getByText('Settings')).toBeInTheDocument();
@@ -248,7 +276,7 @@ describe('CommandPaletteDialog', () => {
     mockGlobalPaletteOpen = false;
     render(<CommandPaletteDialog />);
     expect(
-      screen.queryByPlaceholderText('Search agents, features, commands...'),
+      screen.queryByPlaceholderText('Search agents, features, commands...')
     ).not.toBeInTheDocument();
   });
 
@@ -258,10 +286,11 @@ describe('CommandPaletteDialog', () => {
     render(<CommandPaletteDialog />);
     const item = screen.getAllByText('Worker')[0].closest('[data-slot="command-item"]');
     if (item) fireEvent.click(item as Element);
-    // Sub-menu should appear with "Open Here" action
+    // Sub-menu should appear with all agent actions
     expect(screen.getByText('Open Here')).toBeInTheDocument();
     expect(screen.getByText('Open in New Tab')).toBeInTheDocument();
     expect(screen.getByText('New Session')).toBeInTheDocument();
+    expect(screen.getByText('Edit Worker Settings')).toBeInTheDocument();
   });
 
   it('shows breadcrumb when in agent sub-menu', () => {
@@ -293,13 +322,24 @@ describe('CommandPaletteDialog', () => {
     expect(mockSetGlobalPaletteOpen).toHaveBeenCalledWith(false);
   });
 
+  it('opens agent settings dialog when Edit Settings is clicked in sub-menu', () => {
+    render(<CommandPaletteDialog />);
+    const item = screen.getAllByText('Worker')[0].closest('[data-slot="command-item"]');
+    if (item) fireEvent.click(item as Element);
+    const editItem = screen.getByText('Edit Worker Settings').closest('[data-slot="command-item"]');
+    if (editItem) fireEvent.click(editItem as Element);
+    expect(mockOpenAgentDialog).toHaveBeenCalledWith('/projects/current');
+    expect(mockSetAgentDialogOpen).toHaveBeenCalledWith(true);
+    expect(mockSetGlobalPaletteOpen).toHaveBeenCalledWith(false);
+  });
+
   // --- Feature action dispatching ---
 
-  it('opens Pulse dialog and closes palette when Pulse Scheduler is selected', () => {
+  it('opens Tasks dialog and closes palette when Tasks Scheduler is selected', () => {
     render(<CommandPaletteDialog />);
-    const item = screen.getByText('Pulse Scheduler').closest('[data-slot="command-item"]');
+    const item = screen.getByText('Tasks Scheduler').closest('[data-slot="command-item"]');
     if (item) fireEvent.click(item as Element);
-    expect(mockSetPulseOpen).toHaveBeenCalledWith(true);
+    expect(mockSetTasksOpen).toHaveBeenCalledWith(true);
     expect(mockSetGlobalPaletteOpen).toHaveBeenCalledWith(false);
   });
 

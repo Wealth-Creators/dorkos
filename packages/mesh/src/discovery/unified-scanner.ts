@@ -7,7 +7,6 @@
  * @module mesh/discovery/unified-scanner
  */
 import fs from 'fs/promises';
-import { realpathSync } from 'fs';
 import path from 'path';
 import type { DiscoveryStrategy } from '../discovery-strategy.js';
 import { readManifest } from '../manifest.js';
@@ -50,13 +49,21 @@ export async function* unifiedScan(
   options: UnifiedScanOptions,
   strategies: DiscoveryStrategy[],
   registry: RegistryLike,
-  denialList: DenialListLike,
+  denialList: DenialListLike
 ): AsyncGenerator<ScanEvent> {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
   const timeoutMs = options.timeout ?? DEFAULT_TIMEOUT_MS;
   const followSymlinks = options.followSymlinks ?? false;
   const extraExcludes = new Set(options.extraExcludes ?? []);
   const { logger } = options;
+
+  logger?.info('[mesh] unified-scanner: starting', {
+    root: options.root,
+    maxDepth,
+    timeoutMs,
+    followSymlinks,
+    strategyCount: strategies.length,
+  });
 
   const progress: ScanProgress = { scannedDirs: 0, foundAgents: 0 };
   let timedOut = false;
@@ -71,6 +78,7 @@ export async function* unifiedScan(
   try {
     while (queue.length > 0) {
       if (timedOut) {
+        logger?.info('[mesh] unified-scanner: timed out', progress);
         yield { type: 'complete', data: { ...progress, timedOut: true } };
         return;
       }
@@ -91,7 +99,7 @@ export async function* unifiedScan(
       if (followSymlinks) {
         let realDir: string;
         try {
-          realDir = realpathSync(dir);
+          realDir = await fs.realpath(dir);
         } catch {
           // Broken symlink or ENOENT race — skip
           continue;
@@ -113,7 +121,9 @@ export async function* unifiedScan(
       // Read directory entries — catch permission errors gracefully
       let entries: import('node:fs').Dirent<string>[];
       try {
-        entries = (await fs.readdir(dir, { withFileTypes: true })) as import('node:fs').Dirent<string>[];
+        entries = (await fs.readdir(dir, {
+          withFileTypes: true,
+        })) as import('node:fs').Dirent<string>[];
       } catch (err: unknown) {
         const code = (err as NodeJS.ErrnoException).code;
         if (code === 'EACCES' || code === 'EPERM') {
@@ -160,14 +170,15 @@ export async function* unifiedScan(
           const isDir = entry.isDirectory();
           const isSymlink = entry.isSymbolicLink();
 
-          if (!isDir && !(followSymlinks && isSymlink)) continue;
-          if (isSymlink && !followSymlinks) continue;
+          if (!isDir && !isSymlink) continue; // skip regular files
+          if (isSymlink && !followSymlinks) continue; // skip symlinks when not following
 
           queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
         }
       }
     }
 
+    logger?.info('[mesh] unified-scanner: finished', progress);
     yield { type: 'complete', data: { ...progress, timedOut: false } };
   } finally {
     clearTimeout(timer);

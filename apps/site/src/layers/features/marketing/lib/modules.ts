@@ -1,12 +1,12 @@
 export interface SystemModule {
-  id: string
-  name: string
-  label: string
-  description: string
-  status: 'available' | 'coming-soon'
-  group: 'platform' | 'engine-capability' | 'extension'
+  id: string;
+  name: string;
+  label: string;
+  description: string;
+  status: 'available' | 'coming-soon';
+  group: 'platform' | 'engine-capability' | 'extension';
   /** External URL for modules with their own website (opens in new tab). */
-  url?: string
+  url?: string;
 }
 
 export const systemModules: SystemModule[] = [
@@ -15,7 +15,7 @@ export const systemModules: SystemModule[] = [
     name: 'Engine',
     label: 'Runtime',
     description:
-      'The runtime that powers everything. Connects your AI agents, exposes a secure API, and runs Pulse, Relay, and Mesh as integrated capabilities.',
+      'The runtime that powers everything. Connects your AI agents, exposes a secure API, and runs Tasks, Relay, and Mesh as integrated capabilities.',
     status: 'available',
     group: 'platform',
   },
@@ -29,8 +29,8 @@ export const systemModules: SystemModule[] = [
     group: 'platform',
   },
   {
-    id: 'pulse',
-    name: 'Pulse',
+    id: 'tasks',
+    name: 'Tasks',
     label: 'Scheduler',
     description:
       'Autonomous execution loop that works while you sleep. Executes roadmaps, solicits feedback, self-improves.',
@@ -74,4 +74,4 @@ export const systemModules: SystemModule[] = [
     group: 'extension',
     url: 'https://www.looped.me/',
   },
-]
+];

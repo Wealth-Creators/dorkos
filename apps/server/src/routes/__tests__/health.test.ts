@@ -3,9 +3,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../services/core/tunnel-manager.js', () => ({
   tunnelManager: {
     status: {
-      enabled: false, connected: false, url: null, port: null, startedAt: null,
-      authEnabled: false, tokenConfigured: false, domain: null,
+      enabled: false,
+      connected: false,
+      url: null,
+      port: null,
+      startedAt: null,
+      authEnabled: false,
+      tokenConfigured: false,
+      domain: null,
     },
+  },
+}));
+
+vi.mock('../../services/core/config-manager.js', () => ({
+  configManager: {
+    get: vi.fn().mockReturnValue(null),
+    set: vi.fn(),
   },
 }));
 
@@ -61,7 +74,7 @@ describe('Health Route', () => {
         url: 'https://test.ngrok.io',
         port: 4242,
         startedAt: '2025-01-01T00:00:00.000Z',
-      }),
+      })
     );
   });
 

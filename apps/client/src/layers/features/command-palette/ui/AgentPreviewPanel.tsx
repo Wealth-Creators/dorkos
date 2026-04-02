@@ -1,6 +1,6 @@
 import { motion } from 'motion/react';
 import { Badge } from '@/layers/shared/ui';
-import { hashToHslColor, hashToEmoji, shortenHomePath } from '@/layers/shared/lib';
+import { shortenHomePath, resolveAgentVisual } from '@/layers/shared/lib';
 import { usePreviewData } from '../model/use-preview-data';
 import type { AgentPathEntry } from '@dorkos/shared/mesh-schemas';
 
@@ -20,8 +20,7 @@ interface AgentPreviewPanelProps {
  */
 export function AgentPreviewPanel({ agent }: AgentPreviewPanelProps) {
   const { sessionCount, recentSessions, health } = usePreviewData(agent.id, agent.projectPath);
-  const color = agent.color ?? hashToHslColor(agent.id);
-  const emoji = agent.icon ?? hashToEmoji(agent.id);
+  const { color, emoji } = resolveAgentVisual(agent);
 
   return (
     <motion.div
@@ -29,9 +28,9 @@ export function AgentPreviewPanel({ agent }: AgentPreviewPanelProps) {
       animate={{ opacity: 1, width: 240 }}
       exit={{ opacity: 0, width: 0 }}
       transition={{ duration: 0.2, ease: [0, 0, 0.2, 1] }}
-      className="border-l overflow-hidden flex-shrink-0 will-change-[width]"
+      className="flex-shrink-0 overflow-hidden border-l will-change-[width]"
     >
-      <div className="w-[240px] p-4 space-y-3">
+      <div className="w-[240px] space-y-3 p-4">
         {/* Agent identity */}
         <div className="flex items-center gap-2">
           <span
@@ -39,11 +38,11 @@ export function AgentPreviewPanel({ agent }: AgentPreviewPanelProps) {
             style={{ backgroundColor: color }}
           />
           <span className="text-base">{emoji}</span>
-          <span className="text-sm font-semibold truncate">{agent.name}</span>
+          <span className="truncate text-sm font-semibold">{agent.name}</span>
         </div>
 
         {/* CWD path */}
-        <p className="text-muted-foreground text-xs truncate">
+        <p className="text-muted-foreground truncate text-xs">
           {shortenHomePath(agent.projectPath)}
         </p>
 
@@ -52,7 +51,7 @@ export function AgentPreviewPanel({ agent }: AgentPreviewPanelProps) {
           {health && (
             <Badge
               variant={health.status === 'active' ? 'default' : 'secondary'}
-              className="text-[10px] px-1.5 py-0"
+              className="px-1.5 py-0 text-[10px]"
             >
               {health.status}
             </Badge>
@@ -65,7 +64,7 @@ export function AgentPreviewPanel({ agent }: AgentPreviewPanelProps) {
         {/* Recent sessions */}
         {recentSessions.length > 0 && (
           <div className="space-y-1 pt-1">
-            <p className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">
+            <p className="text-muted-foreground text-[10px] font-medium tracking-wider uppercase">
               Recent
             </p>
             <ul className="space-y-0.5">

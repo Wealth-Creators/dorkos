@@ -19,7 +19,7 @@ import {
 } from '@/layers/shared/ui';
 import type { AgentManifest, EnabledToolGroups } from '@dorkos/shared/mesh-schemas';
 import { useRelayEnabled } from '@/layers/entities/relay';
-import { usePulseEnabled } from '@/layers/entities/pulse';
+import { useTasksEnabled } from '@/layers/entities/tasks';
 import { useAgentContextConfig } from '../model/use-agent-context-config';
 
 interface CapabilitiesTabProps {
@@ -27,8 +27,8 @@ interface CapabilitiesTabProps {
   onUpdate: (updates: Partial<AgentManifest>) => void;
 }
 
-type ToolDomainKey = 'pulse' | 'relay' | 'mesh' | 'adapter';
-type GlobalConfigKey = 'pulseTools' | 'relayTools' | 'meshTools' | 'adapterTools';
+type ToolDomainKey = 'tasks' | 'relay' | 'mesh' | 'adapter';
+type GlobalConfigKey = 'tasksTools' | 'relayTools' | 'meshTools' | 'adapterTools';
 
 interface ToolDomain {
   key: ToolDomainKey;
@@ -51,13 +51,17 @@ interface ToolGroupRowProps {
  * A single tool group row with switch, inherited/overridden state label,
  * and optional reset button.
  */
-function ToolGroupRow({ domain, agentOverride, globalDefault, onToggle, onReset }: ToolGroupRowProps) {
+function ToolGroupRow({
+  domain,
+  agentOverride,
+  globalDefault,
+  onToggle,
+  onReset,
+}: ToolGroupRowProps) {
   const isOverridden = agentOverride !== undefined;
   const effectiveValue = agentOverride ?? globalDefault;
 
-  const stateLabel = isOverridden
-    ? `Overridden: ${effectiveValue ? 'On' : 'Off'}`
-    : 'Inherited';
+  const stateLabel = isOverridden ? `Overridden: ${effectiveValue ? 'On' : 'Off'}` : 'Inherited';
 
   if (domain.serverDisabled) {
     return (
@@ -121,7 +125,7 @@ const DEBOUNCE_MS = 500;
 export function CapabilitiesTab({ agent, onUpdate }: CapabilitiesTabProps) {
   const [capInput, setCapInput] = useState('');
   const relayEnabled = useRelayEnabled();
-  const pulseEnabled = usePulseEnabled();
+  const tasksEnabled = useTasksEnabled();
   const { config: globalConfig } = useAgentContextConfig();
 
   // Debounced namespace input (same pattern as IdentityTab)
@@ -206,11 +210,11 @@ export function CapabilitiesTab({ agent, onUpdate }: CapabilitiesTabProps) {
   // Build domain definitions with server-disabled state resolved at render time
   const toolDomains: ToolDomain[] = [
     {
-      key: 'pulse',
-      configKey: 'pulseTools',
-      label: 'Pulse (Scheduling)',
+      key: 'tasks',
+      configKey: 'tasksTools',
+      label: 'Tasks (Scheduling)',
       description: 'Create and manage scheduled agent runs',
-      serverDisabled: !pulseEnabled,
+      serverDisabled: !tasksEnabled,
       serverDisabledReason: 'Disabled globally by server configuration.',
     },
     {
@@ -375,7 +379,11 @@ export function CapabilitiesTab({ agent, onUpdate }: CapabilitiesTabProps) {
       </p>
       <FieldCard>
         <FieldCardContent>
-          <SettingRow label="Core Tools" description="ping, server info, agent identity" className="py-1">
+          <SettingRow
+            label="Core Tools"
+            description="ping, server info, agent identity"
+            className="py-1"
+          >
             <span className="text-muted-foreground text-xs">Always enabled</span>
           </SettingRow>
 

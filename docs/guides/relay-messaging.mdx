@@ -3,17 +3,17 @@ title: Relay Messaging
 description: Enable Relay and send messages between agents, humans, and external platforms
 ---
 
-import { Steps, Step } from 'fumadocs-ui/components/steps'
-import { Tabs, Tab } from 'fumadocs-ui/components/tabs'
-import { Callout } from 'fumadocs-ui/components/callout'
-import { TypeTable } from 'fumadocs-ui/components/type-table'
-import { Cards, Card } from 'fumadocs-ui/components/card'
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { TypeTable } from 'fumadocs-ui/components/type-table';
+import { Cards, Card } from 'fumadocs-ui/components/card';
 
 # Relay Messaging
 
 Relay is DorkOS's built-in messaging layer. It routes messages between agents, humans, and external platforms like Telegram using a subject-based publish/subscribe model. Every message is persisted to disk, indexed in SQLite, and tracked end-to-end.
 
-This guide covers enabling Relay, sending your first message, configuring adapters, and integrating with Pulse.
+This guide covers enabling Relay, sending your first message, configuring adapters, and integrating with Tasks.
 
 ## What Relay Does
 
@@ -25,45 +25,27 @@ When Relay is enabled, it takes over the standard session messaging path. Instea
 
 ## Enabling Relay
 
-<Steps>
-<Step>
-### Set the environment variable
-
-Add `DORKOS_RELAY_ENABLED=true` to your `.env` file or export it:
-
-```bash
-export DORKOS_RELAY_ENABLED=true
-```
-</Step>
-
-<Step>
-### Start DorkOS
-
-```bash
-dorkos
-```
+Relay is enabled by default on fresh installs. When DorkOS starts, you should see:
 
 ```
-DorkOS server listening on port 4242 // [!code highlight]
-Relay message bus enabled // [!code highlight]
+DorkOS server listening on port 4242
+Relay message bus enabled
 ```
 
 Relay creates its data directory at `~/.dork/relay/` on first start.
-</Step>
 
-<Step>
-### Verify with the config endpoint
+To verify, check the config endpoint:
 
 ```bash
 curl http://localhost:4242/api/config
 ```
 
 The response includes `relay.enabled: true` when the subsystem is active.
-</Step>
-</Steps>
 
 <Callout type="info">
-Relay is fully opt-in. When `DORKOS_RELAY_ENABLED` is not set or is `false`, all Relay routes return 404 and session messaging uses the direct Agent SDK call. The Maildir files and SQLite index persist between restarts — you can toggle Relay without losing data.
+  To disable Relay, set `DORKOS_RELAY_ENABLED=false` in your `.env` file. All Relay routes will
+  return 404 and session messaging will use the direct Agent SDK call. The Maildir files and SQLite
+  index persist between restarts — you can toggle Relay without losing data.
 </Callout>
 
 ## Sending Messages
@@ -102,8 +84,8 @@ relay_inbox                 Read inbox messages for an endpoint
 relay_list_endpoints        List all registered endpoints
 relay_register_endpoint     Register a new endpoint
 relay_unregister_endpoint   Unregister an endpoint (use to clean up dispatch inboxes)
-relay_query                 Blocking request/reply — sends a message and waits for the response
-relay_dispatch              Fire-and-poll — dispatches a message, returns immediately with an inbox to poll
+relay_send_and_wait                 Blocking request/reply — sends a message and waits for the response
+relay_send_async              Fire-and-poll — dispatches a message, returns immediately with an inbox to poll
 relay_get_trace             Get the full delivery trace for a message
 relay_get_metrics           Get aggregate delivery metrics
 relay_list_adapters         List all adapters with status
@@ -112,20 +94,20 @@ relay_disable_adapter       Disable a running adapter
 relay_reload_adapters       Hot-reload adapter configuration from disk
 ```
 
-**`relay_query`** (added in v0.8.0) handles request/reply in a single call. It registers an ephemeral inbox, publishes the message with that inbox as `replyTo`, and blocks until the agent replies. Use this for synchronous patterns where you need the response before proceeding.
+**`relay_send_and_wait`** (added in v0.8.0) handles request/reply in a single call. It registers an ephemeral inbox, publishes the message with that inbox as `replyTo`, and blocks until the agent replies. Use this for synchronous patterns where you need the response before proceeding.
 
-**`relay_dispatch`** returns immediately with a dispatch inbox subject. The agent runs asynchronously; poll `relay_inbox` for progress events and the final result. Use this for long-running tasks where blocking is not appropriate. Call `relay_unregister_endpoint` to clean up when you receive `done: true`.
+**`relay_send_async`** returns immediately with a dispatch inbox subject. The agent runs asynchronously; poll `relay_inbox` for progress events and the final result. Use this for long-running tasks where blocking is not appropriate. Call `relay_unregister_endpoint` to clean up when you receive `done: true`.
 
 ### Subject Naming
 
 Subjects use a hierarchical dot-separated format: `relay.{audience}.{identifier}`.
 
-| Subject Pattern | Purpose |
-|---|---|
-| `relay.agent.{agentId}` | Messages addressed to a specific agent |
-| `relay.human.console.{clientId}` | Messages destined for a human's browser console |
-| `relay.human.telegram.{chatId}` | Messages routed to a Telegram chat |
-| `relay.system.pulse.{scheduleId}` | System messages from the Pulse scheduler |
+| Subject Pattern                   | Purpose                                         |
+| --------------------------------- | ----------------------------------------------- |
+| `relay.agent.{agentId}`           | Messages addressed to a specific agent          |
+| `relay.human.console.{clientId}`  | Messages destined for a human's browser console |
+| `relay.human.telegram.{chatId}`   | Messages routed to a Telegram chat              |
+| `relay.system.tasks.{scheduleId}` | System messages from the Task scheduler         |
 
 Wildcards work for subscriptions: `*` matches exactly one segment, `>` matches one or more trailing segments. Subscribing to `relay.agent.>` receives messages addressed to any agent.
 
@@ -149,12 +131,14 @@ curl -X POST http://localhost:4242/api/relay/messages \
 ```
 
 <Callout type="warn">
-If you omit budget fields, Relay applies defaults: 5 maximum hops, 1-hour TTL, no call budget limit. For automated agent-to-agent workflows, set explicit budgets to prevent unexpected resource consumption.
+  If you omit budget fields, Relay applies defaults: 5 maximum hops, 1-hour TTL, no call budget
+  limit. For automated agent-to-agent workflows, set explicit budgets to prevent unexpected resource
+  consumption.
 </Callout>
 
 ## Built-in Adapters
 
-Adapters bridge external platforms into the Relay subject hierarchy. DorkOS ships with three built-in adapters, configured through `~/.dork/relay/adapters.json`.
+Adapters bridge external platforms into the Relay subject hierarchy. DorkOS ships with five built-in adapters, configured through `~/.dork/relay/adapters.json`.
 
 ### Claude Code Adapter
 
@@ -181,7 +165,7 @@ The Claude Code adapter is enabled by default when Relay starts. It subscribes t
 
 ### Telegram Adapter
 
-The Telegram adapter connects a Telegram bot to the Relay bus. Inbound messages from Telegram are published to `relay.human.telegram.{chatId}`, and outbound messages on matching subjects are delivered back to the chat.
+The Telegram adapter connects a Telegram bot to the Relay bus using grammy. Inbound messages from Telegram are published to `relay.human.telegram.{chatId}`, and outbound messages on matching subjects are delivered back to the chat. Supports real-time streaming via Telegram's `sendMessageDraft` API.
 
 ```json
 {
@@ -194,6 +178,47 @@ The Telegram adapter connects a Telegram bot to the Relay bus. Inbound messages 
   }
 }
 ```
+
+### Telegram Chat SDK Adapter
+
+An experimental alternative Telegram adapter backed by the [Chat SDK](https://github.com/anthropics/chat). Uses the same BotFather token but integrates via Chat SDK's adapter abstraction instead of grammy directly. Streaming uses post+edit at ~500ms intervals (vs the native adapter's 200ms `sendMessageDraft`).
+
+```json
+{
+  "id": "telegram-chatsdk",
+  "type": "telegram-chatsdk",
+  "builtin": true,
+  "enabled": true,
+  "config": {
+    "token": "123456:ABC-DEF...",
+    "mode": "polling"
+  }
+}
+```
+
+### Slack Adapter
+
+The Slack adapter bridges Slack workspaces into Relay using Socket Mode — no public URL required. Supports streaming responses, threading, typing indicators via emoji reactions, and fine-grained access control.
+
+```json
+{
+  "id": "slack",
+  "type": "slack",
+  "builtin": true,
+  "enabled": true,
+  "config": {
+    "botToken": "xoxb-...",
+    "appToken": "xapp-...",
+    "signingSecret": "abc123...",
+    "streaming": true,
+    "typingIndicator": "reaction",
+    "respondMode": "thread-aware",
+    "dmPolicy": "open"
+  }
+}
+```
+
+`respondMode` controls when the bot responds in channels: `thread-aware` (default -- responds to @mentions and thread replies where the bot is already participating), `mention-only` (only @mentions), or `always` (every message). `dmPolicy` controls DM access: `open` (default) or `allowlist` (restrict to user IDs in `dmAllowlist`). Per-channel overrides are available via `channelOverrides`.
 
 ### Webhook Adapter
 
@@ -257,71 +282,103 @@ Span statuses: `sent` (published, delivery in progress), `delivered` (processed 
 
 For deeper observability, see the [Relay Observability](/docs/guides/relay-observability) guide.
 
-## Relay and Pulse Integration
+## Relay and Tasks Integration
 
-When both Relay and Pulse are enabled, scheduled jobs are dispatched through Relay. Pulse publishes to `relay.system.pulse.{scheduleId}`, and the Claude Code adapter starts the agent session.
+When both Relay and Tasks are enabled, scheduled jobs are dispatched through Relay. Tasks publishes to `relay.system.tasks.{scheduleId}`, and the Claude Code adapter starts the agent session.
 
 Scheduled runs then get Relay's full delivery pipeline — budget enforcement, tracing, dead letter handling, and access control.
 
 ```bash
 export DORKOS_RELAY_ENABLED=true
-export DORKOS_PULSE_ENABLED=true
+export DORKOS_TASKS_ENABLED=true
 dorkos
 ```
 
-Subscribe to `relay.system.pulse.*` via the SSE stream to observe all Pulse dispatch events.
+Subscribe to `relay.system.tasks.*` via the SSE stream to observe all Tasks dispatch events.
 
 ## Configuration Reference
 
-<TypeTable type={{
-  "DORKOS_RELAY_ENABLED": { type: "boolean", description: "Enable the Relay subsystem", default: "false" },
-}} />
+<TypeTable
+  type={{
+    DORKOS_RELAY_ENABLED: {
+      type: 'boolean',
+      description: 'Enable the Relay subsystem',
+      default: 'false',
+    },
+  }}
+/>
 
 ### Data Directory
 
-| Path | Purpose |
-|---|---|
-| `~/.dork/relay/index.db` | SQLite index database (messages, traces; WAL mode) |
-| `~/.dork/relay/endpoints/` | Maildir message store, one directory per endpoint |
-| `~/.dork/relay/adapters.json` | Adapter configuration (hot-reloaded) |
-| `~/.dork/relay/config.json` | Reliability settings (rate limits, circuit breakers, backpressure) |
-| `~/.dork/relay/access-rules.json` | Access control rules (hot-reloaded) |
+| Path                              | Purpose                                                            |
+| --------------------------------- | ------------------------------------------------------------------ |
+| `~/.dork/relay/index.db`          | SQLite index database (messages, traces; WAL mode)                 |
+| `~/.dork/relay/endpoints/`        | Maildir message store, one directory per endpoint                  |
+| `~/.dork/relay/adapters.json`     | Adapter configuration (hot-reloaded)                               |
+| `~/.dork/relay/config.json`       | Reliability settings (rate limits, circuit breakers, backpressure) |
+| `~/.dork/relay/access-rules.json` | Access control rules (hot-reloaded)                                |
 
 ### Reliability Settings
 
 The `config.json` file controls rate limiting, circuit breakers, and backpressure. Changes are hot-reloaded.
 
-<TypeTable type={{
-  "rateLimit.maxPerWindow": { type: "number", description: "Maximum messages per sender per window", default: "100" },
-  "rateLimit.windowMs": { type: "number", description: "Sliding window duration in milliseconds", default: "60000" },
-  "circuitBreaker.failureThreshold": { type: "number", description: "Consecutive failures before circuit opens", default: "5" },
-  "circuitBreaker.cooldownMs": { type: "number", description: "Time before half-open probe in milliseconds", default: "30000" },
-  "backpressure.warnThreshold": { type: "number", description: "Mailbox percentage that triggers a warning signal", default: "0.8" },
-  "backpressure.maxMessages": { type: "number", description: "Maximum messages in an endpoint mailbox before rejection", default: "1000" },
-}} />
+<TypeTable
+  type={{
+    'rateLimit.maxPerWindow': {
+      type: 'number',
+      description: 'Maximum messages per sender per window',
+      default: '100',
+    },
+    'rateLimit.windowMs': {
+      type: 'number',
+      description: 'Sliding window duration in milliseconds',
+      default: '60000',
+    },
+    'circuitBreaker.failureThreshold': {
+      type: 'number',
+      description: 'Consecutive failures before circuit opens',
+      default: '5',
+    },
+    'circuitBreaker.cooldownMs': {
+      type: 'number',
+      description: 'Time before half-open probe in milliseconds',
+      default: '30000',
+    },
+    'backpressure.warnThreshold': {
+      type: 'number',
+      description: 'Mailbox percentage that triggers a warning signal',
+      default: '0.8',
+    },
+    'backpressure.maxMessages': {
+      type: 'number',
+      description: 'Maximum messages in an endpoint mailbox before rejection',
+      default: '1000',
+    },
+  }}
+/>
 
 ### REST API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/relay/messages` | Publish a message to a subject |
-| `GET` | `/api/relay/messages` | List messages with filters and cursor pagination |
-| `GET` | `/api/relay/messages/:id` | Get a single message by ID |
-| `GET` | `/api/relay/messages/:id/trace` | Get the full delivery trace for a message |
-| `GET` | `/api/relay/endpoints` | List registered endpoints |
-| `POST` | `/api/relay/endpoints` | Register a new endpoint |
-| `DELETE` | `/api/relay/endpoints/:subject` | Unregister an endpoint |
-| `GET` | `/api/relay/endpoints/:subject/inbox` | Read inbox for an endpoint |
-| `GET` | `/api/relay/dead-letters` | List dead letter messages |
-| `GET` | `/api/relay/metrics` | Relay system metrics |
-| `GET` | `/api/relay/trace/metrics` | Aggregate delivery metrics |
-| `GET` | `/api/relay/stream` | SSE event stream (supports `?subject=` filter) |
-| `GET` | `/api/relay/adapters` | List adapters with status |
-| `GET` | `/api/relay/adapters/:id` | Get a single adapter's status |
-| `POST` | `/api/relay/adapters/reload` | Hot-reload adapter configuration |
-| `POST` | `/api/relay/adapters/:id/enable` | Enable an adapter |
-| `POST` | `/api/relay/adapters/:id/disable` | Disable an adapter |
-| `POST` | `/api/relay/webhooks/:adapterId` | Inbound webhook receiver |
+| Method   | Path                                  | Description                                      |
+| -------- | ------------------------------------- | ------------------------------------------------ |
+| `POST`   | `/api/relay/messages`                 | Publish a message to a subject                   |
+| `GET`    | `/api/relay/messages`                 | List messages with filters and cursor pagination |
+| `GET`    | `/api/relay/messages/:id`             | Get a single message by ID                       |
+| `GET`    | `/api/relay/messages/:id/trace`       | Get the full delivery trace for a message        |
+| `GET`    | `/api/relay/endpoints`                | List registered endpoints                        |
+| `POST`   | `/api/relay/endpoints`                | Register a new endpoint                          |
+| `DELETE` | `/api/relay/endpoints/:subject`       | Unregister an endpoint                           |
+| `GET`    | `/api/relay/endpoints/:subject/inbox` | Read inbox for an endpoint                       |
+| `GET`    | `/api/relay/dead-letters`             | List dead letter messages                        |
+| `GET`    | `/api/relay/metrics`                  | Relay system metrics                             |
+| `GET`    | `/api/relay/trace/metrics`            | Aggregate delivery metrics                       |
+| `GET`    | `/api/relay/stream`                   | SSE event stream (supports `?subject=` filter)   |
+| `GET`    | `/api/relay/adapters`                 | List adapters with status                        |
+| `GET`    | `/api/relay/adapters/:id`             | Get a single adapter's status                    |
+| `POST`   | `/api/relay/adapters/reload`          | Hot-reload adapter configuration                 |
+| `POST`   | `/api/relay/adapters/:id/enable`      | Enable an adapter                                |
+| `POST`   | `/api/relay/adapters/:id/disable`     | Disable an adapter                               |
+| `POST`   | `/api/relay/webhooks/:adapterId`      | Inbound webhook receiver                         |
 
 ## Next Steps
 

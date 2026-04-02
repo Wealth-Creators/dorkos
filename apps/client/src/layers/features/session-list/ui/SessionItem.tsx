@@ -1,14 +1,87 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronDown, Copy, Check, ShieldOff } from 'lucide-react';
+import { ChevronDown, Copy, Check, ShieldOff, GitFork } from 'lucide-react';
 import type { Session } from '@dorkos/shared/types';
 import { cn, formatRelativeTime, TIMING } from '@/layers/shared/lib';
+import { useSessionChatStore } from '@/layers/entities/session';
 
 interface SessionItemProps {
   session: Session;
   isActive: boolean;
   onClick: () => void;
+  onFork?: (sessionId: string) => void;
+  onRename?: (sessionId: string, title: string) => void;
   isNew?: boolean;
+}
+
+interface SessionActivityIndicatorProps {
+  sessionId: string;
+}
+
+/**
+ * Ambient status dot shown for background (non-active) sessions.
+ *
+ * Renders a colored dot conveying streaming, error, pending tool approval,
+ * or unseen activity state. Returns null when the session is idle and clean.
+ */
+function SessionActivityIndicator({ sessionId }: SessionActivityIndicatorProps) {
+  const status = useSessionChatStore(
+    useCallback((s) => s.sessions[sessionId]?.status ?? 'idle', [sessionId])
+  );
+  const sdkRunning = useSessionChatStore(
+    useCallback((s) => s.sessions[sessionId]?.sdkState === 'running', [sessionId])
+  );
+  const hasUnseenActivity = useSessionChatStore(
+    useCallback((s) => s.sessions[sessionId]?.hasUnseenActivity ?? false, [sessionId])
+  );
+  const hasPendingApproval = useSessionChatStore(
+    useCallback(
+      (s) =>
+        // SDK authoritative signal takes priority over tool-call-based detection
+        s.sessions[sessionId]?.sdkState === 'requires_action' ||
+        (s.sessions[sessionId]?.messages.some((m) =>
+          m.toolCalls?.some((tc) => tc.interactiveType && tc.status === 'pending')
+        ) ??
+          false),
+      [sessionId]
+    )
+  );
+
+  if (hasPendingApproval) {
+    return (
+      <span
+        className="animate-tasks size-1.5 flex-shrink-0 rounded-full bg-amber-500"
+        aria-label="Waiting for approval"
+      />
+    );
+  }
+
+  // SDK 'running' is authoritative; fall back to inferred streaming status
+  const isRunning = sdkRunning || status === 'streaming';
+  const isError = status === 'error';
+
+  if (isRunning) {
+    return (
+      <span
+        className="animate-tasks size-1.5 flex-shrink-0 rounded-full bg-green-500"
+        aria-label="Streaming"
+      />
+    );
+  }
+
+  if (isError) {
+    return (
+      <span className="bg-destructive size-1.5 flex-shrink-0 rounded-full" aria-label="Error" />
+    );
+  }
+
+  if (hasUnseenActivity) {
+    return (
+      <span className="size-1.5 flex-shrink-0 rounded-full bg-blue-500" aria-label="New activity" />
+    );
+  }
+
+  return null;
 }
 
 function formatTimestamp(iso: string): string {
@@ -58,9 +131,35 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 }
 
 /** Sidebar row representing a single session with expandable details. */
-export function SessionItem({ session, isActive, onClick, isNew = false }: SessionItemProps) {
+export function SessionItem({
+  session,
+  isActive,
+  onClick,
+  onFork,
+  onRename,
+  isNew = false,
+}: SessionItemProps) {
   const [expanded, setExpanded] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const isSkipMode = session.permissionMode === 'bypassPermissions';
+
+  useEffect(() => {
+    if (isRenaming) renameInputRef.current?.focus();
+  }, [isRenaming]);
+
+  const startRename = useCallback(() => {
+    setRenameValue(session.title);
+    setIsRenaming(true);
+  }, [session.title]);
+
+  const commitRename = useCallback(() => {
+    const trimmed = renameValue.trim();
+    setIsRenaming(false);
+    if (!trimmed || trimmed === session.title) return;
+    onRename?.(session.id, trimmed);
+  }, [renameValue, session.id, session.title, onRename]);
 
   const Wrapper = isNew ? motion.div : 'div';
   const animationProps = isNew
@@ -82,15 +181,13 @@ export function SessionItem({ session, isActive, onClick, isNew = false }: Sessi
       data-testid="session-item"
       className={cn(
         'group relative rounded-lg transition-colors duration-150',
-        isActive
-          ? 'text-foreground border-primary border-l-2'
-          : 'border-l-2 border-transparent'
+        isActive ? 'text-foreground border-primary border-l-2' : 'border-l-2 border-transparent'
       )}
     >
       {isActive && (
         <motion.div
           layoutId="active-session-bg"
-          className="absolute inset-0 rounded-lg bg-secondary"
+          className="bg-secondary absolute inset-0 rounded-lg"
           transition={{ type: 'spring', stiffness: 280, damping: 32 }}
         />
       )}
@@ -110,9 +207,10 @@ export function SessionItem({ session, isActive, onClick, isNew = false }: Sessi
         transition={{ type: 'spring', stiffness: 400, damping: 30 }}
         className="relative z-10 cursor-pointer px-3 py-2"
       >
-        {/* Line 1: relative time + permission icon + expand */}
+        {/* Line 1: relative time + activity indicator + permission icon + expand */}
         <div className="text-muted-foreground flex items-center gap-1 text-xs">
           <span className="min-w-0 flex-1">{formatRelativeTime(session.updatedAt)}</span>
+          {!isActive && <SessionActivityIndicator sessionId={session.id} />}
           <span className="flex flex-shrink-0 items-center gap-1">
             {isSkipMode && (
               <ShieldOff
@@ -140,8 +238,39 @@ export function SessionItem({ session, isActive, onClick, isNew = false }: Sessi
           </span>
         </div>
 
-        {/* Line 2: title */}
-        <div className="text-muted-foreground/70 mt-0.5 truncate text-xs">{session.title}</div>
+        {/* Line 2: title (double-click to rename) */}
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitRename();
+              if (e.key === 'Escape') setIsRenaming(false);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="bg-background text-foreground mt-0.5 w-full rounded border px-1 text-xs outline-none"
+          />
+        ) : onRename ? (
+          <div
+            className="text-muted-foreground/70 mt-0.5 truncate text-xs"
+            role="button"
+            tabIndex={-1}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              startRename();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'F2') startRename();
+            }}
+            title="Double-click or F2 to rename"
+          >
+            {session.title}
+          </div>
+        ) : (
+          <div className="text-muted-foreground/70 mt-0.5 truncate text-xs">{session.title}</div>
+        )}
       </motion.div>
 
       <AnimatePresence initial={false}>
@@ -158,6 +287,19 @@ export function SessionItem({ session, isActive, onClick, isNew = false }: Sessi
               <DetailRow label="Created" value={formatTimestamp(session.createdAt)} />
               <DetailRow label="Updated" value={formatTimestamp(session.updatedAt)} />
               <DetailRow label="Permissions" value={isSkipMode ? 'Skip (unsafe)' : 'Default'} />
+              {onFork && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onFork(session.id);
+                  }}
+                  className="hover:bg-secondary/80 text-muted-foreground/60 hover:text-muted-foreground mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors duration-100"
+                  aria-label="Fork session"
+                >
+                  <GitFork className="size-(--size-icon-xs)" />
+                  <span>Fork</span>
+                </button>
+              )}
             </div>
           </motion.div>
         )}

@@ -21,31 +21,25 @@ export function AdvancedTab({ onResetComplete, onRestartComplete }: AdvancedTabP
 
   return (
     <div className="space-y-6">
-      <h3 className="text-sm font-semibold">Diagnostics</h3>
+      <h3 className="text-sm font-semibold">Background Updates</h3>
       <p className="text-muted-foreground text-xs">
-        Toggle data synchronization paths for debugging. Disabling these
-        reduces background network activity but may cause stale data.
+        Messages stream in live while someone is responding. These settings add extra updates for
+        multi-window setups and unattended agents.
       </p>
       <FieldCard>
         <FieldCardContent>
           <SettingRow
-            label="Cross-client sync"
-            description="Real-time updates from other clients and presence indicators"
+            label="Multi-window sync"
+            description="Keep multiple DorkOS windows and the Obsidian plugin in sync"
           >
-            <Switch
-              checked={enableCrossClientSync}
-              onCheckedChange={setEnableCrossClientSync}
-            />
+            <Switch checked={enableCrossClientSync} onCheckedChange={setEnableCrossClientSync} />
           </SettingRow>
 
           <SettingRow
-            label="Message polling"
-            description="Periodic refresh of message history (3s active, 10s background)"
+            label="Background refresh"
+            description="Check for new messages periodically, even when no one is responding"
           >
-            <Switch
-              checked={enableMessagePolling}
-              onCheckedChange={setEnableMessagePolling}
-            />
+            <Switch checked={enableMessagePolling} onCheckedChange={setEnableMessagePolling} />
           </SettingRow>
         </FieldCardContent>
       </FieldCard>
@@ -63,11 +57,7 @@ export function AdvancedTab({ onResetComplete, onRestartComplete }: AdvancedTabP
                 Permanently delete all DorkOS data and restart the server.
               </p>
             </div>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setResetDialogOpen(true)}
-            >
+            <Button variant="destructive" size="sm" onClick={() => setResetDialogOpen(true)}>
               Reset
             </Button>
           </div>
@@ -79,11 +69,7 @@ export function AdvancedTab({ onResetComplete, onRestartComplete }: AdvancedTabP
                 Restart the DorkOS server process. Active sessions will be interrupted.
               </p>
             </div>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setRestartDialogOpen(true)}
-            >
+            <Button variant="destructive" size="sm" onClick={() => setRestartDialogOpen(true)}>
               Restart
             </Button>
           </div>

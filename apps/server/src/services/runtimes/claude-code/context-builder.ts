@@ -1,37 +1,55 @@
 import os from 'node:os';
 import { getGitStatus } from '../../core/git-status.js';
-import type { GitStatusResponse } from '@dorkos/shared/types';
+import type { GitStatusResponse, UiState } from '@dorkos/shared/types';
 import { readManifest } from '@dorkos/shared/manifest';
+import {
+  extractCustomProse,
+  buildSoulContent,
+  TRAIT_SECTION_START,
+} from '@dorkos/shared/convention-files';
+import { readConventionFile } from '@dorkos/shared/convention-files-io';
+import { renderTraits, DEFAULT_TRAITS } from '@dorkos/shared/trait-renderer';
 import { logger } from '../../../lib/logger.js';
 import { env } from '../../../env.js';
 import { SERVER_VERSION } from '../../../lib/version.js';
 import { isRelayEnabled } from '../../relay/relay-state.js';
-import { isPulseEnabled } from '../../pulse/pulse-state.js';
+import { isTasksEnabled } from '../../tasks/task-state.js';
 import { configManager } from '../../core/config-manager.js';
 import type { ResolvedToolConfig } from './tool-filter.js';
 import type { AgentRegistryPort } from '@dorkos/shared/agent-runtime';
+import type { BindingRouter } from '../../relay/binding-router.js';
+import type { BindingStore } from '../../relay/binding-store.js';
+import type { AdapterManager } from '../../relay/adapter-manager.js';
+
+/** Dependencies for building the <relay_connections> context block. */
+export interface RelayContextDeps {
+  agentId: string;
+  bindingRouter: BindingRouter;
+  bindingStore: BindingStore;
+  adapterManager: AdapterManager;
+}
 
 const RELAY_TOOLS_CONTEXT = `<relay_tools>
 DorkOS Relay is a pub/sub message bus for inter-agent communication.
 
 Subject hierarchy:
   relay.agent.{agentId}                — activate a specific agent session
-  relay.inbox.query.{UUID}             — ephemeral inbox for relay_query (auto-managed)
-  relay.inbox.dispatch.{UUID}          — ephemeral inbox for relay_dispatch (auto-expires after ~35 min)
+  relay.inbox.query.{UUID}             — ephemeral inbox for relay_send_and_wait (auto-managed)
+  relay.inbox.dispatch.{UUID}          — ephemeral inbox for relay_send_async (auto-expires after ~35 min)
   relay.inbox.{agentId}                — persistent agent reply inbox
   relay.human.console.{clientId}       — reach a human in the DorkOS UI
   relay.system.console                 — system broadcast channel
-  relay.system.pulse.{scheduleId}      — Pulse scheduler events
+  relay.system.tasks.{scheduleId}      — Tasks scheduler events
 
 Workflow: Query another agent — SHORT tasks (≤10 min, PREFERRED)
 1. mesh_list() to find available agents and their agent IDs
-2. relay_query(to_subject="relay.agent.{theirAgentId}", payload={task}, from={myAgentId}, timeout_ms=600000)
+2. relay_send_and_wait(to_subject="relay.agent.{theirAgentId}", payload={task}, from={myAgentId}, timeout_ms=600000)
    → Blocks until reply (max 10 min / 600 000 ms)
    → Returns: { reply, from, replyMessageId, sentMessageId, progress: ProgressEvent[] }
    → progress[] contains intermediate steps: { type: "progress", step, step_type, text, done: false }
 
 Workflow: Dispatch to another agent — LONG tasks (>10 min)
-1. relay_dispatch(to_subject="relay.agent.{theirAgentId}", payload={task}, from={myAgentId})
+1. relay_send_async(to_subject="relay.agent.{theirAgentId}", payload={task}, from={myAgentId})
    → Returns IMMEDIATELY: { messageId, inboxSubject: "relay.inbox.dispatch.{UUID}" }
 2. Poll: relay_inbox(endpoint_subject=inboxSubject, status="unread")
    → Returns progress events: { type: "progress", step, step_type: "message"|"tool_result", text, done: false }
@@ -46,17 +64,22 @@ Workflow: Manual poll (fallback)
 2. relay_send(subject="relay.agent.{theirAgentId}", payload={task}, from={myAgentId}, replyTo="relay.inbox.{myAgentId}")
 3. relay_inbox(endpoint_subject="relay.inbox.{myAgentId}")
 
-CONSTRAINT — Subagent MCP tools: DorkOS MCP tools (relay_*, mesh_*, pulse_*) are NOT available
+CONSTRAINT — Subagent MCP tools: DorkOS MCP tools (relay_*, mesh_*, tasks_*) are NOT available
 inside Claude Code Task() subagents. This is an SDK architectural limitation (subprocesses do not
 inherit the parent MCP server). The orchestrator pattern workaround:
   WRONG:  Task("use relay_send to message agent B")   ← tools unavailable, silent failure
-  RIGHT:  1. Call relay_dispatch() in this (parent) session
+  RIGHT:  1. Call relay_send_async() in this (parent) session
           2. Pass the inboxSubject into the Task() prompt if needed
           3. Poll relay_inbox() in this session after Task() returns
 
-IMPORTANT: When YOU receive a relay message, respond naturally — do NOT call relay_send.
-Your response is automatically forwarded by the relay system.
-Only call relay_send/relay_query/relay_dispatch to INITIATE a new message.
+IMPORTANT — Outbound messaging rules:
+- When your CURRENT message has a <relay_context> block: respond naturally. Your response
+  is automatically forwarded to the sender. Do NOT call relay_send.
+- When your current message does NOT have <relay_context> (e.g., from the DorkOS console)
+  and the user asks you to message them on another channel: use relay_send() with the
+  subject from <relay_connections>, or use relay_notify_user() for convenience.
+- Only call relay_send/relay_send_and_wait/relay_send_async to INITIATE a new message
+  to another agent or external platform.
 
 relay_list_endpoints returns type ("dispatch"|"query"|"persistent"|"agent"|"unknown") and expiresAt
 (ISO string or null) for each endpoint. Use these to identify active inboxes and their expiry.
@@ -90,8 +113,14 @@ const ADAPTER_TOOLS_CONTEXT = `<adapter_tools>
 Relay adapters bridge external platforms (Telegram, webhooks) to the agent message bus.
 
 Subject conventions for external messages:
-  relay.human.telegram.{chatId}    — send to / receive from Telegram
-  relay.human.webhook.{webhookId}  — send to / receive from webhooks
+  relay.human.telegram.{adapterId}.{chatId}        — Telegram DM
+  relay.human.telegram.{adapterId}.group.{chatId}  — Telegram group
+  relay.human.slack.{adapterId}.{chatId}            — Slack channel/DM
+  relay.human.webhook.{webhookId}                   — Webhook
+
+The {adapterId} is the adapter's ID from relay_list_adapters() (e.g., "telegram-lifeos").
+The {chatId} is the platform-specific chat identifier (e.g., "817732118" for Telegram).
+Use <relay_connections> or binding_list_sessions() to get pre-computed subjects.
 
 Adapter management:
 - relay_list_adapters() — see all adapters and their status (connected, disconnected, error)
@@ -106,19 +135,51 @@ Bindings route adapter messages to agent projects:
 Session strategies: per-chat (default, one session per conversation), per-user (shared across chats), stateless (new session each message).
 </adapter_tools>`;
 
-const PULSE_TOOLS_CONTEXT = `<pulse_tools>
-DorkOS Pulse lets you create and manage scheduled agent runs.
+const TASKS_TOOLS_CONTEXT = `<tasks_tools>
+DorkOS Tasks lets you create and manage scheduled agent runs.
 
 Available tools:
-  pulse_list_schedules() -- list all configured schedules
-  pulse_create_schedule(name, cron, prompt, ...) -- create a new schedule (enters pending_approval)
-  pulse_update_schedule(id, ...) -- modify schedule settings
-  pulse_delete_schedule(id) -- remove a schedule
-  pulse_get_run_history(scheduleId) -- view past run results
+  tasks_list() -- list all configured schedules
+  tasks_create(name, cron, prompt, ...) -- create a new schedule (enters pending_approval)
+  tasks_update(id, ...) -- modify schedule settings
+  tasks_delete(id) -- remove a schedule
+  tasks_get_run_history(scheduleId) -- view past run results
 
 Schedules can target a specific agent (by agentId) or a directory (by cwd).
 Agent-linked schedules automatically resolve the agent's project path at run time.
-</pulse_tools>`;
+</tasks_tools>`;
+
+const UI_TOOLS_CONTEXT = `<ui_tools>
+DorkOS UI control lets you manipulate the client interface.
+
+Available tools:
+  control_ui(action, ...) -- send a UI command to the client
+  get_ui_state() -- query current UI state (panels, sidebar, canvas, active agent)
+
+Actions:
+  open_panel / close_panel / toggle_panel: { panel: "settings"|"tasks"|"relay"|"mesh"|"picker" }
+  open_sidebar / close_sidebar
+  switch_sidebar_tab: { tab: "overview"|"sessions"|"schedules"|"connections" }
+  open_canvas: { content: { type: "url"|"markdown"|"json", ... }, preferredWidth?: 20-80 }
+  update_canvas / close_canvas
+  show_toast: { message, level?: "success"|"error"|"info"|"warning", description? }
+  set_theme: { theme: "light"|"dark" }
+  scroll_to_message: { messageId? } (omit for bottom)
+  switch_agent: { cwd: string }
+  open_command_palette
+
+Use get_ui_state() before making layout decisions to avoid redundant commands.
+</ui_tools>`;
+
+/**
+ * Build the `<ui_tools>` context block with optional current state.
+ *
+ * Always included — UI tools are core tools with no feature flag dependency.
+ */
+function buildUiToolsBlock(uiState?: UiState): string {
+  if (!uiState) return UI_TOOLS_CONTEXT;
+  return `${UI_TOOLS_CONTEXT}\n\n<ui_state>\n${JSON.stringify(uiState, null, 2)}\n</ui_state>`;
+}
 
 /**
  * Build the `<relay_tools>` context block.
@@ -172,20 +233,81 @@ function buildAdapterToolsBlock(toolConfig?: ResolvedToolConfig): string {
 }
 
 /**
- * Build the `<pulse_tools>` context block.
+ * Build the `<tasks_tools>` context block.
  *
  * When `toolConfig` is provided, uses the pre-resolved config (agent-aware).
- * Otherwise falls back to Pulse feature flag + config toggle checks.
+ * Otherwise falls back to Tasks feature flag + config toggle checks.
  */
-function buildPulseToolsBlock(toolConfig?: ResolvedToolConfig): string {
+function buildTasksToolsBlock(toolConfig?: ResolvedToolConfig): string {
   if (toolConfig) {
-    if (!toolConfig.pulse) return '';
+    if (!toolConfig.tasks) return '';
   } else {
-    if (!isPulseEnabled()) return '';
+    if (!isTasksEnabled()) return '';
     const config = configManager.get('agentContext');
-    if (config?.pulseTools === false) return '';
+    if (config?.tasksTools === false) return '';
   }
-  return PULSE_TOOLS_CONTEXT;
+  return TASKS_TOOLS_CONTEXT;
+}
+
+/**
+ * Build the `<relay_connections>` context block showing bound adapters and active chats.
+ *
+ * Follows the ADR-0069 dual-gate pattern:
+ * 1. relayContext must be provided (no deps = no block)
+ * 2. Relay feature must be enabled (via isRelayEnabled() or toolConfig)
+ * 3. Adapter tools must be enabled (via toolConfig.adapter)
+ * 4. Agent must have at least one binding
+ */
+function buildRelayConnectionsBlock(
+  relayContext?: RelayContextDeps,
+  toolConfig?: ResolvedToolConfig
+): string {
+  if (!relayContext) return '';
+  if (toolConfig && !toolConfig.adapter) return '';
+  if (!toolConfig && !isRelayEnabled()) return '';
+
+  const { agentId, bindingStore, bindingRouter, adapterManager } = relayContext;
+
+  const allBindings = bindingStore.getAll();
+  const myBindings = allBindings.filter((b) => b.agentId === agentId);
+  if (myBindings.length === 0) return '';
+
+  const adapters = adapterManager.listAdapters();
+  const adapterMap = new Map(adapters.map((a) => [a.config.id, a]));
+
+  const lines: string[] = [`Adapters bound to this agent (${agentId}):`];
+
+  for (const binding of myBindings) {
+    const adapter = adapterMap.get(binding.adapterId);
+    const displayName = adapter?.config?.type ?? binding.adapterId;
+    const label = adapter?.config?.label ?? '';
+    const state = adapter?.status?.state ?? 'unknown';
+    const labelSuffix = label ? ` ${label}` : '';
+
+    lines.push('');
+    lines.push(`- ${binding.adapterId} (${displayName}${labelSuffix}) [${state}]`);
+
+    const sessions = bindingRouter.getSessionsByBinding(binding.id);
+    if (sessions.length > 0) {
+      lines.push('  Active chats:');
+      for (const session of sessions) {
+        const adapterType = adapter?.config?.type ?? 'unknown';
+        const subject = `relay.human.${adapterType}.${binding.adapterId}.${session.chatId}`;
+        const keyParts = session.key.split(':');
+        const channelType = keyParts[1] === 'chat' ? 'DM' : (keyParts[1] ?? 'unknown');
+        lines.push(`  - ${subject} (${channelType})`);
+      }
+    } else {
+      lines.push('  No active chats yet (user must message the bot first)');
+    }
+  }
+
+  lines.push('');
+  lines.push('To message a user on a bound adapter:');
+  lines.push(`  relay_send(subject="{chat subject}", payload="your message", from="${agentId}")`);
+  lines.push(`  OR: relay_notify_user(message="your message", channel="{adapter type or ID}")`);
+
+  return `<relay_connections>\n${lines.join('\n')}\n</relay_connections>`;
 }
 
 /**
@@ -197,15 +319,13 @@ function buildPulseToolsBlock(toolConfig?: ResolvedToolConfig): string {
  * @param meshCore - Optional agent registry port for agent data access
  */
 async function buildPeerAgentsBlock(
-  meshCore: AgentRegistryPort | null | undefined,
+  meshCore: AgentRegistryPort | null | undefined
 ): Promise<string> {
   if (!meshCore) return '';
   try {
     const agents = meshCore.listWithPaths().slice(0, 10);
     if (agents.length === 0) return '';
-    const lines = agents
-      .map((a) => `- ${a.name} (${a.projectPath})`)
-      .join('\n');
+    const lines = agents.map((a) => `- ${a.name} (${a.projectPath})`).join('\n');
     return `<peer_agents>\nRegistered agents on this machine (use mesh_list() for live data):\n${lines}\n\nTo contact a peer: mesh_inspect(agentId) for relay endpoint, then relay_send() to that subject.\n</peer_agents>`;
   } catch {
     return '';
@@ -222,11 +342,15 @@ async function buildPeerAgentsBlock(
  * @param cwd - Working directory for the session
  * @param meshCore - Optional agent registry port for peer agents block
  * @param toolConfig - Optional resolved tool config for agent-aware block gating
+ * @param relayContext - Optional relay context deps for building relay connections block
+ * @param uiState - Optional client-reported UI state for the active session
  */
 export async function buildSystemPromptAppend(
   cwd: string,
   meshCore?: AgentRegistryPort | null,
   toolConfig?: ResolvedToolConfig,
+  relayContext?: RelayContextDeps,
+  uiState?: UiState
 ): Promise<string> {
   const results = await Promise.allSettled([
     buildEnvBlock(cwd),
@@ -239,7 +363,9 @@ export async function buildSystemPromptAppend(
   const relayBlock = buildRelayToolsBlock(toolConfig);
   const meshBlock = buildMeshToolsBlock(toolConfig);
   const adapterBlock = buildAdapterToolsBlock(toolConfig);
-  const pulseBlock = buildPulseToolsBlock(toolConfig);
+  const tasksBlock = buildTasksToolsBlock(toolConfig);
+  const relayConnectionsBlock = buildRelayConnectionsBlock(relayContext, toolConfig);
+  const uiBlock = buildUiToolsBlock(uiState);
 
   return [
     ...results
@@ -248,7 +374,9 @@ export async function buildSystemPromptAppend(
     relayBlock,
     meshBlock,
     adapterBlock,
-    pulseBlock,
+    tasksBlock,
+    relayConnectionsBlock,
+    uiBlock,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -322,13 +450,15 @@ async function buildGitBlock(cwd: string): Promise<string> {
 }
 
 /**
- * Build agent identity and persona blocks from `.dork/agent.json`.
+ * Build agent identity, persona, and safety boundary blocks from `.dork/` convention files.
  *
- * When a manifest exists, always includes `<agent_identity>` (informational).
- * Includes `<agent_persona>` only when `personaEnabled` is true and `persona`
- * text is non-empty.
+ * Reads `agent.json` for identity data and trait values, `SOUL.md` for personality,
+ * and `NOPE.md` for safety boundaries. Falls back to the legacy `persona` field
+ * when no SOUL.md exists (pre-migration agents).
  *
- * @param cwd - Working directory to check for agent manifest
+ * Injection order: identity -> persona (SOUL.md) -> safety boundaries (NOPE.md).
+ *
+ * @param cwd - Working directory to check for agent manifest and convention files
  * @returns XML block string, or empty string if no manifest
  */
 async function buildAgentBlock(cwd: string): Promise<string> {
@@ -336,11 +466,14 @@ async function buildAgentBlock(cwd: string): Promise<string> {
   if (!manifest) return '';
 
   // Zod v4 + openapi extension drops persona fields from inferred type
-  const { persona, personaEnabled } = manifest as {
+  const { persona, personaEnabled, traits, conventions } = manifest as {
     persona?: string;
     personaEnabled?: boolean;
+    traits?: Record<string, number>;
+    conventions?: { soul?: boolean; nope?: boolean; dorkosKnowledge?: boolean };
   };
 
+  // --- Identity block ---
   const identityLines = [
     `Name: ${manifest.name}`,
     `ID: ${manifest.id}`,
@@ -350,11 +483,52 @@ async function buildAgentBlock(cwd: string): Promise<string> {
 
   const blocks = [`<agent_identity>\n${identityLines.join('\n')}\n</agent_identity>`];
 
-  if (personaEnabled !== false && persona) {
-    blocks.push(`<agent_persona>\n${persona}\n</agent_persona>`);
+  // --- Persona block (SOUL.md or legacy persona) ---
+  const soulEnabled = conventions?.soul !== false;
+
+  if (soulEnabled) {
+    let soulContent = await readConventionFile(cwd, 'SOUL.md');
+
+    if (soulContent) {
+      // If SOUL.md has a trait section, regenerate it with current trait values
+      if (soulContent.includes(TRAIT_SECTION_START)) {
+        const customProse = extractCustomProse(soulContent);
+        const traitBlock = renderTraits({ ...DEFAULT_TRAITS, ...traits });
+        soulContent = buildSoulContent(traitBlock, customProse);
+      }
+      blocks.push(`<agent_persona>\n${soulContent}\n</agent_persona>`);
+    } else if (personaEnabled !== false && persona) {
+      // Legacy fallback: use persona field
+      blocks.push(`<agent_persona>\n${persona}\n</agent_persona>`);
+    }
+  }
+
+  // --- Safety boundaries block (NOPE.md) ---
+  const nopeEnabled = conventions?.nope !== false;
+
+  if (nopeEnabled) {
+    const nopeContent = await readConventionFile(cwd, 'NOPE.md');
+    if (nopeContent) {
+      blocks.push(`<agent_safety_boundaries>\n${nopeContent}\n</agent_safety_boundaries>`);
+    }
+  }
+
+  // --- DorkOS knowledge block (default ON) ---
+  if (conventions?.dorkosKnowledge !== false) {
+    blocks.push(buildDorkosContextBlock());
   }
 
   return blocks.join('\n\n');
+}
+
+/** Build the `<dorkos_context>` block with platform overview and doc links. */
+function buildDorkosContextBlock(): string {
+  return `<dorkos_context>
+DorkOS is the operating system for autonomous AI agents.
+Subsystems: Console (chat), Tasks (scheduling), Relay (messaging), Mesh (discovery).
+Documentation: https://dorkos.ai/llms.txt
+Full docs: https://dorkos.ai/docs
+</dorkos_context>`;
 }
 
 /** @internal Exported for testing only. */
@@ -363,10 +537,13 @@ export {
   buildRelayToolsBlock as _buildRelayToolsBlock,
   buildMeshToolsBlock as _buildMeshToolsBlock,
   buildAdapterToolsBlock as _buildAdapterToolsBlock,
-  buildPulseToolsBlock as _buildPulseToolsBlock,
+  buildTasksToolsBlock as _buildTasksToolsBlock,
   buildPeerAgentsBlock as _buildPeerAgentsBlock,
+  buildRelayConnectionsBlock as _buildRelayConnectionsBlock,
+  buildUiToolsBlock as _buildUiToolsBlock,
   RELAY_TOOLS_CONTEXT as _RELAY_TOOLS_CONTEXT,
   MESH_TOOLS_CONTEXT as _MESH_TOOLS_CONTEXT,
   ADAPTER_TOOLS_CONTEXT as _ADAPTER_TOOLS_CONTEXT,
-  PULSE_TOOLS_CONTEXT as _PULSE_TOOLS_CONTEXT,
+  TASKS_TOOLS_CONTEXT as _TASKS_TOOLS_CONTEXT,
+  UI_TOOLS_CONTEXT as _UI_TOOLS_CONTEXT,
 };

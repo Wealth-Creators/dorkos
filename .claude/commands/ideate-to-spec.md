@@ -11,6 +11,20 @@ category: workflow
 
 ---
 
+## Linear Integration (Optional — Spec-Linear Bridge)
+
+After writing `02-specification.md`, check the spec's frontmatter for a `linear-issue:` field. If present and Linear MCP tools are available, post a breadcrumb comment to the linked issue:
+
+```
+**Spec Progress** — [date]
+**Phase:** Specification Created
+**Spec:** `specs/{slug}/`
+**Document:** `specs/{slug}/02-specification.md`
+**Next:** Run `/spec:decompose specs/{slug}/02-specification.md` to break into tasks
+```
+
+If no `linear-issue:` field exists or Linear tools are unavailable, skip silently.
+
 ## Workflow Instructions
 
 This command bridges the gap between ideation and implementation by transforming an ideation document into a validated, implementation-ready specification. Follow each step sequentially.
@@ -553,6 +567,7 @@ Read `decisions/manifest.json`. Check if any entries have `"extractedFrom": "{sl
 #### 7.0.2: Read Spec Documents
 
 Read both:
+
 1. `specs/{slug}/01-ideation.md`
 2. `specs/{slug}/02-specification.md`
 
@@ -560,15 +575,16 @@ Read both:
 
 Identify decision candidates by scanning for these signals (from the `writing-adrs` skill):
 
-| Signal | Pattern |
-|--------|---------|
-| Technology choices | "We chose X", "Using X instead of Y", library/framework selections |
-| Pattern adoption | Architectural patterns, design systems, data flow approaches |
-| Trade-off resolutions | "We decided to...", "The recommended approach is..." |
-| Rejected alternatives | "We considered X but...", "Option A vs Option B" |
-| Deliberate exclusions | "We will not...", "Out of scope because..." |
+| Signal                | Pattern                                                            |
+| --------------------- | ------------------------------------------------------------------ |
+| Technology choices    | "We chose X", "Using X instead of Y", library/framework selections |
+| Pattern adoption      | Architectural patterns, design systems, data flow approaches       |
+| Trade-off resolutions | "We decided to...", "The recommended approach is..."               |
+| Rejected alternatives | "We considered X but...", "Option A vs Option B"                   |
+| Deliberate exclusions | "We will not...", "Out of scope because..."                        |
 
 For each candidate, extract:
+
 - **Title**: Short imperative form (e.g., "Use SSE for Server-to-Client Streaming")
 - **Context**: 2-5 sentences from the spec's problem/research sections
 - **Decision**: 2-5 sentences from the spec's design/recommendation sections

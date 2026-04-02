@@ -9,6 +9,14 @@ import { link } from './terminal-link.js';
 import { DEFAULT_PORT } from '@dorkos/shared/constants';
 import { LOG_LEVEL_MAP } from '@dorkos/shared/config-schema';
 import { env } from './env.js';
+import { checkNodeVersion, diagnoseStartupError, formatDiagnostic } from './startup-diagnostics.js';
+
+// Early Node.js version guard — before any imports that could fail on older runtimes
+const nodeVersionIssue = checkNodeVersion();
+if (nodeVersionIssue) {
+  console.error(formatDiagnostic(nodeVersionIssue));
+  process.exit(1);
+}
 
 // Injected at build time by esbuild define
 declare const __CLI_VERSION__: string;
@@ -25,7 +33,8 @@ try {
       tunnel: { type: 'boolean', short: 't', default: false },
       dir: { type: 'string', short: 'd' },
       boundary: { type: 'string', short: 'b' },
-      pulse: { type: 'boolean' },
+      tasks: { type: 'boolean' },
+      open: { type: 'boolean' },
       'log-level': { type: 'string', short: 'l' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
@@ -33,6 +42,7 @@ try {
       yes: { type: 'boolean', short: 'y', default: false },
     },
     allowPositionals: true,
+    allowNegative: true,
   }));
 } catch (err) {
   if (
@@ -72,8 +82,9 @@ Options:
   -t, --tunnel           Enable ngrok tunnel
   -d, --dir <path>       Working directory (default: current directory)
   -b, --boundary <path>  Directory boundary (default: home directory)
-      --pulse              Enable Pulse scheduler
-      --no-pulse           Disable Pulse scheduler
+      --tasks              Enable Tasks scheduler
+      --no-tasks           Disable Tasks scheduler
+      --no-open            Don't open browser on startup
   -l, --log-level <level>  Log level (fatal|error|warn|info|debug|trace)
       --post-install-check  Verify installation and exit
   -h, --help             Show this help message
@@ -185,11 +196,30 @@ if (tunnelDomain && !process.env.TUNNEL_DOMAIN) {
   process.env.TUNNEL_DOMAIN = tunnelDomain;
 }
 
-// Pulse scheduler: CLI flag > env var > config
-if (values.pulse !== undefined) {
-  process.env.DORKOS_PULSE_ENABLED = values.pulse ? 'true' : 'false';
-} else if (!process.env.DORKOS_PULSE_ENABLED && cfgMgr.getDot('scheduler.enabled')) {
-  process.env.DORKOS_PULSE_ENABLED = 'true';
+// Tasks scheduler: CLI flag > env var > config
+if (values.tasks !== undefined) {
+  process.env.DORKOS_TASKS_ENABLED = values.tasks ? 'true' : 'false';
+} else if (!process.env.DORKOS_TASKS_ENABLED && cfgMgr.getDot('scheduler.enabled')) {
+  process.env.DORKOS_TASKS_ENABLED = 'true';
+}
+
+// Browser open: CLI flag > env var > config > default (true)
+// node:util parseArgs treats --no-open as open=false, --open as open=true
+let shouldOpenBrowser = true;
+if (values.open !== undefined) {
+  shouldOpenBrowser = Boolean(values.open);
+} else if (process.env.DORKOS_OPEN !== undefined) {
+  shouldOpenBrowser = process.env.DORKOS_OPEN !== 'false' && process.env.DORKOS_OPEN !== '0';
+} else {
+  const configOpen = cfgMgr.getDot('server.open');
+  if (configOpen !== undefined && configOpen !== null) {
+    shouldOpenBrowser = Boolean(configOpen);
+  }
+}
+
+// Relay: env var > config (no CLI flag for relay)
+if (!process.env.DORKOS_RELAY_ENABLED && cfgMgr.getDot('relay.enabled')) {
+  process.env.DORKOS_RELAY_ENABLED = 'true';
 }
 
 // Working directory: CLI flag > env var > config > cwd
@@ -235,10 +265,11 @@ if (resolvedDir !== effectiveBoundary && !resolvedDir.startsWith(effectiveBounda
 }
 
 // Log level: CLI flag > env var > config > default
-const logLevelName = values['log-level']
-  || env.LOG_LEVEL
-  || (cfgMgr.getDot('logging.level') as string | null)
-  || (env.NODE_ENV === 'production' ? 'info' : 'debug');
+const logLevelName =
+  values['log-level'] ||
+  env.LOG_LEVEL ||
+  (cfgMgr.getDot('logging.level') as string | null) ||
+  (env.NODE_ENV === 'production' ? 'info' : 'debug');
 process.env.DORKOS_LOG_LEVEL = String(LOG_LEVEL_MAP[logLevelName] ?? 3);
 
 // Load .env from user's cwd (project-local, optional).
@@ -250,8 +281,14 @@ if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath, override: false });
 }
 
-// Start the server
-await import('../server/index.js');
+// Start the server — wrap import to catch dependency and startup errors
+try {
+  await import('../server/index.js');
+} catch (err) {
+  const diag = diagnoseStartupError(err);
+  console.error(formatDiagnostic(diag));
+  process.exit(1);
+}
 
 // Print startup banner
 const port = process.env.DORKOS_PORT || String(DEFAULT_PORT);
@@ -291,7 +328,10 @@ if (process.env.TUNNEL_ENABLED) {
       console.log('  Scan to open on mobile:');
       generate(status.url, { small: true }, (code: string) => {
         // Indent each line of the QR code
-        const indented = code.split('\n').map((line: string) => `  ${line}`).join('\n');
+        const indented = code
+          .split('\n')
+          .map((line: string) => `  ${line}`)
+          .join('\n');
         console.log(indented);
       });
     } catch {
@@ -301,25 +341,12 @@ if (process.env.TUNNEL_ENABLED) {
 }
 console.log('');
 
-// Prompt to open in browser (non-blocking, skipped in non-TTY)
-if (process.stdin.isTTY) {
-  const { confirm } = await import('@inquirer/prompts');
-  try {
-    const shouldOpen = await confirm({
-      message: 'Open DorkOS in your browser?',
-      default: true,
-    });
-    if (shouldOpen) {
-      const { exec } = await import('node:child_process');
-      const openCmd =
-        process.platform === 'darwin' ? 'open'
-        : process.platform === 'win32' ? 'start'
-        : 'xdg-open';
-      exec(`${openCmd} ${localUrl}`);
-    }
-  } catch {
-    // User cancelled (Ctrl+C) — continue running the server
-  }
+// Open browser automatically (skipped in non-TTY or when --no-open)
+if (shouldOpenBrowser && process.stdin.isTTY) {
+  const { exec } = await import('node:child_process');
+  const openCmd =
+    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  exec(`${openCmd} ${localUrl}`);
 }
 
 // Listen for runtime tunnel activation (toggled on via UI after startup)
@@ -335,7 +362,10 @@ if (process.stdin.isTTY) {
         console.log('');
         console.log('  Scan to open on mobile:');
         generate(status.url, { small: true }, (code: string) => {
-          const indented = code.split('\n').map((line: string) => `  ${line}`).join('\n');
+          const indented = code
+            .split('\n')
+            .map((line: string) => `  ${line}`)
+            .join('\n');
           console.log(indented);
         });
       } catch {
@@ -347,19 +377,21 @@ if (process.stdin.isTTY) {
 }
 
 // Non-blocking update check (fire-and-forget)
-checkForUpdate(__CLI_VERSION__).then((latestVersion) => {
-  if (latestVersion) {
-    const msg = `Update available: ${__CLI_VERSION__} → ${latestVersion}`;
-    const cmd = 'Run npm install -g dorkos@latest to update';
-    const width = Math.max(msg.length, cmd.length) + 6;
-    const pad = (s: string) => `│   ${s}${' '.repeat(width - s.length - 6)}   │`;
-    console.log('');
-    console.log(`┌${'─'.repeat(width - 2)}┐`);
-    console.log(pad(msg));
-    console.log(pad(cmd));
-    console.log(`└${'─'.repeat(width - 2)}┘`);
-    console.log('');
-  }
-}).catch(() => {
-  // Silently ignore — never interrupt server
-});
+checkForUpdate(__CLI_VERSION__)
+  .then((latestVersion) => {
+    if (latestVersion) {
+      const msg = `Update available: ${__CLI_VERSION__} → ${latestVersion}`;
+      const cmd = 'Run npm install -g dorkos@latest to update';
+      const width = Math.max(msg.length, cmd.length) + 6;
+      const pad = (s: string) => `│   ${s}${' '.repeat(width - s.length - 6)}   │`;
+      console.log('');
+      console.log(`┌${'─'.repeat(width - 2)}┐`);
+      console.log(pad(msg));
+      console.log(pad(cmd));
+      console.log(`└${'─'.repeat(width - 2)}┘`);
+      console.log('');
+    }
+  })
+  .catch(() => {
+    // Silently ignore — never interrupt server
+  });

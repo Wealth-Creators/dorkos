@@ -1,19 +1,49 @@
-import { useState } from 'react';
-import { BookOpen, ExternalLink } from 'lucide-react';
+import { BookOpen, Info } from 'lucide-react';
 import { Button } from '@/layers/shared/ui/button';
 import { Input } from '@/layers/shared/ui/input';
 import { Label } from '@/layers/shared/ui/label';
-import { ConfigFieldGroup } from '../ConfigFieldInput';
-import type { AdapterManifest } from '@dorkos/shared/relay-schemas';
+import { MarkdownContent } from '@/layers/shared/ui/markdown-content';
+import { ConfigFieldGroup, ConfigFieldInput } from '../ConfigFieldInput';
+import type { AdapterManifest, ConfigField } from '@dorkos/shared/relay-schemas';
+import type { ReactNode } from 'react';
+
+/** Field render callback shape passed from form.AppField. */
+interface AdapterFormField {
+  state: { value: unknown; meta: { isTouched: boolean; errors: ValidationError[] } };
+  handleChange: (v: unknown) => void;
+  handleBlur: () => void;
+}
+
+/** Opaque validation error — TanStack Form stores strings or ValidationError objects. */
+type ValidationError = { toString(): string } | string | undefined;
+
+/**
+ * Minimal structural interface for the TanStack Form instance used by ConfigureStep.
+ *
+ * Types only the two methods actually called here — `Subscribe` for reactive value
+ * access and `AppField` for per-field binding — avoiding the full 14-param generic
+ * signature of `AppFieldExtendedReactFormApi`.
+ */
+interface AdapterConfigFormApi {
+  Subscribe: React.ComponentType<{
+    selector: (s: { values: Record<string, unknown> }) => Record<string, unknown>;
+    children: (v: Record<string, unknown>) => ReactNode;
+  }>;
+  AppField: React.ComponentType<{
+    name: string;
+    key?: string;
+    children: (field: AdapterFormField) => ReactNode;
+  }>;
+}
 
 interface ConfigureStepProps {
   manifest: AdapterManifest;
   label: string;
   onLabelChange: (label: string) => void;
-  fields: AdapterManifest['configFields'];
-  values: Record<string, unknown>;
-  errors: Record<string, string>;
-  onChange: (key: string, value: unknown) => void;
+  fields: ConfigField[];
+  /** TanStack Form instance for the adapter config fields. */
+  form: AdapterConfigFormApi;
+  currentSetupStep?: { title: string; description?: string };
   /** Whether the adapter has a setup guide available. */
   hasSetupGuide?: boolean;
   /** Callback to open the setup guide panel. */
@@ -26,129 +56,84 @@ export function ConfigureStep({
   label,
   onLabelChange,
   fields,
-  values,
-  errors,
-  onChange,
+  form,
+  currentSetupStep,
   hasSetupGuide,
   onOpenGuide,
 }: ConfigureStepProps) {
-  // Banner starts closed on field steps so the form is immediately visible.
-  const isIntroStep = fields.length === 0;
-  const [helpOpen, setHelpOpen] = useState(false);
+  const { Subscribe, AppField } = form;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+      {manifest.setupInstructions && (
+        <div className="flex gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+          <Info className="mt-0.5 size-4 shrink-0" />
+          <MarkdownContent
+            content={manifest.setupInstructions}
+            className="text-sm text-blue-800 dark:text-blue-200"
+          />
+        </div>
+      )}
 
-      {/* ── INTRO STEP (no fields): big button, nothing else ── */}
-      {isIntroStep && (
-        <div className="flex flex-col items-center gap-4 py-4 text-center">
-          {/* Emoji icon */}
-          <div className="flex size-14 items-center justify-center rounded-2xl bg-muted text-3xl">
-            {manifest.iconEmoji ?? '🔌'}
-          </div>
-
-          <div className="space-y-1">
-            <p className="text-base font-semibold">Connect {manifest.displayName} to your workspace</p>
-            <p className="text-sm text-muted-foreground">
-              Takes about 2 minutes. Click the button and Slack will walk you through it.
-            </p>
-          </div>
-
-          {/* Primary action button — big and obvious */}
+      {(manifest.actionButton || hasSetupGuide) && (
+        <div className="flex items-center justify-end gap-2">
+          {hasSetupGuide && (
+            <Button type="button" variant="outline" size="sm" onClick={onOpenGuide}>
+              <BookOpen className="mr-1.5 size-3.5" />
+              Setup Guide
+            </Button>
+          )}
           {manifest.actionButton && (
-            <a href={manifest.actionButton.url} target="_blank" rel="noopener noreferrer" className="w-full">
-              <Button type="button" className="w-full gap-2" size="lg">
-                <ExternalLink className="size-4" />
+            <a href={manifest.actionButton.url} target="_blank" rel="noopener noreferrer">
+              <Button type="button" variant="outline" size="sm">
                 {manifest.actionButton.label}
               </Button>
             </a>
           )}
-
-          {/* Warning — small, below the button, not alarming */}
-          {manifest.setupInstructions && (
-            <p className="max-w-sm text-xs text-muted-foreground">
-              {/* Strip markdown for the plain-text warning */}
-              {manifest.setupInstructions.replace(/\*\*/g, '')}
-            </p>
-          )}
-
-          {/* Setup Guide link — secondary, unobtrusive */}
-          {hasSetupGuide && (
-            <button
-              type="button"
-              onClick={onOpenGuide}
-              className="flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            >
-              <BookOpen className="size-3" />
-              Need detailed instructions? Open the Setup Guide
-            </button>
-          )}
         </div>
       )}
 
-      {/* ── FIELD STEPS: form first, help secondary ── */}
-      {!isIntroStep && (
-        <>
-          {/* Subtle help row — collapsed by default so the form is front and center */}
-          {(manifest.actionButton || hasSetupGuide) && (
-            <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
-              <button
-                type="button"
-                onClick={() => setHelpOpen((o) => !o)}
-                className="text-xs text-muted-foreground hover:text-foreground"
-              >
-                {helpOpen ? '▲ Hide help' : '▼ Need help finding these?'}
-              </button>
-              <div className="flex items-center gap-2">
-                {hasSetupGuide && (
-                  <Button type="button" variant="ghost" size="sm" onClick={onOpenGuide} className="h-6 px-2 text-xs">
-                    <BookOpen className="mr-1 size-3" />
-                    Setup Guide
-                  </Button>
-                )}
-                {manifest.actionButton && (
-                  <a href={manifest.actionButton.url} target="_blank" rel="noopener noreferrer">
-                    <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs">
-                      <ExternalLink className="mr-1 size-3" />
-                      Open Slack
-                    </Button>
-                  </a>
-                )}
-              </div>
-            </div>
-          )}
+      {currentSetupStep && <h4 className="text-sm font-medium">{currentSetupStep.title}</h4>}
 
-          {/* Name field */}
-          <div className="space-y-1.5">
-            <Label htmlFor="adapter-label">
-              Name <span className="font-normal text-muted-foreground">(optional)</span>
-            </Label>
-            <Input
-              id="adapter-label"
-              placeholder={manifest.displayName}
-              value={label}
-              onChange={(e) => onLabelChange(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              A friendly label so you can tell adapters apart (e.g. "Support Team Slack").
-            </p>
-          </div>
+      <div className="space-y-2">
+        <Label htmlFor="adapter-label">Name (optional)</Label>
+        <Input
+          id="adapter-label"
+          placeholder={manifest.displayName}
+          value={label}
+          onChange={(e) => onLabelChange(e.target.value)}
+        />
+        <p className="text-muted-foreground text-xs">
+          A friendly name to identify this adapter instance.
+        </p>
+      </div>
 
+      <Subscribe selector={(s) => s.values}>
+        {(allValues) => (
           <ConfigFieldGroup
             fields={fields}
-            values={values}
-            onChange={onChange}
-            errors={errors}
+            allValues={allValues}
+            renderField={(fieldDef) => (
+              <AppField key={fieldDef.key} name={fieldDef.key}>
+                {(formField) => (
+                  <ConfigFieldInput
+                    field={fieldDef}
+                    value={formField.state.value}
+                    onChange={(_, v) => formField.handleChange(v)}
+                    onBlur={formField.handleBlur}
+                    error={
+                      formField.state.meta.isTouched
+                        ? formField.state.meta.errors[0]?.toString()
+                        : undefined
+                    }
+                    allValues={allValues}
+                  />
+                )}
+              </AppField>
+            )}
           />
-
-          {/* Setup instructions on field steps — shown as a muted note below the form */}
-          {manifest.setupInstructions && (
-            <p className="text-xs text-muted-foreground">
-              {manifest.setupInstructions.replace(/\*\*/g, '')}
-            </p>
-          )}
-        </>
-      )}
+        )}
+      </Subscribe>
     </div>
   );
 }

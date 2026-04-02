@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { cn } from '@/layers/shared/lib';
 import { useTocScrollspy } from './lib/use-toc-scrollspy';
 import type { PlaygroundSection } from './playground-registry';
@@ -14,7 +15,7 @@ interface TocSidebarProps {
  * @param sections - Ordered list of sections to render as anchor links
  */
 export function TocSidebar({ sections }: TocSidebarProps) {
-  const sectionIds = sections.map((s) => s.id);
+  const sectionIds = useMemo(() => sections.map((s) => s.id), [sections]);
   const activeId = useTocScrollspy(sectionIds);
 
   return (
@@ -23,7 +24,7 @@ export function TocSidebar({ sections }: TocSidebarProps) {
       className="sticky top-9 hidden h-fit w-44 shrink-0 xl:block"
     >
       <nav>
-        <p className="mb-2 text-xs font-medium text-foreground">On this page</p>
+        <p className="text-foreground mb-2 text-xs font-medium">On this page</p>
         <ul className="space-y-0.5">
           {sections.map((section) => (
             <li key={section.id}>
@@ -41,7 +42,7 @@ export function TocSidebar({ sections }: TocSidebarProps) {
                   'block truncate rounded px-2 py-1 text-xs transition-colors',
                   activeId === section.id
                     ? 'bg-accent text-accent-foreground font-medium'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/50',
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
                 )}
               >
                 {section.title}

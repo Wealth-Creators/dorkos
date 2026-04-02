@@ -13,14 +13,13 @@ import type { StandardPayload } from '@dorkos/shared/relay-schemas';
 import type { RelayPublisher, AdapterInboundCallbacks, RelayLogger } from '../../types.js';
 import { noopLogger } from '../../types.js';
 import type { PendingReactions } from './stream.js';
+import { SlackThreadIdCodec } from '../../lib/thread-id.js';
+import type { ThreadParticipationTracker } from './thread-tracker.js';
 
 // === Constants ===
 
 /** Subject prefix for all Slack adapter subjects. */
 export const SUBJECT_PREFIX = 'relay.human.slack';
-
-/** Subject prefix segment added for group channels. */
-const GROUP_SEGMENT = 'group';
 
 /** Max length for a single Slack message (Slack's hard limit is 4000). */
 export const MAX_MESSAGE_LENGTH = 4000;
@@ -59,7 +58,57 @@ const SKIP_SUBTYPES = new Set([
   'unpinned_item',
 ]);
 
+// === Event deduplication ===
+
+/** Maximum entries in the event dedup cache before eviction. */
+const EVENT_DEDUP_MAX_SIZE = 500;
+
+/** Event dedup entry TTL — 5 minutes. */
+const EVENT_DEDUP_TTL_MS = 5 * 60 * 1_000;
+
+interface DedupEntry {
+  expiresAt: number;
+}
+
+/** Module-level cache of recently-seen event IDs to prevent duplicate processing. */
+const seenEvents = new Map<string, DedupEntry>();
+
 // === Types ===
+
+/** How the bot decides whether to respond in channels. */
+export type RespondMode = 'always' | 'mention-only' | 'thread-aware';
+
+/** Per-channel override settings. */
+export interface ChannelOverride {
+  enabled?: boolean;
+  respondMode?: RespondMode;
+}
+
+/** Resolved channel configuration after merging global defaults with per-channel overrides. */
+export interface EffectiveChannelConfig {
+  enabled: boolean;
+  respondMode: RespondMode;
+}
+
+/**
+ * Resolve the effective channel configuration by merging per-channel overrides
+ * with the global respond mode default.
+ *
+ * @param channelId - The Slack channel ID
+ * @param globalRespondMode - The adapter-level respond mode default
+ * @param overrides - Per-channel overrides keyed by channel ID
+ */
+export function getEffectiveChannelConfig(
+  channelId: string,
+  globalRespondMode: RespondMode,
+  overrides: Record<string, ChannelOverride>
+): EffectiveChannelConfig {
+  const override = overrides[channelId];
+  return {
+    enabled: override?.enabled ?? true,
+    respondMode: override?.respondMode ?? globalRespondMode,
+  };
+}
 
 /** Slack message event shape (subset of Bolt's MessageEvent). */
 export interface SlackMessageEvent {
@@ -72,6 +121,22 @@ export interface SlackMessageEvent {
   thread_ts?: string;
   team?: string;
   bot_id?: string;
+}
+
+/** Options for inbound message handling, including deduplication and routing policy. */
+export interface InboundOptions {
+  /** Slack event ID for deduplication. */
+  eventId?: string;
+  /** How the bot decides whether to respond in channels. */
+  respondMode?: RespondMode;
+  /** DM access policy. */
+  dmPolicy?: 'open' | 'allowlist';
+  /** Slack user IDs allowed to DM the bot (when dmPolicy is 'allowlist'). */
+  dmAllowlist?: string[];
+  /** Per-channel overrides for enabled state and respond mode. */
+  channelOverrides?: Record<string, ChannelOverride>;
+  /** Thread participation tracker instance for thread-aware routing. */
+  threadTracker?: ThreadParticipationTracker;
 }
 
 // === Bounded TTL cache ===
@@ -117,16 +182,57 @@ const channelNameCache = new Map<string, CacheEntry>();
 // === Helpers ===
 
 /**
+ * Check whether a message text contains an @mention of the bot.
+ *
+ * @param text - The message text to search
+ * @param botUserId - The bot's Slack user ID
+ */
+function hasBotMention(text: string, botUserId: string): boolean {
+  return text.includes(`<@${botUserId}>`);
+}
+
+/**
+ * Determine whether a message should be processed based on the respond mode.
+ *
+ * @param mode - The effective respond mode for this channel
+ * @param event - The Slack message event
+ * @param botUserId - The bot's own user ID for @mention detection
+ * @param threadTracker - Optional thread participation tracker for thread-aware mode
+ */
+function shouldProcessMessage(
+  mode: RespondMode,
+  event: SlackMessageEvent,
+  botUserId: string,
+  threadTracker?: ThreadParticipationTracker
+): boolean {
+  if (mode === 'always') return true;
+
+  const mentioned = hasBotMention(event.text ?? '', botUserId);
+
+  if (mode === 'mention-only') return mentioned;
+
+  // thread-aware mode
+  if (event.thread_ts) {
+    // In a thread: process if bot is participating OR if @mentioned
+    return mentioned || (threadTracker?.isParticipating(event.channel, event.thread_ts) ?? false);
+  }
+  // Main channel: only process if @mentioned
+  return mentioned;
+}
+
+/**
  * Build the Relay subject for a given Slack channel.
  *
+ * @param codec - The thread ID codec to use for encoding
  * @param channelId - The Slack channel ID
  * @param isGroup - Whether the channel is a group (C/G prefix) vs DM (D prefix)
  */
-export function buildSubject(channelId: string, isGroup: boolean): string {
-  if (isGroup) {
-    return `${SUBJECT_PREFIX}.${GROUP_SEGMENT}.${channelId}`;
-  }
-  return `${SUBJECT_PREFIX}.${channelId}`;
+export function buildSubject(
+  codec: SlackThreadIdCodec,
+  channelId: string,
+  isGroup: boolean
+): string {
+  return codec.encode(channelId, isGroup ? 'group' : 'dm');
 }
 
 /**
@@ -134,22 +240,12 @@ export function buildSubject(channelId: string, isGroup: boolean): string {
  *
  * Returns null if the subject does not match the expected pattern.
  *
+ * @param codec - The thread ID codec to use for decoding
  * @param subject - A Relay subject under the slack prefix
  */
-export function extractChannelId(subject: string): string | null {
-  if (!subject.startsWith(SUBJECT_PREFIX)) return null;
-
-  const remainder = subject.slice(SUBJECT_PREFIX.length + 1);
-  if (!remainder) return null;
-
-  // Group format: group.{channelId}
-  if (remainder.startsWith(`${GROUP_SEGMENT}.`)) {
-    const id = remainder.slice(GROUP_SEGMENT.length + 1);
-    return id || null;
-  }
-
-  // DM format: {channelId}
-  return remainder;
+export function extractChannelId(codec: SlackThreadIdCodec, subject: string): string | null {
+  const decoded = codec.decode(subject);
+  return decoded?.platformId ?? null;
 }
 
 /**
@@ -162,7 +258,7 @@ export function extractChannelId(subject: string): string | null {
  *
  * @param channelId - The Slack channel ID
  */
-function isGroupChannel(channelId: string): boolean {
+export function isGroupChannel(channelId: string): boolean {
   return channelId.startsWith('C') || channelId.startsWith('G');
 }
 
@@ -226,6 +322,7 @@ async function resolveChannelName(client: WebClient, channelId: string): Promise
 export function clearCaches(): void {
   userNameCache.clear();
   channelNameCache.clear();
+  seenEvents.clear();
 }
 
 /**
@@ -241,7 +338,7 @@ function removeQueuedReaction(
   messageTs: string,
   pendingReactions: PendingReactions | undefined,
   wasQueued: boolean,
-  logger: RelayLogger,
+  logger: RelayLogger
 ): void {
   if (!wasQueued) return;
   if (pendingReactions) {
@@ -257,7 +354,9 @@ function removeQueuedReaction(
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes('no_reaction')) {
-        logger.warn(`inbound: failed to remove queued typing reaction from ${channelId}:${messageTs}: ${msg}`);
+        logger.warn(
+          `inbound: failed to remove queued typing reaction from ${channelId}:${messageTs}: ${msg}`
+        );
       }
     });
 }
@@ -274,7 +373,6 @@ function removeQueuedReaction(
  * @param relay - The relay publisher
  * @param botUserId - The bot's own user ID for echo prevention
  * @param callbacks - Callbacks to mutate adapter state
- * @param requireMention - When true, ignore channel messages that don't mention the bot (DMs are always accepted)
  * @param logger - Optional relay logger for debug/warn output (defaults to silent)
  */
 export async function handleInboundMessage(
@@ -283,11 +381,36 @@ export async function handleInboundMessage(
   relay: RelayPublisher,
   botUserId: string,
   callbacks: AdapterInboundCallbacks,
-  requireMention = false,
   logger: RelayLogger = noopLogger,
   typingIndicator: 'none' | 'reaction' = 'none',
   pendingReactions?: PendingReactions,
+  codec?: SlackThreadIdCodec,
+  options?: InboundOptions
 ): Promise<void> {
+  // Event deduplication — skip if we've already processed this event_id
+  if (options?.eventId) {
+    const existing = seenEvents.get(options.eventId);
+    if (existing && Date.now() < existing.expiresAt) {
+      logger.debug(`inbound skipped: duplicate event_id ${options.eventId}`);
+      return;
+    }
+
+    // Evict expired entries when at capacity
+    if (seenEvents.size >= EVENT_DEDUP_MAX_SIZE) {
+      const now = Date.now();
+      for (const [key, entry] of seenEvents) {
+        if (now >= entry.expiresAt) seenEvents.delete(key);
+      }
+      // If still at capacity after expired eviction, remove oldest
+      if (seenEvents.size >= EVENT_DEDUP_MAX_SIZE) {
+        const firstKey = seenEvents.keys().next().value;
+        if (firstKey !== undefined) seenEvents.delete(firstKey);
+      }
+    }
+
+    seenEvents.set(options.eventId, { expiresAt: Date.now() + EVENT_DEDUP_TTL_MS });
+  }
+
   // Skip bot's own messages (echo prevention)
   if (event.user === botUserId) {
     logger.debug(`inbound skipped: echo (own user ${botUserId})`);
@@ -310,12 +433,51 @@ export async function handleInboundMessage(
     return;
   }
 
-  const isGroup = isGroupChannel(event.channel);
+  // === Gating: channel overrides, DM policy, respond mode ===
 
-  // When requireMention is enabled, only respond to channel messages that @mention the bot.
-  // DMs (non-group channels) are always accepted since they're inherently directed at the bot.
-  if (requireMention && isGroup && botUserId && !event.text.includes(`<@${botUserId}>`)) return;
-  const subject = buildSubject(event.channel, isGroup);
+  const channelId = event.channel;
+  const isDm = channelId.startsWith('D');
+
+  // Channel override — check if channel is disabled
+  if (options?.channelOverrides) {
+    const config = getEffectiveChannelConfig(
+      channelId,
+      options.respondMode ?? 'always',
+      options.channelOverrides
+    );
+    if (!config.enabled) {
+      logger.debug(`inbound skipped: channel ${channelId} disabled by override`);
+      return;
+    }
+  }
+
+  // DM policy — allowlist check
+  if (isDm && options?.dmPolicy === 'allowlist') {
+    const allowlist = options.dmAllowlist ?? [];
+    if (!allowlist.includes(event.user ?? '')) {
+      return;
+    }
+  }
+
+  // Respond mode gating (non-DM channels only)
+  if (!isDm) {
+    const effectiveMode = options?.channelOverrides
+      ? getEffectiveChannelConfig(
+          channelId,
+          options?.respondMode ?? 'always',
+          options.channelOverrides
+        ).respondMode
+      : (options?.respondMode ?? 'always');
+
+    if (!shouldProcessMessage(effectiveMode, event, botUserId, options?.threadTracker)) {
+      logger.debug(`inbound skipped: respond mode '${effectiveMode}' filtered ${channelId}`);
+      return;
+    }
+  }
+
+  const resolvedCodec = codec ?? new SlackThreadIdCodec();
+  const isGroup = isGroupChannel(event.channel);
+  const subject = buildSubject(resolvedCodec, event.channel, isGroup);
 
   // Cap inbound content to prevent oversized payloads
   const content = event.text.slice(0, MAX_CONTENT_LENGTH);
@@ -348,17 +510,15 @@ export async function handleInboundMessage(
             if (queue.length === 0) pendingReactions.delete(event.channel);
           }
         }
-        logger.warn(`inbound: failed to add typing reaction to ${event.channel}:${event.ts}: ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(
+          `inbound: failed to add typing reaction to ${event.channel}:${event.ts}: ${err instanceof Error ? err.message : String(err)}`
+        );
       });
   }
 
-  const senderName = event.user
-    ? await resolveUserName(client, event.user)
-    : 'unknown';
+  const senderName = event.user ? await resolveUserName(client, event.user) : 'unknown';
 
-  const channelName = isGroup
-    ? await resolveChannelName(client, event.channel)
-    : undefined;
+  const channelName = isGroup ? await resolveChannelName(client, event.channel) : undefined;
 
   const payload: StandardPayload = {
     content,
@@ -383,7 +543,7 @@ export async function handleInboundMessage(
 
   try {
     const result = await relay.publish(subject, payload, {
-      from: `${SUBJECT_PREFIX}.bot`,
+      from: `${resolvedCodec.prefix}.bot`,
       replyTo: subject,
     });
 
@@ -393,15 +553,27 @@ export async function handleInboundMessage(
       callbacks.recordError(new Error(`Publish rejected: ${reason}`));
       logger.warn(`inbound publish rejected for ${event.channel}: ${reason}`);
       // Clean up the eagerly-added reaction since nothing will process this message
-      removeQueuedReaction(client, event.channel, event.ts, pendingReactions, reactionQueued, logger);
+      removeQueuedReaction(
+        client,
+        event.channel,
+        event.ts,
+        pendingReactions,
+        reactionQueued,
+        logger
+      );
       return;
     }
 
     callbacks.trackInbound();
-    logger.debug(`inbound from ${senderName} in ${event.channel}: "${content.slice(0, 80)}${content.length > 80 ? '\u2026' : ''}" (${content.length} chars) \u2192 ${subject}`);
+    logger.debug(
+      `inbound from ${senderName} in ${event.channel}: "${content.slice(0, 80)}${content.length > 80 ? '\u2026' : ''}" (${content.length} chars) \u2192 ${subject}`
+    );
   } catch (err) {
     callbacks.recordError(err);
-    logger.warn(`inbound publish failed for ${event.channel}:`, err instanceof Error ? err.message : String(err));
+    logger.warn(
+      `inbound publish failed for ${event.channel}:`,
+      err instanceof Error ? err.message : String(err)
+    );
     // Clean up the eagerly-added reaction since nothing will process this message
     removeQueuedReaction(client, event.channel, event.ts, pendingReactions, reactionQueued, logger);
   }

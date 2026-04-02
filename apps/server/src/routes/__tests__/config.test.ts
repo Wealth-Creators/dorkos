@@ -84,10 +84,7 @@ describe('PATCH /api/config', () => {
   });
 
   it('returns 200 for empty object body (no-op)', async () => {
-    const response = await request(app)
-      .patch('/api/config')
-      .send({})
-      .expect(200);
+    const response = await request(app).patch('/api/config').send({}).expect(200);
 
     expect(response.body.success).toBe(true);
     expect(response.body.config.server.port).toBe(4242);
@@ -202,8 +199,84 @@ describe('GET /api/config', () => {
     expect(res.body).toHaveProperty('workingDirectory');
     expect(res.body).toHaveProperty('boundary');
     expect(res.body).toHaveProperty('tunnel');
-    expect(res.body).toHaveProperty('pulse');
+    expect(res.body).toHaveProperty('tasks');
     expect(res.body).toHaveProperty('relay');
     expect(res.body).toHaveProperty('mesh');
+  });
+});
+
+describe('PUT /api/config/agents/defaultAgent', () => {
+  let app: express.Express;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = createTempDir();
+    process.env.DORK_HOME = tmpDir;
+
+    const { initConfigManager } = await import('../../services/core/config-manager.js');
+    initConfigManager(tmpDir);
+
+    const configRouter = (await import('../config.js')).default;
+    app = express();
+    app.use(express.json());
+    app.use('/api/config', configRouter);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.resetModules();
+  });
+
+  it('sets the default agent and returns success', async () => {
+    const res = await request(app)
+      .put('/api/config/agents/defaultAgent')
+      .send({ value: 'my-agent' })
+      .expect(200);
+
+    expect(res.body.success).toBe(true);
+    expect(res.body.defaultAgent).toBe('my-agent');
+  });
+
+  it('persists the default agent in config', async () => {
+    await request(app)
+      .put('/api/config/agents/defaultAgent')
+      .send({ value: 'my-agent' })
+      .expect(200);
+
+    const { configManager } = await import('../../services/core/config-manager.js');
+    expect(configManager.get('agents')?.defaultAgent).toBe('my-agent');
+  });
+
+  it('returns 400 when value is missing', async () => {
+    const res = await request(app).put('/api/config/agents/defaultAgent').send({}).expect(400);
+
+    expect(res.body.error).toContain('non-empty');
+  });
+
+  it('returns 400 when value is empty string', async () => {
+    const res = await request(app)
+      .put('/api/config/agents/defaultAgent')
+      .send({ value: '  ' })
+      .expect(400);
+
+    expect(res.body.error).toContain('non-empty');
+  });
+
+  it('returns 400 when value is not a string', async () => {
+    const res = await request(app)
+      .put('/api/config/agents/defaultAgent')
+      .send({ value: 123 })
+      .expect(400);
+
+    expect(res.body.error).toContain('non-empty');
+  });
+
+  it('trims whitespace from agent name', async () => {
+    const res = await request(app)
+      .put('/api/config/agents/defaultAgent')
+      .send({ value: '  my-agent  ' })
+      .expect(200);
+
+    expect(res.body.defaultAgent).toBe('my-agent');
   });
 });

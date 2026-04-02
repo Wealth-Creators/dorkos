@@ -1,9 +1,14 @@
-import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  PermissionResult,
+  ElicitationRequest,
+  ElicitationResult,
+} from '@anthropic-ai/claude-agent-sdk';
 import type { StreamEvent } from '@dorkos/shared/types';
 import { SESSIONS } from '../../../config/constants.js';
+import { randomUUID } from 'node:crypto';
 
 export interface PendingInteraction {
-  type: 'question' | 'approval';
+  type: 'question' | 'approval' | 'elicitation';
   toolCallId: string;
   resolve: (result: unknown) => void;
   reject: (reason: unknown) => void;
@@ -60,6 +65,72 @@ export function handleAskUserQuestion(
 }
 
 /**
+ * Handle an MCP elicitation request — pause, collect user input, return result.
+ *
+ * The `onElicitation` SDK callback receives the request from an MCP server
+ * and must return an ElicitationResult. We push an SSE event to the client,
+ * wait for the user's response, and resolve the Promise.
+ */
+export function handleElicitation(
+  session: InteractiveSession,
+  request: ElicitationRequest,
+  signal: AbortSignal
+): Promise<ElicitationResult> {
+  const interactionId = request.elicitationId ?? randomUUID();
+
+  session.eventQueue.push({
+    type: 'elicitation_prompt',
+    data: {
+      interactionId,
+      serverName: request.serverName,
+      message: request.message,
+      mode: request.mode,
+      url: request.url,
+      elicitationId: request.elicitationId,
+      requestedSchema: request.requestedSchema,
+      timeoutMs: SESSIONS.INTERACTION_TIMEOUT_MS,
+    },
+  });
+  session.eventQueueNotify?.();
+
+  return new Promise<ElicitationResult>((resolve) => {
+    const decline = () => resolve({ action: 'decline' } as ElicitationResult);
+
+    // Auto-decline if the SDK query is aborted
+    const onAbort = () => {
+      clearTimeout(timeout);
+      session.pendingInteractions.delete(interactionId);
+      decline();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      session.pendingInteractions.delete(interactionId);
+      decline();
+    }, SESSIONS.INTERACTION_TIMEOUT_MS);
+
+    session.pendingInteractions.set(interactionId, {
+      type: 'elicitation',
+      toolCallId: interactionId,
+      resolve: (result) => {
+        clearTimeout(timeout);
+        signal.removeEventListener('abort', onAbort);
+        session.pendingInteractions.delete(interactionId);
+        resolve(result as ElicitationResult);
+      },
+      reject: () => {
+        clearTimeout(timeout);
+        signal.removeEventListener('abort', onAbort);
+        session.pendingInteractions.delete(interactionId);
+        decline();
+      },
+      timeout,
+    });
+  });
+}
+
+/**
  * Create the `canUseTool` callback for an SDK query.
  *
  * Routes AskUserQuestion to the question handler, tool approvals based on
@@ -71,7 +142,12 @@ export function createCanUseTool(
 ): (
   toolName: string,
   input: Record<string, unknown>,
-  context: { signal: AbortSignal; toolUseID: string; decisionReason?: string; suggestions?: unknown[] }
+  context: {
+    signal: AbortSignal;
+    toolUseID: string;
+    decisionReason?: string;
+    suggestions?: unknown[];
+  }
 ) => Promise<PermissionResult> {
   return async (toolName, input, context) => {
     if (toolName === 'AskUserQuestion') {
@@ -82,7 +158,13 @@ export function createCanUseTool(
     // Read-only Claude Code tools are always auto-approved for relay-triggered sessions.
     // These cannot modify the filesystem or execute shell commands.
     const READ_ONLY_TOOLS = new Set([
-      'Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'WebSearch', 'WebFetch',
+      'Read',
+      'Grep',
+      'Glob',
+      'LS',
+      'NotebookRead',
+      'WebSearch',
+      'WebFetch',
     ]);
 
     // DorkOS agent communication tools are always auto-approved regardless of permissionMode.
@@ -99,7 +181,10 @@ export function createCanUseTool(
       'mcp__dorkos__mesh_register',
       'mcp__dorkos__mesh_status',
       'mcp__dorkos__mesh_query_topology',
-      'mcp__dorkos__get_current_agent',
+      'mcp__dorkos__get_agent',
+      // UI control tools — pure client-side UI mutations, no system access
+      'mcp__dorkos__control_ui',
+      'mcp__dorkos__get_ui_state',
     ]);
 
     if (READ_ONLY_TOOLS.has(toolName) || DORKOS_AGENT_TOOLS.has(toolName)) {
@@ -108,10 +193,18 @@ export function createCanUseTool(
     }
 
     if (session.permissionMode === 'default') {
-      logFn('[canUseTool] requesting approval', { toolName, permissionMode: 'default', toolUseID: context.toolUseID });
+      logFn('[canUseTool] requesting approval', {
+        toolName,
+        permissionMode: 'default',
+        toolUseID: context.toolUseID,
+      });
       return handleToolApproval(session, context.toolUseID, toolName, input);
     }
-    logFn('[canUseTool] auto-allow', { toolName, permissionMode: session.permissionMode, toolUseID: context.toolUseID });
+    logFn('[canUseTool] auto-allow', {
+      toolName,
+      permissionMode: session.permissionMode,
+      toolUseID: context.toolUseID,
+    });
     return { behavior: 'allow', updatedInput: input };
   };
 }

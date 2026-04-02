@@ -17,15 +17,29 @@ vi.mock('../model/use-chat-session', () => ({
     input: '',
     setInput: vi.fn(),
     handleSubmit: vi.fn(),
+    submitContent: vi.fn(),
     status: 'idle',
     error: null,
+    sessionBusy: false,
     stop: vi.fn(),
+    retryMessage: vi.fn(),
     isLoadingHistory: false,
     sessionStatus: null,
     streamStartTime: null,
     estimatedTokens: null,
     isTextStreaming: false,
+    isWaitingForUser: false,
+    waitingType: null,
+    activeInteraction: null,
+    markToolCallResponded: vi.fn(),
+    isRateLimited: false,
+    rateLimitRetryAfter: null,
+    systemStatus: null,
     promptSuggestions: [],
+    presenceInfo: null,
+    presenceTasks: false,
+    syncConnectionState: 'connected',
+    syncFailedAttempts: 0,
   }),
 }));
 
@@ -38,10 +52,12 @@ vi.mock('@/layers/entities/command/model/use-commands', () => ({
 vi.mock('../model/use-task-state', () => ({
   useTaskState: () => ({
     tasks: [],
+    taskMap: new Map(),
     activeForm: null,
     isCollapsed: true,
     toggleCollapse: vi.fn(),
     handleTaskEvent: vi.fn(),
+    statusTimestamps: new Map(),
   }),
 }));
 
@@ -76,10 +92,14 @@ vi.mock('@/layers/entities/session/model/use-session-status', () => ({
 }));
 
 // Mock TanStack Query — ChatStatusSection uses useQuery and useQueryClient
-vi.mock('@tanstack/react-query', () => ({
-  useQuery: vi.fn(() => ({ data: undefined })),
-  useQueryClient: vi.fn(() => ({ invalidateQueries: vi.fn() })),
-}));
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return {
+    ...actual,
+    useQuery: vi.fn(() => ({ data: undefined })),
+    useQueryClient: vi.fn(() => ({ invalidateQueries: vi.fn() })),
+  };
+});
 
 // Mock useTransport — ChatStatusSection fetches config via transport
 vi.mock('@/layers/shared/model/TransportContext', () => ({
@@ -105,16 +125,29 @@ vi.mock('@/layers/shared/model/app-store', () => ({
       setIsWaitingForUser: vi.fn(),
       setActiveForm: vi.fn(),
       showStatusBarCwd: false,
+      setShowStatusBarCwd: vi.fn(),
       showStatusBarPermission: false,
+      setShowStatusBarPermission: vi.fn(),
       showStatusBarModel: false,
+      setShowStatusBarModel: vi.fn(),
       showStatusBarCost: false,
+      setShowStatusBarCost: vi.fn(),
       showStatusBarContext: false,
+      setShowStatusBarContext: vi.fn(),
       showStatusBarGit: false,
+      setShowStatusBarGit: vi.fn(),
       showStatusBarSound: false,
-      showStatusBarTunnel: false,
-      showStatusBarVersion: false,
+      setShowStatusBarSound: vi.fn(),
+      showStatusBarSync: false,
+      setShowStatusBarSync: vi.fn(),
+      showStatusBarPolling: false,
+      setShowStatusBarPolling: vi.fn(),
       enableNotificationSound: false,
       setEnableNotificationSound: vi.fn(),
+      enableCrossClientSync: false,
+      setEnableCrossClientSync: vi.fn(),
+      enableMessagePolling: false,
+      setEnableMessagePolling: vi.fn(),
     };
     return selector ? selector(state) : state;
   },
@@ -134,11 +167,14 @@ vi.mock('../ui/ShortcutChips', () => ({
 }));
 
 vi.mock('@/layers/features/status', () => ({
-  StatusLine: Object.assign(vi.fn(() => <div data-testid="status-line">StatusLine</div>), {
-    Item: vi.fn(({ visible, children }: { visible: boolean; children: React.ReactNode }) =>
-      visible ? <>{children}</> : null
-    ),
-  }),
+  StatusLine: Object.assign(
+    vi.fn(() => <div data-testid="status-line">StatusLine</div>),
+    {
+      Item: vi.fn(({ visible, children }: { visible: boolean; children: React.ReactNode }) =>
+        visible ? <>{children}</> : null
+      ),
+    }
+  ),
   CwdItem: vi.fn(() => null),
   GitStatusItem: vi.fn(() => null),
   PermissionModeItem: vi.fn(() => null),
@@ -146,9 +182,16 @@ vi.mock('@/layers/features/status', () => ({
   CostItem: vi.fn(() => null),
   ContextItem: vi.fn(() => null),
   NotificationSoundItem: vi.fn(() => null),
-  TunnelItem: vi.fn(() => null),
-  VersionItem: vi.fn(() => null),
+  SyncItem: vi.fn(() => null),
+  PollingItem: vi.fn(() => null),
+  ConnectionItem: vi.fn(() => null),
+  ClientsItem: vi.fn(() => null),
+  StatusBarConfigurePopover: vi.fn(({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  )),
   useGitStatus: vi.fn(() => ({ data: undefined })),
+  STATUS_BAR_REGISTRY: [],
+  resetStatusBarPreferences: vi.fn(),
 }));
 
 vi.mock('../ui/TaskListPanel', () => ({

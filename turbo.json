@@ -4,6 +4,8 @@
   "globalPassThroughEnv": [
     "CLIENT_DIST_PATH",
     "DORK_HOME",
+    "DORKOS_A2A_ENABLED",
+    "DORKOS_ACTIVITY_RETENTION_DAYS",
     "DORKOS_BOUNDARY",
     "DORKOS_CORS_ORIGIN",
     "DORKOS_DEFAULT_CWD",
@@ -19,7 +21,8 @@
     "TUNNEL_DOMAIN",
     "TUNNEL_ENABLED",
     "TUNNEL_PORT",
-    "VITE_PORT"
+    "VITE_PORT",
+    "ELECTRON_VERSION"
   ],
   "tasks": {
     "build": {
@@ -73,19 +76,26 @@
       "persistent": true
     },
     "db:generate": {
-      "inputs": [
-        "src/schema/**/*.ts",
-        "drizzle.config.ts"
-      ],
+      "inputs": ["src/schema/**/*.ts", "drizzle.config.ts"],
       "outputs": ["drizzle/**"],
       "cache": true
     },
     "db:check": {
-      "inputs": [
-        "src/schema/**/*.ts",
-        "drizzle.config.ts"
-      ],
+      "inputs": ["src/schema/**/*.ts", "drizzle.config.ts"],
       "cache": false
+    },
+    "dist": {
+      "dependsOn": ["build"],
+      "outputs": ["release/**"],
+      "cache": false,
+      "env": [
+        "APPLE_API_KEY",
+        "APPLE_API_KEY_ID",
+        "APPLE_API_ISSUER",
+        "CSC_LINK",
+        "CSC_KEY_PASSWORD",
+        "GH_TOKEN"
+      ]
     }
   }
 }

@@ -15,6 +15,8 @@ import type {
   AdapterContext,
   DeliveryResult,
 } from './types.js';
+import { AdapterStreamManager } from './adapter-stream-manager.js';
+import { detectStreamEventType } from './lib/payload-utils.js';
 
 /**
  * Registry that manages the lifecycle of external channel adapters and routes
@@ -23,14 +25,27 @@ import type {
  * Implements the {@link AdapterRegistryLike} interface so it can be passed
  * through {@link RelayOptions} without creating a circular dependency.
  */
+/** Timeout for adapter.start() calls within register() (ms). */
+const ADAPTER_START_TIMEOUT_MS = 30_000;
+
+/**
+ * Registry that manages the lifecycle of external channel adapters and routes
+ * outbound messages to the correct adapter by subject prefix.
+ */
 export class AdapterRegistry implements AdapterRegistryLike {
   private readonly adapters = new Map<string, RelayAdapter>();
   private relay: RelayPublisher | null = null;
   private logger: Logger = console;
+  private streamManager: AdapterStreamManager | null = null;
 
   /** Inject a structured logger to replace default console output. */
   setLogger(logger: Logger): void {
     this.logger = logger;
+  }
+
+  /** Inject the stream manager for aggregated streaming delivery. */
+  setStreamManager(streamManager: AdapterStreamManager): void {
+    this.streamManager = streamManager;
   }
 
   /**
@@ -59,13 +74,35 @@ export class AdapterRegistry implements AdapterRegistryLike {
    */
   async register(adapter: RelayAdapter): Promise<void> {
     if (!this.relay) {
-      throw new Error('AdapterRegistry: relay not set — call setRelay() before registering adapters');
+      throw new Error(
+        'AdapterRegistry: relay not set — call setRelay() before registering adapters'
+      );
     }
 
     const existing = this.adapters.get(adapter.id);
 
     // Start the new adapter first — if this throws, abort (old adapter stays active)
-    await adapter.start(this.relay);
+    this.logger.info(`AdapterRegistry: starting adapter '${adapter.id}'`);
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+      await Promise.race([
+        adapter.start(this.relay),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Adapter '${adapter.id}' start timed out after ${ADAPTER_START_TIMEOUT_MS / 1000}s`
+                )
+              ),
+            ADAPTER_START_TIMEOUT_MS
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer!);
+    }
+    this.logger.info(`AdapterRegistry: adapter '${adapter.id}' started`);
 
     // Swap in the new adapter
     this.adapters.set(adapter.id, adapter);
@@ -141,10 +178,37 @@ export class AdapterRegistry implements AdapterRegistryLike {
   async deliver(
     subject: string,
     envelope: RelayEnvelope,
-    context?: AdapterContext,
+    context?: AdapterContext
   ): Promise<DeliveryResult | null> {
     const adapter = this.getBySubject(subject);
     if (!adapter) return null;
+
+    // Check if this is a StreamEvent that the stream manager should handle
+    if (this.streamManager) {
+      const eventType = detectStreamEventType(envelope.payload);
+      if (eventType) {
+        // Extract thread ID from the subject — portion after adapter's subject prefix
+        const prefix = Array.isArray(adapter.subjectPrefix)
+          ? adapter.subjectPrefix.find((p) => subject.startsWith(p))
+          : adapter.subjectPrefix;
+        const threadId = prefix ? subject.slice(prefix.length + 1) : subject;
+
+        const result = await this.streamManager.handleStreamEvent(
+          adapter.id,
+          threadId,
+          eventType,
+          envelope,
+          adapter,
+          subject,
+          context
+        );
+
+        // If the stream manager handled it, return the result.
+        // If it returned null (e.g., approval_required fallthrough), fall through to deliver().
+        if (result !== null) return result;
+      }
+    }
+
     return adapter.deliver(subject, envelope, context);
   }
 
@@ -156,9 +220,11 @@ export class AdapterRegistry implements AdapterRegistryLike {
    * have been given a chance to stop.
    */
   async shutdown(): Promise<void> {
-    const results = await Promise.allSettled(
-      [...this.adapters.values()].map((a) => a.stop()),
-    );
+    if (this.streamManager) {
+      await this.streamManager.stop();
+    }
+
+    const results = await Promise.allSettled([...this.adapters.values()].map((a) => a.stop()));
 
     // Log individual failures but don't throw
     for (const result of results) {

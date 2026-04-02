@@ -24,7 +24,9 @@ function createMinimalDeps() {
   const rateLimitClearRef = { current: null };
   const orphanHooksRef = { current: new Map() };
   const onTaskEventRef = { current: undefined as ((event: TaskUpdateEvent) => void) | undefined };
-  const onSessionIdChangeRef = { current: undefined as ((newSessionId: string) => void) | undefined };
+  const onSessionIdChangeRef = {
+    current: undefined as ((newSessionId: string) => void) | undefined,
+  };
   const onStreamingDoneRef = { current: undefined as (() => void) | undefined };
 
   const handler = createStreamEventHandler({
@@ -53,7 +55,10 @@ function createMinimalDeps() {
     onTaskEventRef,
     onSessionIdChangeRef,
     onStreamingDoneRef,
-    isRemappingRef: { current: false },
+    onRemapRef: { current: undefined },
+    themeRef: { current: vi.fn() },
+    scrollToMessageRef: { current: undefined },
+    switchAgentRef: { current: undefined },
   });
 
   return { handler, currentPartsRef, thinkingStartRef, setMessages };

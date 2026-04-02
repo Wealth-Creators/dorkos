@@ -9,6 +9,7 @@ import { ToolApproval } from '../ToolApproval';
 import type { ToolApprovalHandle } from '../ToolApproval';
 import { QuestionPrompt } from '../QuestionPrompt';
 import type { QuestionPromptHandle } from '../QuestionPrompt';
+import { ElicitationPrompt } from '../ElicitationPrompt';
 import { useMessageContext } from './MessageContext';
 import { SubagentBlock } from '../SubagentBlock';
 import { ThinkingBlock } from '../ThinkingBlock';
@@ -20,17 +21,18 @@ import { CompactPendingRow } from '../primitives';
  * If autoHide is enabled, tool calls that were already complete on mount are hidden immediately.
  * Tool calls that transition to complete are hidden after TIMING.TOOL_CALL_AUTO_HIDE_MS.
  */
-function useToolCallVisibility(
-  status: string,
-  autoHide: boolean,
-  hasFailedHook: boolean
-): boolean {
+function useToolCallVisibility(status: string, autoHide: boolean, hasFailedHook: boolean): boolean {
   const initialStatusRef = useRef(status);
   // eslint-disable-next-line react-hooks/refs -- Intentional: useState initializer runs once on mount
   const [visible, setVisible] = useState(!(autoHide && initialStatusRef.current === 'complete'));
 
   useEffect(() => {
-    if (autoHide && status === 'complete' && initialStatusRef.current !== 'complete' && !hasFailedHook) {
+    if (
+      autoHide &&
+      status === 'complete' &&
+      initialStatusRef.current !== 'complete' &&
+      !hasFailedHook
+    ) {
       const timer = setTimeout(() => setVisible(false), TIMING.TOOL_CALL_AUTO_HIDE_MS);
       return () => clearTimeout(timer);
     }
@@ -59,6 +61,8 @@ function AutoHideToolCall({
     progressOutput?: string;
     status: 'pending' | 'running' | 'complete' | 'error';
     hooks?: HookState[];
+    startedAt?: number;
+    completedAt?: number;
   };
   autoHide: boolean;
   expandToolCalls: boolean;
@@ -84,6 +88,8 @@ function AutoHideToolCall({
               progressOutput: part.progressOutput,
               status: part.status,
               hooks: part.hooks,
+              startedAt: part.startedAt,
+              completedAt: part.completedAt,
             }}
             defaultExpanded={expandToolCalls}
           />
@@ -100,8 +106,17 @@ function AutoHideToolCall({
  * Reads session/interaction state from MessageContext instead of props.
  */
 export function AssistantMessageContent({ message }: { message: ChatMessage }) {
-  const { sessionId, isStreaming, activeToolCallId, onToolRef, focusedOptionIndex, onToolDecided, onRetry, inputZoneToolCallId } =
-    useMessageContext();
+  const {
+    sessionId,
+    isStreaming,
+    activeToolCallId,
+    onToolRef,
+    focusedOptionIndex,
+    onToolDecided,
+    onRetry,
+    inputZoneToolCallId,
+    textEffect,
+  } = useMessageContext();
   const { expandToolCalls, autoHideToolCalls } = useAppStore();
   const parts = message.parts ?? [];
 
@@ -133,15 +148,19 @@ export function AssistantMessageContent({ message }: { message: ChatMessage }) {
       {parts.map((part, i) => {
         if (part.type === 'text') {
           return (
-            <div key={(part as { _partId?: string })._partId ?? `text-${i}`} className="msg-assistant">
+            <div
+              key={(part as { _partId?: string })._partId ?? `text-${i}`}
+              className="msg-assistant"
+            >
               <StreamingText
                 content={part.text}
                 isStreaming={isStreaming && i === lastTextPartIndex}
+                textEffect={textEffect}
               />
             </div>
           );
         }
-        if (part.type === 'subagent') {
+        if (part.type === 'background_task') {
           return <SubagentBlock key={part.taskId} part={part} />;
         }
         if (part.type === 'error') {
@@ -162,6 +181,22 @@ export function AssistantMessageContent({ message }: { message: ChatMessage }) {
               text={part.text}
               isStreaming={part.isStreaming ?? false}
               elapsedMs={part.elapsedMs}
+            />
+          );
+        }
+        if (part.type === 'elicitation') {
+          return (
+            <ElicitationPrompt
+              key={`elicitation-${part.interactionId}`}
+              sessionId={sessionId}
+              interactionId={part.interactionId}
+              serverName={part.serverName}
+              message={part.message}
+              mode={part.mode}
+              url={part.url}
+              requestedSchema={part.requestedSchema}
+              status={part.status}
+              action={part.action}
             />
           );
         }

@@ -19,11 +19,7 @@ import type {
   AdapterInboundCallbacks,
   AdapterOutboundCallbacks,
 } from '../../types.js';
-import {
-  SUBJECT_PREFIX,
-  startWebhookServer,
-  stopWebhookServer,
-} from './inbound.js';
+import { SUBJECT_PREFIX, startWebhookServer, stopWebhookServer } from './inbound.js';
 import { deliverMessage } from './outbound.js';
 import type { TwilioClientLike } from './outbound.js';
 
@@ -40,7 +36,6 @@ export const SMS_MANIFEST: AdapterManifest = {
   type: 'sms',
   displayName: 'SMS',
   description: 'Send and receive SMS messages via a Twilio phone number.',
-  iconEmoji: '\uD83D\uDCF1',
   category: 'messaging',
   docsUrl: 'https://www.twilio.com/docs/sms',
   builtin: true,
@@ -168,17 +163,14 @@ export class SmsAdapter extends BaseRelayAdapter {
   /** Connect to Twilio and start the inbound webhook server. */
   protected async _start(relay: RelayPublisher): Promise<void> {
     const createClient = (await import('twilio')).default as unknown as TwilioFactory;
-    this.twilioClient = createClient(
-      this.config.accountSid,
-      this.config.authToken,
-    );
+    this.twilioClient = createClient(this.config.accountSid, this.config.authToken);
 
     this.webhookServer = await startWebhookServer(
       this.config.webhookPort ?? 8445,
       this.config.webhookUrl,
       this.config.authToken,
       relay,
-      this.makeInboundCallbacks(),
+      this.makeInboundCallbacks()
     );
   }
 
@@ -194,7 +186,7 @@ export class SmsAdapter extends BaseRelayAdapter {
   async deliver(
     subject: string,
     envelope: RelayEnvelope,
-    _context?: AdapterContext,
+    _context?: AdapterContext
   ): Promise<DeliveryResult> {
     return deliverMessage({
       adapterId: this.id,

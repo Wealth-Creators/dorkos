@@ -3,7 +3,7 @@ const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 /**
  * Convert common cron expressions into human-readable labels.
  *
- * Handles the preset patterns used in Pulse onboarding. Falls back to
+ * Handles the preset patterns used in Tasks onboarding. Falls back to
  * the raw expression for anything it doesn't recognize.
  *
  * @param expression - A standard 5-field cron expression
@@ -15,12 +15,24 @@ export function formatCron(expression: string): string {
   const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
 
   // "Every day at HH:MM"
-  if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*' && isNumber(hour) && isNumber(minute)) {
+  if (
+    dayOfMonth === '*' &&
+    month === '*' &&
+    dayOfWeek === '*' &&
+    isNumber(hour) &&
+    isNumber(minute)
+  ) {
     return `Every day at ${formatTime(hour, minute)}`;
   }
 
   // "Every Monday at HH:MM" etc.
-  if (dayOfMonth === '*' && month === '*' && isNumber(dayOfWeek) && isNumber(hour) && isNumber(minute)) {
+  if (
+    dayOfMonth === '*' &&
+    month === '*' &&
+    isNumber(dayOfWeek) &&
+    isNumber(hour) &&
+    isNumber(minute)
+  ) {
     const day = DAYS[Number(dayOfWeek)] ?? `day ${dayOfWeek}`;
     return `Every ${day} at ${formatTime(hour, minute)}`;
   }

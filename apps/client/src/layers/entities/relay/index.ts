@@ -8,7 +8,9 @@ export { useRelayMessages, useSendRelayMessage } from './model/use-relay-message
 export { useRelayEndpoints } from './model/use-relay-endpoints';
 export { useRelayMetrics } from './model/use-relay-metrics';
 export { useRelayEventStream } from './model/use-relay-event-stream';
-export type { RelayConnectionState } from './model/use-relay-event-stream';
+
+/** @deprecated Use `ConnectionState` from `@dorkos/shared/types` instead. */
+export type { ConnectionState as RelayConnectionState } from '@dorkos/shared/types';
 export { useRelayAdapters, useToggleAdapter } from './model/use-relay-adapters';
 export {
   useAdapterCatalog,
@@ -19,7 +21,11 @@ export {
 } from './model/use-adapter-catalog';
 export { useMessageTrace } from './model/use-message-trace';
 export { useDeliveryMetrics } from './model/use-delivery-metrics';
-export { useDeadLetters, useAggregatedDeadLetters, useDismissDeadLetterGroup } from './model/use-dead-letters';
+export {
+  useDeadLetters,
+  useAggregatedDeadLetters,
+  useDismissDeadLetterGroup,
+} from './model/use-dead-letters';
 export type { DeadLetter, AggregatedDeadLetter } from './model/use-dead-letters';
 export { useRelayConversations } from './model/use-relay-conversations';
 export { useAdapterEvents } from './model/use-adapter-events';

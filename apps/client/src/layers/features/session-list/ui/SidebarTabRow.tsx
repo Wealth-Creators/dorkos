@@ -1,10 +1,11 @@
 import { useRef, useCallback } from 'react';
 import { motion } from 'motion/react';
-import { MessageSquare, Clock, Plug2 } from 'lucide-react';
+import { MessageSquare, Clock, Plug2, LayoutGrid, Pencil } from 'lucide-react';
 import { cn, isMac } from '@/layers/shared/lib';
+import { useAppStore } from '@/layers/shared/model';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/layers/shared/ui';
 
-type SidebarTab = 'sessions' | 'schedules' | 'connections';
+type SidebarTab = 'overview' | 'sessions' | 'schedules' | 'connections';
 
 interface SidebarTabRowProps {
   activeTab: SidebarTab;
@@ -15,9 +16,10 @@ interface SidebarTabRowProps {
 }
 
 const TAB_CONFIG = [
-  { id: 'sessions' as const, icon: MessageSquare, label: 'Sessions', shortcut: 1 },
-  { id: 'schedules' as const, icon: Clock, label: 'Schedules', shortcut: 2 },
-  { id: 'connections' as const, icon: Plug2, label: 'Connections', shortcut: 3 },
+  { id: 'overview' as const, icon: LayoutGrid, label: 'Overview', shortcut: 1 },
+  { id: 'sessions' as const, icon: MessageSquare, label: 'Sessions', shortcut: 2 },
+  { id: 'schedules' as const, icon: Clock, label: 'Schedules', shortcut: 3 },
+  { id: 'connections' as const, icon: Plug2, label: 'Connections', shortcut: 4 },
 ] as const;
 
 const STATUS_DOT_COLORS: Record<string, string> = {
@@ -39,6 +41,7 @@ export function SidebarTabRow({
 }: SidebarTabRowProps) {
   const tabListRef = useRef<HTMLDivElement>(null);
   const modKey = isMac ? '\u2318' : 'Ctrl+';
+  const setAgentDialogOpen = useAppStore((s) => s.setAgentDialogOpen);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -76,6 +79,7 @@ export function SidebarTabRow({
       className="border-border relative flex items-center gap-1 border-b px-2 py-1.5"
       onKeyDown={handleKeyDown}
     >
+      {/* Tab buttons */}
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         const Icon = tab.icon;
@@ -101,9 +105,9 @@ export function SidebarTabRow({
 
                 {/* Schedules numeric badge */}
                 {tab.id === 'schedules' && schedulesBadge > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-green-500 text-[10px] font-medium text-white">
+                  <span className="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-green-500 text-[10px] font-medium text-white">
                     {schedulesBadge > 9 ? '9+' : schedulesBadge}
-                    <span className="absolute inset-0 animate-pulse rounded-full bg-green-500/30" />
+                    <span className="animate-tasks absolute inset-0 rounded-full bg-green-500/30" />
                   </span>
                 )}
 
@@ -111,7 +115,7 @@ export function SidebarTabRow({
                 {tab.id === 'connections' && connectionsStatus !== 'none' && (
                   <span
                     className={cn(
-                      'absolute -right-0.5 -top-0.5 size-1.5 rounded-full',
+                      'absolute -top-0.5 -right-0.5 size-1.5 rounded-full',
                       STATUS_DOT_COLORS[connectionsStatus]
                     )}
                   />
@@ -133,6 +137,22 @@ export function SidebarTabRow({
           </Tooltip>
         );
       })}
+
+      {/* Spacer + edit agent button */}
+      <div className="flex-1" />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => setAgentDialogOpen(true)}
+            className="text-muted-foreground/50 hover:text-muted-foreground rounded-md p-2 transition-colors duration-150"
+            aria-label="Edit Agent"
+          >
+            <Pencil className="size-(--size-icon-sm)" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Edit Agent</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

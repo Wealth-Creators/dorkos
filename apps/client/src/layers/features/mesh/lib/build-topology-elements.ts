@@ -12,6 +12,7 @@ import type { AdapterBinding } from '@dorkos/shared/relay-schemas';
 import type { AgentNodeData } from '../ui/AgentNode';
 import type { AdapterNodeData } from '../ui/AdapterNode';
 import type { BindingEdgeData } from '../ui/BindingEdge';
+import { resolveAgentVisual } from '@/layers/shared/lib';
 import { getNamespaceColor } from './namespace-colors';
 
 /** Structured result from building topology elements. */
@@ -59,7 +60,7 @@ export function buildTopologyElements(
   bindings: AdapterBinding[] | undefined,
   bindingCountByAdapter: Map<string, number>,
   handleDeleteBinding: (edgeId: string) => void,
-  callbacks: AgentNodeCallbacks,
+  callbacks: AgentNodeCallbacks
 ): TopologyElements {
   if (!namespaces.length) {
     return {
@@ -76,8 +77,7 @@ export function buildTopologyElements(
 
   // --- Adapter nodes (left side) ---
   // Filter out CCA — it's an internal runtime, not a relay topology node.
-  const externalAdapters =
-    adapters?.filter((a) => a.config.type !== 'claude-code') ?? [];
+  const externalAdapters = adapters?.filter((a) => a.config.type !== 'claude-code') ?? [];
 
   if (relayEnabled && externalAdapters.length > 0) {
     for (const adapter of externalAdapters) {
@@ -148,6 +148,7 @@ export function buildTopologyElements(
 
     for (const agent of ns.agents) {
       const typedAgent = agent as TopologyAgent;
+      const visual = resolveAgentVisual(typedAgent);
       const agentNode: Node = {
         id: agent.id,
         type: 'agent',
@@ -162,7 +163,7 @@ export function buildTopologyElements(
           description: agent.description || undefined,
           relayAdapters: typedAgent.relayAdapters ?? [],
           relaySubject: typedAgent.relaySubject ?? null,
-          pulseScheduleCount: typedAgent.pulseScheduleCount ?? 0,
+          taskCount: typedAgent.taskCount ?? 0,
           lastSeenAt: typedAgent.lastSeenAt ?? null,
           lastSeenEvent: typedAgent.lastSeenEvent ?? null,
           budget: agent.budget
@@ -171,16 +172,14 @@ export function buildTopologyElements(
                 maxCallsPerHour: agent.budget.maxCallsPerHour,
               }
             : undefined,
-          behavior: agent.behavior
-            ? { responseMode: agent.behavior.responseMode }
-            : undefined,
+          behavior: agent.behavior ? { responseMode: agent.behavior.responseMode } : undefined,
           color: typedAgent.color ?? null,
-          emoji: typedAgent.icon ?? null,
+          avatarColor: visual.color,
+          emoji: visual.emoji,
           projectPath: typedAgent.projectPath ?? '',
           onOpenSettings: (id: string) =>
             callbacks.onOpenSettings?.(id, typedAgent.projectPath ?? ''),
-          onViewHealth: (id: string) =>
-            callbacks.onSelectAgent?.(id, typedAgent.projectPath ?? ''),
+          onViewHealth: (id: string) => callbacks.onSelectAgent?.(id, typedAgent.projectPath ?? ''),
           onOpenChat: (_id: string, path: string) => callbacks.onOpenChat?.(path),
         } satisfies AgentNodeData,
       };

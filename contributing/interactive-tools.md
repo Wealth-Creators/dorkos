@@ -11,6 +11,8 @@ Two interactive tools exist today:
 
 The pattern is designed to be extensible. Any new tool that requires user interaction mid-stream can follow the same architecture.
 
+A separate but related system -- **Agent UI Control** -- lets agents control the client UI without blocking the SDK. See the [Agent UI Control](#agent-ui-control) section below.
+
 ## Architecture
 
 The interactive tools pattern connects three layers: the SDK callback, the streaming generator, and the client UI. The key challenge is that `canUseTool` is a synchronous callback that must return a `Promise<PermissionResult>`, while the user response arrives later over HTTP or in-process transport.
@@ -303,6 +305,90 @@ This clears `isWaitingForUser` (which checks for `status === 'pending'`), so the
 
 Both `approveTool` and `denyTool` call `runtime.approveTool(sessionId, toolCallId, approved)` with `true` or `false`. The pending interaction's `resolve(approved)` is called, returning `{ behavior: 'allow' }` or `{ behavior: 'deny' }` to the SDK.
 
+### MCP Elicitation
+
+MCP elicitation allows agents to request structured form input mid-session — typically used to collect credentials (API keys, OAuth tokens) needed by an MCP server before it can proceed. Unlike `AskUserQuestion` (which presents preset options), elicitation renders a dynamic form derived from a JSON Schema.
+
+**1. SDK triggers the elicitation hook**
+
+When an MCP server invokes the elicitation protocol, the SDK calls the registered elicitation handler with a `requestedSchema` JSON Schema object and a descriptive `message`.
+
+**2. `handleElicitation` creates the event and deferred promise**
+
+The handler in `interactive-handlers.ts` follows the same deferred promise pattern:
+
+```typescript
+function handleElicitation(session, elicitationId, message, requestedSchema) {
+  session.eventQueue.push({
+    type: 'elicitation_prompt',
+    data: {
+      elicitationId,
+      message,
+      requestedSchema,
+      timeoutMs: SESSIONS.INTERACTION_TIMEOUT_MS,
+    },
+  });
+  session.eventQueueNotify?.();
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      session.pendingInteractions.delete(elicitationId);
+      resolve({ action: 'cancel' });
+    }, SESSIONS.INTERACTION_TIMEOUT_MS);
+
+    session.pendingInteractions.set(elicitationId, {
+      type: 'elicitation',
+      toolCallId: elicitationId,
+      resolve: (result) => {
+        clearTimeout(timeout);
+        session.pendingInteractions.delete(elicitationId);
+        resolve(result);
+      },
+      reject: () => {
+        clearTimeout(timeout);
+        session.pendingInteractions.delete(elicitationId);
+        resolve({ action: 'cancel' });
+      },
+      timeout,
+    });
+  });
+}
+```
+
+**3. Client receives `elicitation_prompt` event**
+
+The stream event handler adds a tool call entry with `interactiveType: 'elicitation'` and stores the schema.
+
+**4. `MessageItem` renders `ElicitationPrompt`**
+
+`ElicitationPrompt.tsx` generates form fields dynamically from the `requestedSchema` (string inputs, number inputs, checkboxes, selects). On submit, it calls:
+
+```typescript
+await transport.submitElicitation(sessionId, elicitationId, {
+  action: 'submit',
+  content: formValues,
+});
+```
+
+To cancel:
+
+```typescript
+await transport.submitElicitation(sessionId, elicitationId, { action: 'cancel' });
+```
+
+**5. Transport resolves the deferred promise**
+
+`POST /api/sessions/:id/submit-elicitation` calls `runtime.submitElicitation(sessionId, elicitationId, result)`, resolving the pending interaction. The MCP SDK receives the submitted values and the MCP server can proceed.
+
+### Implementation Files
+
+| File                                                            | Purpose                                                    |
+| --------------------------------------------------------------- | ---------------------------------------------------------- |
+| `services/runtimes/claude-code/interactive-handlers.ts`         | `handleElicitation()` — deferred promise, event queue push |
+| `apps/server/src/routes/sessions.ts`                            | `POST /:id/submit-elicitation` route                       |
+| `apps/client/src/layers/features/chat/ui/ElicitationPrompt.tsx` | Dynamic form renderer from JSON Schema                     |
+| `packages/shared/src/schemas.ts`                                | `ElicitationPromptEventSchema`, `ElicitationResultSchema`  |
+
 ## Adding a New Interactive Tool
 
 Follow these steps to add a new interactive tool (e.g., a file picker, a confirmation dialog, or a multi-step wizard).
@@ -491,6 +577,111 @@ if (tc.interactiveType === 'my_new_type') {
 }
 ```
 
+## Agent UI Control
+
+Unlike interactive tools (which pause the SDK to wait for user input), agent UI control is a **fire-and-forget** system. The agent calls an MCP tool, the server emits an SSE event, and the client mutates its UI state immediately. The SDK is never blocked.
+
+### `control_ui` MCP Tool
+
+The `control_ui` tool is exposed on the external MCP server (`/mcp`) and available to any connected agent. It accepts a `UiCommand` -- a discriminated union on `action` with 14 variants:
+
+| Action                 | Parameters                                                      | Effect                                  |
+| ---------------------- | --------------------------------------------------------------- | --------------------------------------- |
+| `open_panel`           | `panel`: `settings` / `pulse` / `relay` / `mesh` / `picker`     | Open a named panel                      |
+| `close_panel`          | `panel`: (same as above)                                        | Close a named panel                     |
+| `toggle_panel`         | `panel`: (same as above)                                        | Toggle a named panel                    |
+| `open_sidebar`         | (none)                                                          | Open the sidebar                        |
+| `close_sidebar`        | (none)                                                          | Close the sidebar                       |
+| `switch_sidebar_tab`   | `tab`: `sessions` / `agents`                                    | Switch sidebar tab (also opens sidebar) |
+| `open_canvas`          | `content`: `UiCanvasContent`, `preferredWidth?`: 20--80         | Open canvas panel with content          |
+| `update_canvas`        | `content`: `UiCanvasContent`                                    | Update canvas content without reopening |
+| `close_canvas`         | (none)                                                          | Close the canvas panel                  |
+| `show_toast`           | `message`, `level?`: success/error/info/warning, `description?` | Show a toast notification               |
+| `set_theme`            | `theme`: `light` / `dark`                                       | Switch the UI theme                     |
+| `scroll_to_message`    | `messageId?` (omit for bottom)                                  | Scroll to a specific message            |
+| `switch_agent`         | `cwd`: working directory path                                   | Switch to a different agent             |
+| `open_command_palette` | (none)                                                          | Open the command palette                |
+
+Canvas content (`UiCanvasContent`) is discriminated on `type`:
+
+- `url` -- renders an iframe (`url`, optional `title`)
+- `markdown` -- renders markdown (`markdown`, optional `title`)
+- `json` -- renders formatted JSON (`data`, optional `title`)
+
+The `UiCommand` schema is defined in `packages/shared/src/schemas.ts` and validated with Zod on both server and client.
+
+### `get_ui_state` MCP Tool
+
+The companion `get_ui_state` tool returns the current client UI state -- which panels are open, sidebar tab, canvas state, and active agent. Agents can call this after `control_ui` to verify the result, or to make UI-aware decisions.
+
+### Data Flow
+
+```
+Agent calls control_ui MCP tool
+  |
+  |  1. Server validates command against UiCommandSchema
+  |  2. Pushes StreamEvent { type: 'ui_command', data: { command } } to session.eventQueue
+  |  3. Calls session.eventQueueNotify() to wake the generator
+  |  4. Returns { success: true, action } to the agent immediately (no blocking)
+  |
+  v
+sendMessage() generator drains queue, yields ui_command event
+  |
+  v
+Client stream-event-handler.ts receives 'ui_command' event
+  |
+  |  Extracts the UiCommand from event data
+  |  Gets the current Zustand store state
+  |  Calls executeUiCommand(ctx, command)
+  |
+  v
+UiActionDispatcher (shared/lib/ui-action-dispatcher.ts)
+  |
+  |  Pure side-effect dispatcher — switches on command.action
+  |  Calls the appropriate store setter, toast, or handler
+  |
+  v
+UI updates reactively via Zustand subscription
+```
+
+The `UiActionDispatcher` is a pure function with no React dependencies. It is callable from stream event handlers, keyboard shortcuts, and command palette actions with equal safety.
+
+### UI State Awareness
+
+The client can send a `uiState` snapshot with each `sendMessage()` request. This is an optional `uiState` field on `SendMessageRequest` (validated against `UiStateSchema`), which the server injects into the agent's system prompt as context. This gives agents situational awareness of what the user is currently viewing:
+
+```typescript
+// UiState shape (packages/shared/src/schemas.ts)
+{
+  canvas: { open: boolean, contentType: string | null },
+  panels: { settings: boolean, pulse: boolean, relay: boolean, mesh: boolean },
+  sidebar: { open: boolean, activeTab: 'sessions' | 'agents' | null },
+  agent: { id: string | null, cwd: string | null },
+}
+```
+
+This two-way channel -- `uiState` in (client tells agent what is visible) and `ui_command` out (agent tells client what to change) -- enables agents to make contextual UI decisions rather than issuing commands blindly.
+
+### Key Differences from Interactive Tools
+
+| Aspect          | Interactive Tools (AskUserQuestion, Tool Approval) | Agent UI Control (`control_ui`)            |
+| --------------- | -------------------------------------------------- | ------------------------------------------ |
+| Direction       | Agent asks user, waits for response                | Agent commands UI, no response expected    |
+| SDK blocking    | Blocks via deferred promise until user responds    | Non-blocking, returns immediately          |
+| Event queue     | Uses same `session.eventQueue` mechanism           | Uses same `session.eventQueue` mechanism   |
+| Promise.race    | Yields event while SDK is blocked                  | Yields event alongside normal SDK messages |
+| Transport layer | Requires resolve endpoint (POST)                   | No resolve endpoint needed                 |
+| Timeout         | 10-minute timeout per interaction                  | No timeout (fire-and-forget)               |
+
+### Implementation Files
+
+| File                                                                  | Purpose                                                                  |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `packages/shared/src/schemas.ts`                                      | `UiCommandSchema`, `UiStateSchema`, `UiCanvasContentSchema` definitions  |
+| `apps/server/src/services/runtimes/claude-code/mcp-tools/ui-tools.ts` | `control_ui` and `get_ui_state` MCP tool handlers                        |
+| `apps/client/src/layers/shared/lib/ui-action-dispatcher.ts`           | `executeUiCommand()` -- pure dispatcher, no React dependencies           |
+| `apps/client/src/layers/features/chat/model/stream-event-handler.ts`  | Processes `ui_command` SSE events and dispatches to `executeUiCommand()` |
+
 ## Key Patterns
 
 ### Deferred Promise Pattern
@@ -538,12 +729,14 @@ The stream `done` handler sweeps any remaining pending interactive tool calls to
 The `ToolApproval` component makes the server-side timeout visible to users via a countdown timer. The server includes `timeoutMs` in the `approval_required` SSE event, which flows through the stream event handler to the component.
 
 **Visual indicators:**
+
 - A thin progress bar (4px) drains over the timeout duration via CSS `@keyframes drain` animation (GPU-composited, zero JS cost)
 - Bar color transitions: neutral → amber at 2 minutes remaining → red at 1 minute remaining
 - Text countdown (`M:SS remaining`) appears only in the final 2 minutes
 - On timeout: card transitions to denied state with explanation message
 
 **Accessibility:**
+
 - Progress bar has `role="progressbar"` with `aria-valuemin`, `aria-valuemax`, `aria-valuenow`, and `aria-valuetext`
 - Screen reader announcements via `aria-live="assertive"` fire only at threshold crossings (2 min, 1 min, timeout)
 - `prefers-reduced-motion` respected via `motion-safe:` Tailwind prefix — animation disabled, color transitions remain
@@ -651,10 +844,10 @@ Hook events flow through the standard pipeline: `sdk-event-mapper.ts` → SSE �
 
 The `hook_event` field on each SDK message determines the rendering surface:
 
-| `hook_event` | Route | Surface |
-|---|---|---|
-| `PreToolUse`, `PostToolUse`, `PostToolUseFailure` | Tool-contextual | Sub-row in ToolCallCard |
-| All others (`SessionStart`, `UserPromptSubmit`, etc.) | Session-level | SystemStatusZone / error banner |
+| `hook_event`                                          | Route           | Surface                         |
+| ----------------------------------------------------- | --------------- | ------------------------------- |
+| `PreToolUse`, `PostToolUse`, `PostToolUseFailure`     | Tool-contextual | Sub-row in ToolCallCard         |
+| All others (`SessionStart`, `UserPromptSubmit`, etc.) | Session-level   | SystemStatusZone / error banner |
 
 ### Orphan Hook Handling
 
@@ -662,12 +855,12 @@ The `hook_event` field on each SDK message determines the rendering surface:
 
 ### HookRow Visual States
 
-| Status | Icon | Styling |
-|---|---|---|
-| `running` | Spinner (Loader2) | Muted |
-| `success` | Check | Muted |
-| `error` | X | Destructive, auto-expands, shows stderr |
-| `cancelled` | X | Muted |
+| Status      | Icon              | Styling                                 |
+| ----------- | ----------------- | --------------------------------------- |
+| `running`   | Spinner (Loader2) | Muted                                   |
+| `success`   | Check             | Muted                                   |
+| `error`     | X                 | Destructive, auto-expands, shows stderr |
+| `cancelled` | X                 | Muted                                   |
 
 ### Auto-Hide Suppression
 

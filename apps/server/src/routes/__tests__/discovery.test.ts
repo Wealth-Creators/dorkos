@@ -46,9 +46,7 @@ describe('Discovery Route', () => {
     it('returns 400 for maxDepth out of range', async () => {
       const app = createTestApp();
 
-      const res = await request(app)
-        .post('/api/discovery/scan')
-        .send({ maxDepth: 100 });
+      const res = await request(app).post('/api/discovery/scan').send({ maxDepth: 100 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('Validation failed');
@@ -57,9 +55,7 @@ describe('Discovery Route', () => {
     it('returns 400 for timeout too small', async () => {
       const app = createTestApp();
 
-      const res = await request(app)
-        .post('/api/discovery/scan')
-        .send({ timeout: 500 });
+      const res = await request(app).post('/api/discovery/scan').send({ timeout: 500 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('Validation failed');
@@ -68,9 +64,7 @@ describe('Discovery Route', () => {
     it('returns 400 for timeout too large', async () => {
       const app = createTestApp();
 
-      const res = await request(app)
-        .post('/api/discovery/scan')
-        .send({ timeout: 200000 });
+      const res = await request(app).post('/api/discovery/scan').send({ timeout: 200000 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('Validation failed');
@@ -79,9 +73,7 @@ describe('Discovery Route', () => {
     it('returns 400 for non-integer maxDepth', async () => {
       const app = createTestApp();
 
-      const res = await request(app)
-        .post('/api/discovery/scan')
-        .send({ maxDepth: 3.5 });
+      const res = await request(app).post('/api/discovery/scan').send({ maxDepth: 3.5 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('Validation failed');
@@ -93,9 +85,7 @@ describe('Discovery Route', () => {
       mockIsWithinBoundary.mockResolvedValue(false);
       const app = createTestApp();
 
-      const res = await request(app)
-        .post('/api/discovery/scan')
-        .send({ root: '/etc/secrets' });
+      const res = await request(app).post('/api/discovery/scan').send({ root: '/etc/secrets' });
 
       expect(res.status).toBe(403);
       expect(res.body.error).toBe('Root path outside directory boundary');
@@ -103,9 +93,7 @@ describe('Discovery Route', () => {
     });
 
     it('returns 403 when any root in roots array is outside boundary', async () => {
-      mockIsWithinBoundary
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(false);
+      mockIsWithinBoundary.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
       const app = createTestApp();
 
       const res = await request(app)
@@ -128,16 +116,17 @@ describe('Discovery Route', () => {
         .buffer(true)
         .parse((res, callback) => {
           let data = '';
-          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-          res.on('end', () => { callback(null, data); });
+          res.on('data', (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          res.on('end', () => {
+            callback(null, data);
+          });
         });
 
       // Should validate boundary path and call discover with it
       expect(mockIsWithinBoundary).toHaveBeenCalledWith('/home/user');
-      expect(mockDiscover).toHaveBeenCalledWith(
-        ['/home/user'],
-        expect.objectContaining({}),
-      );
+      expect(mockDiscover).toHaveBeenCalledWith(['/home/user'], expect.objectContaining({}));
     });
   });
 
@@ -155,14 +144,18 @@ describe('Discovery Route', () => {
         .buffer(true)
         .parse((res, callback) => {
           let data = '';
-          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-          res.on('end', () => { callback(null, data); });
+          res.on('data', (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          res.on('end', () => {
+            callback(null, data);
+          });
         });
 
-      expect(mockDiscover).toHaveBeenCalledWith(
-        ['/home/user/projects'],
-        { maxDepth: 3, timeout: 10000 },
-      );
+      expect(mockDiscover).toHaveBeenCalledWith(['/home/user/projects'], {
+        maxDepth: 3,
+        timeout: 10000,
+      });
     });
 
     it('passes roots array through to meshCore.discover', async () => {
@@ -178,13 +171,17 @@ describe('Discovery Route', () => {
         .buffer(true)
         .parse((res, callback) => {
           let data = '';
-          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-          res.on('end', () => { callback(null, data); });
+          res.on('data', (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          res.on('end', () => {
+            callback(null, data);
+          });
         });
 
       expect(mockDiscover).toHaveBeenCalledWith(
         ['/home/user/a', '/home/user/b'],
-        expect.objectContaining({}),
+        expect.objectContaining({})
       );
     });
 
@@ -221,8 +218,12 @@ describe('Discovery Route', () => {
         .buffer(true)
         .parse((res, callback) => {
           let data = '';
-          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-          res.on('end', () => { callback(null, data); });
+          res.on('data', (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          res.on('end', () => {
+            callback(null, data);
+          });
         });
 
       expect(res.status).toBe(200);
@@ -237,10 +238,19 @@ describe('Discovery Route', () => {
       expect(parsed[2].type).toBe('complete');
     });
 
-    it('filters auto-import events from SSE output', async () => {
+    it('surfaces auto-import events as existing-agent events', async () => {
       mockDiscover.mockImplementation(async function* () {
-        yield { type: 'auto-import', data: { manifest: {}, path: '/home/user/proj' } };
-        yield { type: 'candidate', data: { path: '/home/user/proj', strategy: 'claude-code', hints: {}, discoveredAt: '' } };
+        yield {
+          type: 'auto-import',
+          data: {
+            manifest: { name: 'MyAgent', runtime: 'claude-code', description: 'A test agent' },
+            path: '/home/user/proj',
+          },
+        };
+        yield {
+          type: 'candidate',
+          data: { path: '/home/user/proj', strategy: 'claude-code', hints: {}, discoveredAt: '' },
+        };
         yield { type: 'complete', data: { scannedDirs: 1, foundAgents: 1, timedOut: false } };
       });
 
@@ -252,13 +262,25 @@ describe('Discovery Route', () => {
         .buffer(true)
         .parse((res, callback) => {
           let data = '';
-          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-          res.on('end', () => { callback(null, data); });
+          res.on('data', (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          res.on('end', () => {
+            callback(null, data);
+          });
         });
 
       const parsed = parseSSEResponse(res.body as string);
-      expect(parsed).toHaveLength(2);
+      expect(parsed).toHaveLength(3);
       expect(parsed.find((e) => e.type === 'auto-import')).toBeUndefined();
+      const existing = parsed.find((e) => e.type === 'existing-agent');
+      expect(existing).toBeDefined();
+      expect(existing!.data).toEqual({
+        path: '/home/user/proj',
+        name: 'MyAgent',
+        runtime: 'claude-code',
+        description: 'A test agent',
+      });
     });
 
     it('passes undefined for omitted optional fields', async () => {
@@ -274,14 +296,18 @@ describe('Discovery Route', () => {
         .buffer(true)
         .parse((res, callback) => {
           let data = '';
-          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-          res.on('end', () => { callback(null, data); });
+          res.on('data', (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          res.on('end', () => {
+            callback(null, data);
+          });
         });
 
-      expect(mockDiscover).toHaveBeenCalledWith(
-        ['/home/user'],
-        { maxDepth: undefined, timeout: undefined },
-      );
+      expect(mockDiscover).toHaveBeenCalledWith(['/home/user'], {
+        maxDepth: undefined,
+        timeout: undefined,
+      });
     });
   });
 });

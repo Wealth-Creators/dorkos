@@ -4,7 +4,7 @@ import {
   handlePing,
   handleGetServerInfo,
   createGetSessionCountHandler,
-  createGetCurrentAgentHandler,
+  createGetAgentHandler,
   createDorkOsToolServer,
   createListSchedulesHandler,
   createCreateScheduleHandler,
@@ -22,6 +22,36 @@ vi.mock('../../../lib/version.js', () => ({
 
 vi.mock('@dorkos/shared/manifest', () => ({
   readManifest: vi.fn(),
+  writeManifest: vi.fn(),
+}));
+
+// Mocks required by agent-creator.ts (transitively imported via agent-tools)
+vi.mock('@dorkos/shared/convention-files', () => ({
+  defaultSoulTemplate: vi.fn(() => '# SOUL'),
+  defaultNopeTemplate: vi.fn(() => '# NOPE'),
+  buildSoulContent: vi.fn(() => '# SOUL'),
+}));
+vi.mock('@dorkos/shared/convention-files-io', () => ({
+  writeConventionFile: vi.fn(),
+  readConventionFile: vi.fn(),
+}));
+vi.mock('@dorkos/shared/trait-renderer', () => ({
+  renderTraits: vi.fn(() => ''),
+  DEFAULT_TRAITS: { tone: 3, autonomy: 3, caution: 3, communication: 3, creativity: 3 },
+}));
+vi.mock('@dorkos/shared/dorkbot-templates', () => ({
+  dorkbotClaudeMdTemplate: vi.fn(() => '# DorkBot'),
+}));
+vi.mock('../../../lib/boundary.js', () => ({
+  validateBoundary: vi.fn(),
+  BoundaryError: class BoundaryError extends Error {
+    code = 'BOUNDARY_VIOLATION';
+  },
+}));
+vi.mock('../config-manager.js', () => ({
+  configManager: {
+    get: vi.fn(() => ({ defaultDirectory: '/tmp/agents' })),
+  },
 }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -49,9 +79,7 @@ interface MockServer {
 }
 
 /** Create a mock McpToolDeps with a stubbed transcript reader */
-function makeMockDeps(
-  overrides: { listSessions?: ReturnType<typeof vi.fn> } = {}
-): McpToolDeps {
+function makeMockDeps(overrides: { listSessions?: ReturnType<typeof vi.fn> } = {}): McpToolDeps {
   return {
     transcriptReader: {
       listSessions: overrides.listSessions ?? vi.fn().mockResolvedValue([]),
@@ -60,26 +88,26 @@ function makeMockDeps(
   };
 }
 
-/** Create a mock PulseStore with sensible defaults */
-function makeMockPulseStore(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {
+/** Create a mock TasksStore with sensible defaults */
+function makeMockTasksStore(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {
   return {
-    getSchedules: vi.fn().mockReturnValue([]),
-    getSchedule: vi.fn().mockReturnValue(null),
-    createSchedule: vi.fn().mockReturnValue({ id: 'new-1', name: 'Test' }),
-    updateSchedule: vi.fn().mockReturnValue(null),
-    deleteSchedule: vi.fn().mockReturnValue(false),
+    getTasks: vi.fn().mockReturnValue([]),
+    getTask: vi.fn().mockReturnValue(null),
+    createTask: vi.fn().mockReturnValue({ id: 'new-1', name: 'Test' }),
+    updateTask: vi.fn().mockReturnValue(null),
+    deleteTask: vi.fn().mockReturnValue(false),
     listRuns: vi.fn().mockReturnValue([]),
     ...overrides,
-  } as unknown as McpToolDeps['pulseStore'];
+  } as unknown as McpToolDeps['taskStore'];
 }
 
-/** Create mock deps with Pulse enabled */
-function makePulseDeps(
+/** Create mock deps with Tasks enabled */
+function makeTasksDeps(
   storeOverrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}
 ): McpToolDeps {
   return {
     ...makeMockDeps(),
-    pulseStore: makeMockPulseStore(storeOverrides),
+    taskStore: makeMockTasksStore(storeOverrides),
   };
 }
 
@@ -126,7 +154,8 @@ describe('MCP Tool Handlers', () => {
     it('uses DORKOS_PORT env var when set', async () => {
       vi.stubEnv('DORKOS_PORT', '9999');
       vi.resetModules();
-      const { handleGetServerInfo: handler } = await import('../../runtimes/claude-code/mcp-tools/core-tools.js');
+      const { handleGetServerInfo: handler } =
+        await import('../../runtimes/claude-code/mcp-tools/core-tools.js');
       const result = await handler({});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.port).toBe(9999);
@@ -142,7 +171,8 @@ describe('MCP Tool Handlers', () => {
     it('defaults port to 4242 when env var unset', async () => {
       vi.stubEnv('DORKOS_PORT', undefined as unknown as string);
       vi.resetModules();
-      const { handleGetServerInfo: handler } = await import('../../runtimes/claude-code/mcp-tools/core-tools.js');
+      const { handleGetServerInfo: handler } =
+        await import('../../runtimes/claude-code/mcp-tools/core-tools.js');
       const result = await handler({});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.port).toBe(4242);
@@ -157,10 +187,10 @@ describe('MCP Tool Handlers', () => {
   });
 
   describe('createGetSessionCountHandler', () => {
-    it('returns session count from transcript reader', async () => {
+    it('returns session count from transcript reader when cwd provided', async () => {
       const listSessions = vi.fn().mockResolvedValue([{ id: 's1' }, { id: 's2' }, { id: 's3' }]);
       const handler = createGetSessionCountHandler(makeMockDeps({ listSessions }));
-      const result = await handler();
+      const result = await handler({ cwd: '/test/cwd' });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.count).toBe(3);
       expect(parsed.cwd).toBe('/test/cwd');
@@ -170,7 +200,7 @@ describe('MCP Tool Handlers', () => {
     it('returns isError when transcript reader fails', async () => {
       const listSessions = vi.fn().mockRejectedValue(new Error('ENOENT'));
       const handler = createGetSessionCountHandler(makeMockDeps({ listSessions }));
-      const result = await handler();
+      const result = await handler({ cwd: '/test/cwd' });
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toContain('ENOENT');
@@ -178,7 +208,7 @@ describe('MCP Tool Handlers', () => {
 
     it('returns zero for empty session directory', async () => {
       const handler = createGetSessionCountHandler(makeMockDeps());
-      const result = await handler();
+      const result = await handler({ cwd: '/test/cwd' });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.count).toBe(0);
     });
@@ -186,21 +216,49 @@ describe('MCP Tool Handlers', () => {
     it('handles non-Error exceptions gracefully', async () => {
       const listSessions = vi.fn().mockRejectedValue('string error');
       const handler = createGetSessionCountHandler(makeMockDeps({ listSessions }));
-      const result = await handler();
+      const result = await handler({ cwd: '/test/cwd' });
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toBe('Failed to list sessions');
     });
+
+    it('returns isError when neither agent_id nor cwd provided', async () => {
+      const handler = createGetSessionCountHandler(makeMockDeps());
+      const result = await handler({});
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toContain('Either agent_id or cwd must be provided');
+    });
+
+    it('returns isError when both agent_id and cwd provided', async () => {
+      const handler = createGetSessionCountHandler(makeMockDeps());
+      const result = await handler({ agent_id: 'abc', cwd: '/test' });
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toContain('not both');
+    });
+
+    it('includes agent_id in response when resolved via agent_id', async () => {
+      const listSessions = vi.fn().mockResolvedValue([{ id: 's1' }]);
+      const meshCore = { getProjectPath: vi.fn().mockReturnValue('/resolved/path') };
+      const deps = { ...makeMockDeps({ listSessions }), meshCore } as McpToolDeps;
+      const handler = createGetSessionCountHandler(deps);
+      const result = await handler({ agent_id: 'agent-123' });
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.count).toBe(1);
+      expect(parsed.cwd).toBe('/resolved/path');
+      expect(parsed.agent_id).toBe('agent-123');
+    });
   });
 
   describe('createListSchedulesHandler', () => {
-    it('returns all schedules when Pulse enabled', async () => {
+    it('returns all schedules when Tasks enabled', async () => {
       const schedules = [
         { id: 's1', name: 'Daily', enabled: true },
         { id: 's2', name: 'Weekly', enabled: false },
       ];
       const handler = createListSchedulesHandler(
-        makePulseDeps({ getSchedules: vi.fn().mockReturnValue(schedules) })
+        makeTasksDeps({ getTasks: vi.fn().mockReturnValue(schedules) })
       );
       const result = await handler({});
       const parsed = JSON.parse(result.content[0].text);
@@ -214,7 +272,7 @@ describe('MCP Tool Handlers', () => {
         { id: 's2', name: 'Weekly', enabled: false },
       ];
       const handler = createListSchedulesHandler(
-        makePulseDeps({ getSchedules: vi.fn().mockReturnValue(schedules) })
+        makeTasksDeps({ getTasks: vi.fn().mockReturnValue(schedules) })
       );
       const result = await handler({ enabled_only: true });
       const parsed = JSON.parse(result.content[0].text);
@@ -222,7 +280,7 @@ describe('MCP Tool Handlers', () => {
       expect(parsed.schedules[0].id).toBe('s1');
     });
 
-    it('returns error when pulseStore undefined', async () => {
+    it('returns error when taskStore undefined', async () => {
       const handler = createListSchedulesHandler(makeMockDeps());
       const result = await handler({});
       expect(result.isError).toBe(true);
@@ -231,7 +289,7 @@ describe('MCP Tool Handlers', () => {
     });
 
     it('handles empty schedule list', async () => {
-      const handler = createListSchedulesHandler(makePulseDeps());
+      const handler = createListSchedulesHandler(makeTasksDeps());
       const result = await handler({});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.schedules).toEqual([]);
@@ -244,10 +302,10 @@ describe('MCP Tool Handlers', () => {
       const created = { id: 'new-1', name: 'Nightly' };
       const updated = { ...created, status: 'pending_approval' };
       const handler = createCreateScheduleHandler(
-        makePulseDeps({
-          createSchedule: vi.fn().mockReturnValue(created),
-          updateSchedule: vi.fn().mockReturnValue(updated),
-          getSchedule: vi.fn().mockReturnValue(updated),
+        makeTasksDeps({
+          createTask: vi.fn().mockReturnValue(created),
+          updateTask: vi.fn().mockReturnValue(updated),
+          getTask: vi.fn().mockReturnValue(updated),
         })
       );
       const result = await handler({
@@ -262,10 +320,10 @@ describe('MCP Tool Handlers', () => {
 
     it('returns created schedule with approval note', async () => {
       const handler = createCreateScheduleHandler(
-        makePulseDeps({
-          createSchedule: vi.fn().mockReturnValue({ id: 'x' }),
-          updateSchedule: vi.fn(),
-          getSchedule: vi.fn().mockReturnValue({ id: 'x', status: 'pending_approval' }),
+        makeTasksDeps({
+          createTask: vi.fn().mockReturnValue({ id: 'x' }),
+          updateTask: vi.fn(),
+          getTask: vi.fn().mockReturnValue({ id: 'x', status: 'pending_approval' }),
         })
       );
       const result = await handler({ name: 'Test', prompt: 'Do stuff', cron: '* * * * *' });
@@ -274,7 +332,7 @@ describe('MCP Tool Handlers', () => {
       expect(result.isError).toBeUndefined();
     });
 
-    it('returns error when Pulse disabled', async () => {
+    it('returns error when Tasks disabled', async () => {
       const handler = createCreateScheduleHandler(makeMockDeps());
       const result = await handler({ name: 'X', prompt: 'Y', cron: '* * * * *' });
       expect(result.isError).toBe(true);
@@ -287,7 +345,7 @@ describe('MCP Tool Handlers', () => {
     it('updates existing schedule', async () => {
       const updated = { id: 'u1', name: 'Updated Name' };
       const handler = createUpdateScheduleHandler(
-        makePulseDeps({ updateSchedule: vi.fn().mockReturnValue(updated) })
+        makeTasksDeps({ updateTask: vi.fn().mockReturnValue(updated) })
       );
       const result = await handler({ id: 'u1', name: 'Updated Name' });
       const parsed = JSON.parse(result.content[0].text);
@@ -297,7 +355,7 @@ describe('MCP Tool Handlers', () => {
 
     it('returns error for non-existent ID', async () => {
       const handler = createUpdateScheduleHandler(
-        makePulseDeps({ updateSchedule: vi.fn().mockReturnValue(null) })
+        makeTasksDeps({ updateTask: vi.fn().mockReturnValue(null) })
       );
       const result = await handler({ id: 'missing' });
       expect(result.isError).toBe(true);
@@ -307,16 +365,16 @@ describe('MCP Tool Handlers', () => {
     });
 
     it('handles permissionMode string conversion', async () => {
-      const store = makeMockPulseStore({
-        updateSchedule: vi.fn().mockReturnValue({ id: 'u1', permissionMode: 'plan' }),
+      const store = makeMockTasksStore({
+        updateTask: vi.fn().mockReturnValue({ id: 'u1', permissionMode: 'plan' }),
       });
-      const deps = { ...makeMockDeps(), pulseStore: store };
+      const deps = { ...makeMockDeps(), taskStore: store };
       const handler = createUpdateScheduleHandler(deps);
       await handler({ id: 'u1', permissionMode: 'plan' });
-      expect(store!.updateSchedule).toHaveBeenCalledWith('u1', { permissionMode: 'plan' });
+      expect(store!.updateTask).toHaveBeenCalledWith('u1', { permissionMode: 'plan' });
     });
 
-    it('returns error when Pulse disabled', async () => {
+    it('returns error when Tasks disabled', async () => {
       const handler = createUpdateScheduleHandler(makeMockDeps());
       const result = await handler({ id: 'x' });
       expect(result.isError).toBe(true);
@@ -328,7 +386,7 @@ describe('MCP Tool Handlers', () => {
   describe('createDeleteScheduleHandler', () => {
     it('deletes existing schedule and returns success', async () => {
       const handler = createDeleteScheduleHandler(
-        makePulseDeps({ deleteSchedule: vi.fn().mockReturnValue(true) })
+        makeTasksDeps({ deleteTask: vi.fn().mockReturnValue(true) })
       );
       const result = await handler({ id: 'del-1' });
       const parsed = JSON.parse(result.content[0].text);
@@ -339,7 +397,7 @@ describe('MCP Tool Handlers', () => {
 
     it('returns error for non-existent ID', async () => {
       const handler = createDeleteScheduleHandler(
-        makePulseDeps({ deleteSchedule: vi.fn().mockReturnValue(false) })
+        makeTasksDeps({ deleteTask: vi.fn().mockReturnValue(false) })
       );
       const result = await handler({ id: 'ghost' });
       expect(result.isError).toBe(true);
@@ -348,7 +406,7 @@ describe('MCP Tool Handlers', () => {
       expect(parsed.error).toContain('not found');
     });
 
-    it('returns error when Pulse disabled', async () => {
+    it('returns error when Tasks disabled', async () => {
       const handler = createDeleteScheduleHandler(makeMockDeps());
       const result = await handler({ id: 'x' });
       expect(result.isError).toBe(true);
@@ -361,22 +419,22 @@ describe('MCP Tool Handlers', () => {
     it('returns runs with default limit', async () => {
       const runs = [{ id: 'r1' }, { id: 'r2' }];
       const listRuns = vi.fn().mockReturnValue(runs);
-      const handler = createGetRunHistoryHandler(makePulseDeps({ listRuns }));
+      const handler = createGetRunHistoryHandler(makeTasksDeps({ listRuns }));
       const result = await handler({ schedule_id: 'sched-1' });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.runs).toEqual(runs);
       expect(parsed.count).toBe(2);
-      expect(listRuns).toHaveBeenCalledWith({ scheduleId: 'sched-1', limit: 20 });
+      expect(listRuns).toHaveBeenCalledWith({ taskId: 'sched-1', limit: 20 });
     });
 
     it('respects custom limit parameter', async () => {
       const listRuns = vi.fn().mockReturnValue([]);
-      const handler = createGetRunHistoryHandler(makePulseDeps({ listRuns }));
+      const handler = createGetRunHistoryHandler(makeTasksDeps({ listRuns }));
       await handler({ schedule_id: 'sched-1', limit: 5 });
-      expect(listRuns).toHaveBeenCalledWith({ scheduleId: 'sched-1', limit: 5 });
+      expect(listRuns).toHaveBeenCalledWith({ taskId: 'sched-1', limit: 5 });
     });
 
-    it('returns error when Pulse disabled', async () => {
+    it('returns error when Tasks disabled', async () => {
       const handler = createGetRunHistoryHandler(makeMockDeps());
       const result = await handler({ schedule_id: 'x' });
       expect(result.isError).toBe(true);
@@ -385,12 +443,12 @@ describe('MCP Tool Handlers', () => {
     });
   });
 
-  describe('createGetCurrentAgentHandler', () => {
+  describe('createGetAgentHandler', () => {
     it('returns null with message when no manifest exists', async () => {
       const { readManifest } = await import('@dorkos/shared/manifest');
       vi.mocked(readManifest).mockResolvedValue(null);
-      const handler = createGetCurrentAgentHandler(makeMockDeps());
-      const result = await handler();
+      const handler = createGetAgentHandler(makeMockDeps());
+      const result = await handler({ cwd: '/test/cwd' });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.agent).toBeNull();
       expect(parsed.message).toContain('No agent registered');
@@ -406,27 +464,37 @@ describe('MCP Tool Handlers', () => {
         capabilities: ['testing'],
       };
       vi.mocked(readManifest).mockResolvedValue(mockManifest as never);
-      const handler = createGetCurrentAgentHandler(makeMockDeps());
-      const result = await handler();
+      const handler = createGetAgentHandler(makeMockDeps());
+      const result = await handler({ cwd: '/test/cwd' });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.agent).toEqual(mockManifest);
       expect(parsed.agent.id).toBe('test-agent-id');
       expect(parsed.agent.name).toBe('Test Agent');
     });
 
-    it('uses deps.defaultCwd as the working directory', async () => {
+    it('uses provided cwd as the working directory', async () => {
       const { readManifest } = await import('@dorkos/shared/manifest');
       vi.mocked(readManifest).mockResolvedValue(null);
-      const handler = createGetCurrentAgentHandler(makeMockDeps());
-      await handler();
+      const handler = createGetAgentHandler(makeMockDeps());
+      await handler({ cwd: '/test/cwd' });
       expect(readManifest).toHaveBeenCalledWith('/test/cwd');
+    });
+
+    it('resolves agent_id via meshCore.getProjectPath', async () => {
+      const { readManifest } = await import('@dorkos/shared/manifest');
+      vi.mocked(readManifest).mockResolvedValue(null);
+      const meshCore = { getProjectPath: vi.fn().mockReturnValue('/resolved/agent/path') };
+      const deps = { ...makeMockDeps(), meshCore } as McpToolDeps;
+      const handler = createGetAgentHandler(deps);
+      await handler({ agent_id: 'agent-ulid' });
+      expect(readManifest).toHaveBeenCalledWith('/resolved/agent/path');
     });
 
     it('returns isError when readManifest throws', async () => {
       const { readManifest } = await import('@dorkos/shared/manifest');
       vi.mocked(readManifest).mockRejectedValue(new Error('Permission denied'));
-      const handler = createGetCurrentAgentHandler(makeMockDeps());
-      const result = await handler();
+      const handler = createGetAgentHandler(makeMockDeps());
+      const result = await handler({ cwd: '/test/cwd' });
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toContain('Permission denied');
@@ -435,11 +503,19 @@ describe('MCP Tool Handlers', () => {
     it('handles non-Error exceptions gracefully', async () => {
       const { readManifest } = await import('@dorkos/shared/manifest');
       vi.mocked(readManifest).mockRejectedValue('string error');
-      const handler = createGetCurrentAgentHandler(makeMockDeps());
-      const result = await handler();
+      const handler = createGetAgentHandler(makeMockDeps());
+      const result = await handler({ cwd: '/test/cwd' });
       expect(result.isError).toBe(true);
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.error).toBe('Failed to read agent manifest');
+    });
+
+    it('returns isError when neither agent_id nor cwd provided', async () => {
+      const handler = createGetAgentHandler(makeMockDeps());
+      const result = await handler({});
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.error).toContain('Either agent_id or cwd must be provided');
     });
   });
 
@@ -451,11 +527,11 @@ describe('MCP Tool Handlers', () => {
       expect(server.version).toBe('1.0.0');
     });
 
-    it('registers 16 tools (4 core + 5 pulse + 7 relay)', () => {
+    it('registers 21 tools (4 core + 5 tasks + 8 relay + 1 agent + 2 ui + 1 extension)', () => {
       // Purpose: regression guard against accidental tool omissions or additions.
       // This count changes intentionally when new MCP tools are added.
       const server = createDorkOsToolServer(makeMockDeps()) as unknown as MockServer;
-      expect(server.tools).toHaveLength(16);
+      expect(server.tools).toHaveLength(21);
     });
 
     it('registers tools with correct names', () => {
@@ -464,30 +540,35 @@ describe('MCP Tool Handlers', () => {
       expect(toolNames).toContain('ping');
       expect(toolNames).toContain('get_server_info');
       expect(toolNames).toContain('get_session_count');
-      expect(toolNames).toContain('get_current_agent');
-      expect(toolNames).toContain('pulse_list_schedules');
-      expect(toolNames).toContain('pulse_create_schedule');
-      expect(toolNames).toContain('pulse_update_schedule');
-      expect(toolNames).toContain('pulse_delete_schedule');
-      expect(toolNames).toContain('pulse_get_run_history');
+      expect(toolNames).toContain('get_agent');
+      expect(toolNames).toContain('tasks_list');
+      expect(toolNames).toContain('tasks_create');
+      expect(toolNames).toContain('tasks_update');
+      expect(toolNames).toContain('tasks_delete');
+      expect(toolNames).toContain('tasks_get_run_history');
       expect(toolNames).toContain('relay_send');
       expect(toolNames).toContain('relay_inbox');
       expect(toolNames).toContain('relay_list_endpoints');
       expect(toolNames).toContain('relay_register_endpoint');
-      expect(toolNames).toContain('relay_query');
-      expect(toolNames).toContain('relay_dispatch');
+      expect(toolNames).toContain('relay_send_and_wait');
+      expect(toolNames).toContain('relay_send_async');
       expect(toolNames).toContain('relay_unregister_endpoint');
+      expect(toolNames).toContain('relay_notify_user');
+      expect(toolNames).toContain('control_ui');
+      expect(toolNames).toContain('get_ui_state');
     });
   });
 });
 
 /** Create a mock RelayCore with configurable return values */
-function makeRelayCoreMock(overrides: {
-  deliveredTo?: number;
-  messageId?: string;
-  rejected?: Array<{ subject: string; reason: string }>;
-  unregisterResult?: boolean;
-} = {}) {
+function makeRelayCoreMock(
+  overrides: {
+    deliveredTo?: number;
+    messageId?: string;
+    rejected?: Array<{ subject: string; reason: string }>;
+    unregisterResult?: boolean;
+  } = {}
+) {
   return {
     registerEndpoint: vi.fn().mockResolvedValue({ subject: 'relay.inbox.dispatch.test' }),
     unregisterEndpoint: vi.fn().mockResolvedValue(overrides.unregisterResult ?? true),
@@ -501,7 +582,7 @@ function makeRelayCoreMock(overrides: {
 
 describe('createRelayDispatchHandler', () => {
   it('returns error when relay disabled', async () => {
-    // Purpose: verifies requireRelay guard applies to relay_dispatch.
+    // Purpose: verifies requireRelay guard applies to relay_send_async.
     const handler = createRelayDispatchHandler(makeMockDeps());
     const result = await handler({ to_subject: 'relay.agent.x', payload: {}, from: 'me' });
     expect(result.isError).toBe(true);
@@ -537,7 +618,10 @@ describe('createRelayUnregisterEndpointHandler', () => {
   it('returns success when endpoint exists', async () => {
     // Purpose: basic happy path for cleanup tool.
     const relayCore = makeRelayCoreMock({ unregisterResult: true });
-    const handler = createRelayUnregisterEndpointHandler({ ...makeMockDeps(), relayCore } as McpToolDeps);
+    const handler = createRelayUnregisterEndpointHandler({
+      ...makeMockDeps(),
+      relayCore,
+    } as McpToolDeps);
     const result = await handler({ subject: 'relay.inbox.dispatch.abc' });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(true);
@@ -547,7 +631,10 @@ describe('createRelayUnregisterEndpointHandler', () => {
   it('returns ENDPOINT_NOT_FOUND when endpoint does not exist', async () => {
     // Purpose: caller can detect cleanup of non-existent inbox (idempotent cleanup).
     const relayCore = makeRelayCoreMock({ unregisterResult: false });
-    const handler = createRelayUnregisterEndpointHandler({ ...makeMockDeps(), relayCore } as McpToolDeps);
+    const handler = createRelayUnregisterEndpointHandler({
+      ...makeMockDeps(),
+      relayCore,
+    } as McpToolDeps);
     const result = await handler({ subject: 'relay.inbox.dispatch.gone' });
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0].text).code).toBe('ENDPOINT_NOT_FOUND');

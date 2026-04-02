@@ -3,6 +3,7 @@ import { Button } from '@/layers/shared/ui/button';
 import { Plus } from 'lucide-react';
 import type { AdapterManifest } from '@dorkos/shared/relay-schemas';
 import { getCategoryColorClasses } from '../lib/category-colors';
+import { AdapterIcon } from './AdapterIcon';
 
 interface CatalogCardProps {
   manifest: AdapterManifest;
@@ -16,31 +17,24 @@ interface CatalogCardProps {
  */
 export function CatalogCard({ manifest, onAdd }: CatalogCardProps) {
   return (
-    <div className="flex flex-col justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50">
+    <div className="hover:bg-muted/50 flex flex-col justify-between rounded-lg border p-4 transition-colors">
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          {manifest.iconEmoji && (
-            <span className="text-lg" role="img" aria-hidden>
-              {manifest.iconEmoji}
-            </span>
-          )}
+          <AdapterIcon
+            iconId={manifest.iconId}
+            adapterType={manifest.type}
+            size={20}
+            className="text-muted-foreground shrink-0"
+          />
           <span className="text-sm font-medium">{manifest.displayName}</span>
-          <Badge
-            variant="secondary"
-            className={getCategoryColorClasses(manifest.category)}
-          >
+          <Badge variant="secondary" className={getCategoryColorClasses(manifest.category)}>
             {manifest.category}
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground">{manifest.description}</p>
+        <p className="text-muted-foreground text-xs">{manifest.description}</p>
       </div>
       <div className="mt-3">
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full"
-          onClick={onAdd}
-        >
+        <Button variant="outline" size="sm" className="w-full" onClick={onAdd}>
           <Plus className="mr-1 size-3" />
           Add
         </Button>

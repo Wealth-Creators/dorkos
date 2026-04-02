@@ -18,22 +18,34 @@ import type {
   TaskItem,
   ServerConfig,
   ModelOption,
+  SubagentInfo,
   FileListResponse,
   GitStatusResponse,
   GitStatusError,
-  PulseSchedule,
-  PulseRun,
-  CreateScheduleInput,
-  UpdateScheduleRequest,
-  ListRunsQuery,
-  PulsePreset,
+  Task,
+  TaskRun,
+  CreateTaskInput,
+  UpdateTaskRequest,
+  ListTaskRunsQuery,
+  TaskTemplate,
   UploadResult,
   UploadProgress,
 } from './types.js';
-import type { AdapterConfig, AdapterStatus, TraceSpan, DeliveryMetrics, CatalogEntry, RelayConversation, AdapterBinding, CreateBindingRequest, ObservedChat } from './relay-schemas.js';
+import type {
+  AdapterConfig,
+  AdapterStatus,
+  TraceSpan,
+  DeliveryMetrics,
+  CatalogEntry,
+  RelayConversation,
+  AdapterBinding,
+  CreateBindingRequest,
+  ObservedChat,
+} from './relay-schemas.js';
 import type {
   AgentManifest,
   AgentPathEntry,
+  CreateAgentOptions,
   DiscoveryCandidate,
   DenialRecord,
   AgentHealth,
@@ -45,6 +57,9 @@ import type {
   TransportScanOptions,
 } from './mesh-schemas.js';
 import type { RuntimeCapabilities } from './agent-runtime.js';
+import type { TemplateEntry } from './template-catalog.js';
+import type { UiState } from './types.js';
+import type { ListActivityQuery, ListActivityResponse } from './activity-schemas.js';
 
 /** A single entry in the adapter list — config plus live status. */
 export interface AdapterListItem {
@@ -120,6 +135,12 @@ export interface Transport {
   getSession(id: string, cwd?: string): Promise<Session>;
   /** Update session settings (permission mode, model). */
   updateSession(id: string, opts: UpdateSessionRequest, cwd?: string): Promise<Session>;
+  /** Fork a session, creating a new independent copy. */
+  forkSession(
+    id: string,
+    opts?: { upToMessageId?: string; title?: string },
+    cwd?: string
+  ): Promise<Session>;
   /** Fetch message history for a session. */
   getMessages(sessionId: string, cwd?: string): Promise<{ messages: HistoryMessage[] }>;
   /**
@@ -130,7 +151,7 @@ export interface Transport {
    * @param onEvent - Callback invoked for each streamed event
    * @param signal - Optional AbortSignal to cancel the request
    * @param cwd - Optional working directory override
-   * @param options - Optional additional parameters (clientMessageId for server-echo ID)
+   * @param options - Optional additional parameters (clientMessageId for server-echo ID, uiState for agent awareness)
    */
   sendMessage(
     sessionId: string,
@@ -138,7 +159,7 @@ export interface Transport {
     onEvent: (event: StreamEvent) => void,
     signal?: AbortSignal,
     cwd?: string,
-    options?: { clientMessageId?: string }
+    options?: { clientMessageId?: string; uiState?: UiState }
   ): Promise<void>;
   /** Approve a pending tool call that requires user confirmation. */
   approveTool(sessionId: string, toolCallId: string): Promise<{ ok: boolean }>;
@@ -150,6 +171,21 @@ export interface Transport {
     toolCallId: string,
     answers: Record<string, string>
   ): Promise<{ ok: boolean }>;
+  /** Submit a response to an MCP elicitation prompt. */
+  submitElicitation(
+    sessionId: string,
+    interactionId: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, unknown>
+  ): Promise<{ ok: boolean }>;
+  /**
+   * Stop a running background task.
+   *
+   * @param sessionId - The parent session containing the task
+   * @param taskId - The background task to stop
+   * @returns Result indicating success or failure
+   */
+  stopTask(sessionId: string, taskId: string): Promise<{ success: boolean; taskId: string }>;
   /** Get the current task list for a session. */
   getTasks(sessionId: string, cwd?: string): Promise<{ tasks: TaskItem[] }>;
   /** Browse server filesystem directories for working directory selection. */
@@ -170,37 +206,54 @@ export interface Transport {
   updateConfig(patch: Record<string, unknown>): Promise<void>;
   /** List available Claude models (dynamic from SDK, with defaults). */
   getModels(): Promise<ModelOption[]>;
+  /** List available subagents reported by the SDK. */
+  getSubagents(): Promise<SubagentInfo[]>;
   /**
    * Get capabilities for all registered runtimes.
    *
    * @returns A map of runtime type → capabilities, plus the default runtime type.
    */
-  getCapabilities(): Promise<{ capabilities: Record<string, RuntimeCapabilities>; defaultRuntime: string }>;
+  getCapabilities(): Promise<{
+    capabilities: Record<string, RuntimeCapabilities>;
+    defaultRuntime: string;
+  }>;
   /** Start the ngrok tunnel and return the public URL. */
   startTunnel(): Promise<{ url: string }>;
   /** Stop the ngrok tunnel. */
   stopTunnel(): Promise<void>;
+  /** Verify a 6-digit passcode for remote tunnel access. */
+  verifyTunnelPasscode(
+    passcode: string
+  ): Promise<{ ok: boolean; error?: string; retryAfter?: number }>;
+  /** Check if the current session is authenticated for tunnel access. */
+  checkTunnelSession(): Promise<{ authenticated: boolean; passcodeRequired: boolean }>;
+  /**
+   * Set, update, or disable the tunnel passcode (localhost-only endpoint).
+   *
+   * @param opts - Pass `{ passcode, enabled: true }` to set a 6-digit PIN, or `{ enabled: false }` to disable.
+   */
+  setTunnelPasscode(opts: { passcode?: string; enabled: boolean }): Promise<{ ok: boolean }>;
 
-  // --- Pulse Scheduler ---
+  // --- Tasks ---
 
-  /** List all Pulse schedules. */
-  listSchedules(): Promise<PulseSchedule[]>;
-  /** Create a new Pulse schedule. */
-  createSchedule(opts: CreateScheduleInput): Promise<PulseSchedule>;
-  /** Update an existing Pulse schedule. */
-  updateSchedule(id: string, opts: UpdateScheduleRequest): Promise<PulseSchedule>;
-  /** Delete a Pulse schedule. */
-  deleteSchedule(id: string): Promise<{ success: boolean }>;
-  /** Trigger a manual run of a schedule. */
-  triggerSchedule(id: string): Promise<{ runId: string }>;
-  /** List Pulse runs with optional filters. */
-  listRuns(opts?: Partial<ListRunsQuery>): Promise<PulseRun[]>;
-  /** Get a specific Pulse run. */
-  getRun(id: string): Promise<PulseRun>;
-  /** Cancel a running Pulse job. */
-  cancelRun(id: string): Promise<{ success: boolean }>;
-  /** Fetch available Pulse schedule presets for onboarding. */
-  getPulsePresets(): Promise<PulsePreset[]>;
+  /** List all Tasks. */
+  listTasks(): Promise<Task[]>;
+  /** Create a new Task. */
+  createTask(opts: CreateTaskInput): Promise<Task>;
+  /** Update an existing Task. */
+  updateTask(id: string, opts: UpdateTaskRequest): Promise<Task>;
+  /** Delete a Task. */
+  deleteTask(id: string): Promise<{ success: boolean }>;
+  /** Trigger a manual run of a Task. */
+  triggerTask(id: string): Promise<{ runId: string }>;
+  /** List Task runs with optional filters. */
+  listTaskRuns(opts?: Partial<ListTaskRunsQuery>): Promise<TaskRun[]>;
+  /** Get a specific Task run. */
+  getTaskRun(id: string): Promise<TaskRun>;
+  /** Cancel a running Task. */
+  cancelTaskRun(id: string): Promise<{ success: boolean }>;
+  /** Fetch available Task templates for onboarding. */
+  getTaskTemplates(): Promise<TaskTemplate[]>;
 
   // --- Relay Message Bus ---
 
@@ -265,7 +318,11 @@ export interface Transport {
   /** Retrieve the adapter catalog with available types and configured instances. */
   getAdapterCatalog(): Promise<CatalogEntry[]>;
   /** Add a new relay adapter instance. */
-  addRelayAdapter(type: string, id: string, config: Record<string, unknown>): Promise<{ ok: boolean }>;
+  addRelayAdapter(
+    type: string,
+    id: string,
+    config: Record<string, unknown>
+  ): Promise<{ ok: boolean }>;
   /** Remove a relay adapter by ID. */
   removeRelayAdapter(id: string): Promise<{ ok: boolean }>;
   /** Update the config for an existing relay adapter. */
@@ -273,7 +330,7 @@ export interface Transport {
   /** Test connectivity for an adapter type and config without registering it. */
   testRelayAdapterConnection(
     type: string,
-    config: Record<string, unknown>,
+    config: Record<string, unknown>
   ): Promise<{ ok: boolean; error?: string; botUsername?: string }>;
   /** Fetch adapter lifecycle events by adapter instance ID. */
   getAdapterEvents(adapterId: string, limit?: number): Promise<{ events: AdapterEvent[] }>;
@@ -291,7 +348,18 @@ export interface Transport {
   /** Update an existing binding's mutable fields. */
   updateBinding(
     id: string,
-    updates: Partial<Pick<AdapterBinding, 'sessionStrategy' | 'label' | 'chatId' | 'channelType' | 'canInitiate' | 'canReply' | 'canReceive'>>,
+    updates: Partial<
+      Pick<
+        AdapterBinding,
+        | 'sessionStrategy'
+        | 'label'
+        | 'chatId'
+        | 'channelType'
+        | 'canInitiate'
+        | 'canReply'
+        | 'canReceive'
+      >
+    >
   ): Promise<AdapterBinding>;
 
   // --- Mesh Agent Discovery ---
@@ -299,13 +367,23 @@ export interface Transport {
   /** List registered agents with their project paths (lightweight, for onboarding). */
   listMeshAgentPaths(): Promise<{ agents: AgentPathEntry[] }>;
   /** Discover agent candidates by scanning filesystem roots. */
-  discoverMeshAgents(roots: string[], maxDepth?: number): Promise<{ candidates: DiscoveryCandidate[] }>;
+  discoverMeshAgents(
+    roots: string[],
+    maxDepth?: number
+  ): Promise<{ candidates: DiscoveryCandidate[] }>;
   /** List registered mesh agents with optional filters. */
-  listMeshAgents(filters?: { runtime?: string; capability?: string }): Promise<{ agents: AgentManifest[] }>;
+  listMeshAgents(filters?: {
+    runtime?: string;
+    capability?: string;
+  }): Promise<{ agents: AgentManifest[] }>;
   /** Get a single mesh agent by ID. */
   getMeshAgent(id: string): Promise<AgentManifest>;
   /** Register a discovered agent into the mesh registry. */
-  registerMeshAgent(path: string, overrides?: Partial<AgentManifest>, approver?: string): Promise<AgentManifest>;
+  registerMeshAgent(
+    path: string,
+    overrides?: Partial<AgentManifest>,
+    approver?: string
+  ): Promise<AgentManifest>;
   /** Update an existing mesh agent's metadata. */
   updateMeshAgent(id: string, updates: Partial<AgentManifest>): Promise<AgentManifest>;
   /** Unregister a mesh agent by ID. */
@@ -341,10 +419,17 @@ export interface Transport {
   getAgentByPath(path: string): Promise<AgentManifest | null>;
   /** Batch resolve agents for multiple paths. Returns a map of path -> manifest|null. */
   resolveAgents(paths: string[]): Promise<Record<string, AgentManifest | null>>;
-  /** Create a new agent at the given path. Returns the created manifest. */
-  createAgent(path: string, name?: string, description?: string, runtime?: string): Promise<AgentManifest>;
+  /** Initialize an agent at the given path (write config to existing directory). Returns the created manifest. */
+  initAgent(
+    path: string,
+    name?: string,
+    description?: string,
+    runtime?: string
+  ): Promise<AgentManifest>;
   /** Update an agent's fields by path. Returns the updated manifest. */
   updateAgentByPath(path: string, updates: Partial<AgentManifest>): Promise<AgentManifest>;
+  /** Create a new agent: mkdir + scaffold files + register. Returns the created manifest. */
+  createAgent(opts: CreateAgentOptions): Promise<AgentManifest>;
 
   // --- Discovery ---
 
@@ -358,7 +443,7 @@ export interface Transport {
   scan(
     options: TransportScanOptions,
     onEvent: (event: TransportScanEvent) => void,
-    signal?: AbortSignal,
+    signal?: AbortSignal
   ): Promise<void>;
 
   // --- File Uploads ---
@@ -380,13 +465,36 @@ export interface Transport {
     onProgress?: (progress: UploadProgress) => void
   ): Promise<UploadResult[]>;
 
+  // --- Directory Operations ---
+
+  /** Create a new directory within the boundary. Used by DirectoryPicker "New Folder". */
+  createDirectory(parentPath: string, folderName: string): Promise<{ path: string }>;
+
   // --- Admin Operations ---
 
   /** Read MCP server entries from `.mcp.json` in the given project directory. */
   getMcpConfig(projectPath: string): Promise<McpConfigResponse>;
 
+  /** Reload plugins for a session and return refreshed status. */
+  reloadPlugins(sessionId: string, cwd?: string): Promise<import('./types.js').ReloadPluginsResult>;
+
   /** Initiate a factory reset: delete all DorkOS data and restart the server. */
   resetAllData(confirm: string): Promise<{ message: string }>;
   /** Initiate a graceful server restart. */
   restartServer(): Promise<{ message: string }>;
+
+  // --- Activity Feed ---
+
+  /** List activity events with optional filters and cursor-based pagination. */
+  listActivityEvents(query?: Partial<ListActivityQuery>): Promise<ListActivityResponse>;
+
+  // --- Templates ---
+
+  /** Fetch the merged template catalog (builtin + user templates). */
+  getTemplates(): Promise<TemplateEntry[]>;
+
+  // --- Default Agent ---
+
+  /** Set the default agent by name. Updates config.agents.defaultAgent. */
+  setDefaultAgent(agentName: string): Promise<void>;
 }

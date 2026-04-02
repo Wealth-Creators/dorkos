@@ -2,74 +2,109 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
+import type { ComponentType } from 'react';
 
-// Mock all dialog components as simple markers
-vi.mock('@/layers/features/settings', () => ({
-  SettingsDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="settings-dialog">SettingsDialog</div> : null,
-}));
+// --- Test wrapper components that simulate the real wrappers ---
 
-vi.mock('@/layers/shared/ui', () => ({
-  ResponsiveDialog: ({
-    open,
-    children,
-  }: {
-    open: boolean;
-    children: React.ReactNode;
-  }) => (open ? <div>{children}</div> : null),
-  ResponsiveDialogContent: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  ResponsiveDialogHeader: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  ResponsiveDialogTitle: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  ResponsiveDialogDescription: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
-  ),
-  ResponsiveDialogFullscreenToggle: () => null,
-  DirectoryPicker: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="directory-picker">DirectoryPicker</div> : null,
-}));
+function MockSettingsWrapper({ open }: { open: boolean }) {
+  return open ? <div data-testid="settings-dialog">SettingsDialog</div> : null;
+}
 
-vi.mock('@/layers/features/pulse', () => ({
-  PulsePanel: () => <div data-testid="pulse-panel">PulsePanel</div>,
-}));
+function MockDirectoryPickerWrapper({ open }: { open: boolean }) {
+  return open ? <div data-testid="directory-picker">DirectoryPicker</div> : null;
+}
 
-vi.mock('@/layers/features/relay', () => ({
-  RelayPanel: () => <div data-testid="relay-panel">RelayPanel</div>,
-}));
+function MockTasksWrapper({ open }: { open: boolean }) {
+  return open ? <div data-testid="tasks-panel">TasksPanel</div> : null;
+}
 
-vi.mock('@/layers/features/mesh', () => ({
-  MeshPanel: () => <div data-testid="mesh-panel">MeshPanel</div>,
-}));
+function MockRelayWrapper({ open }: { open: boolean }) {
+  return open ? <div data-testid="relay-panel">RelayPanel</div> : null;
+}
 
-vi.mock('@/layers/features/agent-settings', () => ({
-  AgentDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="agent-dialog">AgentDialog</div> : null,
-}));
+function MockMeshWrapper({ open }: { open: boolean }) {
+  return open ? <div data-testid="mesh-panel">MeshPanel</div> : null;
+}
 
+// AgentDialog conditionally renders based on selectedCwd (handled inside the wrapper)
+let mockSelectedCwd: string | null = '/test/path';
+
+function MockAgentWrapper({ open }: { open: boolean }) {
+  if (!mockSelectedCwd) return null;
+  return open ? <div data-testid="agent-dialog">AgentDialog</div> : null;
+}
+
+// --- Dialog contributions matching the real DIALOG_CONTRIBUTIONS shape ---
+
+const mockDialogContributions = [
+  {
+    id: 'settings',
+    component: MockSettingsWrapper as ComponentType<{
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+    }>,
+    openStateKey: 'settingsOpen',
+    priority: 1,
+  },
+  {
+    id: 'directory-picker',
+    component: MockDirectoryPickerWrapper as ComponentType<{
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+    }>,
+    openStateKey: 'pickerOpen',
+    priority: 2,
+  },
+  {
+    id: 'tasks',
+    component: MockTasksWrapper as ComponentType<{
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+    }>,
+    openStateKey: 'tasksOpen',
+    priority: 3,
+  },
+  {
+    id: 'relay',
+    component: MockRelayWrapper as ComponentType<{
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+    }>,
+    openStateKey: 'relayOpen',
+    priority: 4,
+  },
+  {
+    id: 'mesh',
+    component: MockMeshWrapper as ComponentType<{
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+    }>,
+    openStateKey: 'meshOpen',
+    priority: 5,
+  },
+  {
+    id: 'agent',
+    component: MockAgentWrapper as ComponentType<{
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+    }>,
+    openStateKey: 'agentDialogOpen',
+    priority: 6,
+  },
+];
+
+// Mock onboarding (still hardcoded in DialogHost)
 vi.mock('@/layers/features/onboarding', () => ({
   OnboardingFlow: () => <div data-testid="onboarding-flow">OnboardingFlow</div>,
 }));
 
-// Mock entity hooks
-vi.mock('@/layers/entities/session', () => ({
-  useDirectoryState: vi.fn(() => ['/test/path', vi.fn()]),
-}));
+// --- Mock store state ---
 
-vi.mock('@/layers/entities/agent', () => ({
-  useResolvedAgents: vi.fn(() => ({ data: undefined })),
-}));
-
-// Mock the Zustand store
-const mockStoreState = {
+const mockStoreState: Record<string, unknown> = {
   settingsOpen: false,
   setSettingsOpen: vi.fn(),
-  pulseOpen: false,
-  setPulseOpen: vi.fn(),
+  tasksOpen: false,
+  setTasksOpen: vi.fn(),
   relayOpen: false,
   setRelayOpen: vi.fn(),
   meshOpen: false,
@@ -80,11 +115,14 @@ const mockStoreState = {
   setAgentDialogOpen: vi.fn(),
   onboardingStep: null as number | null,
   setOnboardingStep: vi.fn(),
-  recentCwds: [] as Array<{ path: string; accessedAt: string }>,
 };
 
 vi.mock('@/layers/shared/model', () => ({
-  useAppStore: vi.fn(() => mockStoreState),
+  useAppStore: vi.fn((selector?: (state: Record<string, unknown>) => unknown) => {
+    if (typeof selector === 'function') return selector(mockStoreState);
+    return mockStoreState;
+  }),
+  useSlotContributions: vi.fn(() => mockDialogContributions),
 }));
 
 import { DialogHost } from '../ui/DialogHost';
@@ -96,13 +134,13 @@ afterEach(() => {
 beforeEach(() => {
   // Reset all store values to closed/defaults
   mockStoreState.settingsOpen = false;
-  mockStoreState.pulseOpen = false;
+  mockStoreState.tasksOpen = false;
   mockStoreState.relayOpen = false;
   mockStoreState.meshOpen = false;
   mockStoreState.pickerOpen = false;
   mockStoreState.agentDialogOpen = false;
   mockStoreState.onboardingStep = null;
-  mockStoreState.recentCwds = [];
+  mockSelectedCwd = '/test/path';
 });
 
 describe('DialogHost', () => {
@@ -111,7 +149,7 @@ describe('DialogHost', () => {
 
     expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
     expect(screen.queryByTestId('directory-picker')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('pulse-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tasks-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('relay-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('mesh-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('agent-dialog')).not.toBeInTheDocument();
@@ -134,12 +172,12 @@ describe('DialogHost', () => {
     expect(screen.getByTestId('directory-picker')).toBeInTheDocument();
   });
 
-  it('renders PulsePanel when pulseOpen is true', () => {
-    mockStoreState.pulseOpen = true;
+  it('renders TasksPanel when tasksOpen is true', () => {
+    mockStoreState.tasksOpen = true;
 
     render(<DialogHost />);
 
-    expect(screen.getByTestId('pulse-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('tasks-panel')).toBeInTheDocument();
   });
 
   it('renders RelayPanel when relayOpen is true', () => {
@@ -184,27 +222,22 @@ describe('DialogHost', () => {
 
   it('renders multiple dialogs simultaneously', () => {
     mockStoreState.settingsOpen = true;
-    mockStoreState.pulseOpen = true;
+    mockStoreState.tasksOpen = true;
     mockStoreState.meshOpen = true;
 
     render(<DialogHost />);
 
     expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
-    expect(screen.getByTestId('pulse-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('tasks-panel')).toBeInTheDocument();
     expect(screen.getByTestId('mesh-panel')).toBeInTheDocument();
   });
 
-  it('does not render AgentDialog when selectedCwd is null', async () => {
-    const { useDirectoryState } = await import('@/layers/entities/session');
-    vi.mocked(useDirectoryState).mockReturnValue([null as unknown as string, vi.fn()]);
-
+  it('does not render AgentDialog when selectedCwd is null', () => {
+    mockSelectedCwd = null;
     mockStoreState.agentDialogOpen = true;
 
     render(<DialogHost />);
 
     expect(screen.queryByTestId('agent-dialog')).not.toBeInTheDocument();
-
-    // Restore default mock
-    vi.mocked(useDirectoryState).mockReturnValue(['/test/path', vi.fn()]);
   });
 });

@@ -3,9 +3,24 @@ import type { PlaygroundSection } from '../playground-registry';
 /**
  * Feature component sections from FeaturesPage.
  *
- * Sources: RelayShowcases, MeshShowcases, PulseShowcases, OnboardingShowcases.
+ * Sources: AgentIdentityShowcases, RelayShowcases, MeshShowcases, TasksShowcases.
  */
 export const FEATURES_SECTIONS: PlaygroundSection[] = [
+  // AgentIdentityShowcases
+  {
+    id: 'agentavatar',
+    title: 'AgentAvatar',
+    page: 'features',
+    category: 'Agent',
+    keywords: ['agent', 'avatar', 'emoji', 'color', 'identity', 'health', 'status'],
+  },
+  {
+    id: 'agentidentity',
+    title: 'AgentIdentity',
+    page: 'features',
+    category: 'Agent',
+    keywords: ['agent', 'identity', 'card', 'name', 'avatar', 'detail', 'profile'],
+  },
   // RelayShowcases
   {
     id: 'catalogcard',
@@ -107,27 +122,12 @@ export const FEATURES_SECTIONS: PlaygroundSection[] = [
     category: 'Mesh',
     keywords: ['mesh', 'empty', 'state', 'topology', 'preview', 'agent'],
   },
-  // PulseShowcases
+  // TasksShowcases
   {
-    id: 'presetcard',
-    title: 'PresetCard',
+    id: 'tasktemplatecard',
+    title: 'TaskTemplateCard',
     page: 'features',
-    category: 'Pulse',
-    keywords: ['preset', 'card', 'schedule', 'toggle', 'selectable', 'cron', 'pulse'],
-  },
-  // OnboardingShowcases
-  {
-    id: 'welcomestep',
-    title: 'WelcomeStep',
-    page: 'features',
-    category: 'Onboarding',
-    keywords: ['welcome', 'step', 'onboarding', 'get started', 'skip', 'animation'],
-  },
-  {
-    id: 'discoverycelebration',
-    title: 'DiscoveryCelebration',
-    page: 'features',
-    category: 'Onboarding',
-    keywords: ['discovery', 'celebration', 'candidate', 'animation', 'beat', 'onboarding'],
+    category: 'Tasks',
+    keywords: ['preset', 'card', 'schedule', 'toggle', 'selectable', 'cron', 'tasks'],
   },
 ];

@@ -1,23 +1,25 @@
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Input } from '@/layers/shared/ui/input';
-import { Switch } from '@/layers/shared/ui/switch';
-import { Textarea } from '@/layers/shared/ui/textarea';
 import {
+  Input,
+  Switch,
+  Textarea,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/layers/shared/ui/select';
-import {
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
-} from '@/layers/shared/ui/collapsible';
-import { Field, FieldContent, FieldLabel, FieldDescription, FieldError } from '@/layers/shared/ui/field';
+  Field,
+  FieldContent,
+  FieldLabel,
+  FieldDescription,
+  FieldError,
+  PasswordInput,
+} from '@/layers/shared/ui';
 import { FieldCard, FieldCardContent } from '@/layers/shared/ui/field-card';
-import { PasswordInput } from '@/layers/shared/ui/password-input';
 import { ChevronDown, HelpCircle } from 'lucide-react';
 import { cn } from '@/layers/shared/lib';
 import { MarkdownContent } from '@/layers/shared/ui/markdown-content';
@@ -30,6 +32,8 @@ interface ConfigFieldInputProps {
   value: unknown;
   /** Called when the field value changes; receives the field key and new value. */
   onChange: (key: string, value: unknown) => void;
+  /** Called when the field loses focus — used by TanStack Form for touched tracking. */
+  onBlur?: () => void;
   /** Validation error message to display below the input. */
   error?: string;
   /** All current form values — used for `showWhen` conditional visibility evaluation. */
@@ -88,7 +92,7 @@ export function ConfigFieldInput({
               htmlFor={fieldId}
               className={cn(
                 'text-sm font-medium',
-                field.required && 'after:ml-0.5 after:text-destructive after:content-["*"]',
+                field.required && 'after:text-destructive after:ml-0.5 after:content-["*"]'
               )}
             >
               {field.label}
@@ -105,13 +109,13 @@ export function ConfigFieldInput({
         </Field>
         {field.helpMarkdown && (
           <Collapsible>
-            <CollapsibleTrigger className="mt-1 flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+            <CollapsibleTrigger className="text-muted-foreground hover:text-foreground mt-1 flex items-center gap-1 text-xs transition-colors">
               <HelpCircle className="size-3" />
               Where do I find this?
               <ChevronDown className="size-3 transition-transform [[data-state=open]_&]:rotate-180" />
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <div className="mt-2 rounded-md border bg-muted/50 p-3">
+              <div className="bg-muted/50 mt-2 rounded-md border p-3">
                 <MarkdownContent content={field.helpMarkdown} className="text-xs" />
               </div>
             </CollapsibleContent>
@@ -151,12 +155,13 @@ export function ConfigFieldInput({
 
       case 'password': {
         if (isSentinel) {
-          // Sentinel mode: show a locked placeholder until the user focuses to replace.
+          // Sentinel mode: locked placeholder until the user focuses to replace.
+          // showPassword={false} keeps the value hidden; onFocus clears to start fresh.
           return (
-            <Input
+            <PasswordInput
               id={fieldId}
-              type="password"
               value={stringValue}
+              showPassword={false}
               onChange={(e) => {
                 onChange(field.key, e.target.value.trim());
                 if (patternError) setPatternError('');
@@ -211,13 +216,13 @@ export function ConfigFieldInput({
                   aria-checked={stringValue === opt.value}
                   onClick={() => onChange(field.key, opt.value)}
                   className={cn(
-                    'flex flex-col items-start rounded-md border p-3 text-left transition hover:bg-accent/50',
-                    stringValue === opt.value && 'border-primary ring-1 ring-primary bg-accent/30',
+                    'hover:bg-accent/50 flex flex-col items-start rounded-md border p-3 text-left transition',
+                    stringValue === opt.value && 'border-primary ring-primary bg-accent/30 ring-1'
                   )}
                 >
                   <span className="text-sm font-medium">{opt.label}</span>
                   {opt.description && (
-                    <span className="mt-1 text-xs text-muted-foreground">{opt.description}</span>
+                    <span className="text-muted-foreground mt-1 text-xs">{opt.description}</span>
                   )}
                 </button>
               ))}
@@ -261,7 +266,7 @@ export function ConfigFieldInput({
       <FieldLabel
         htmlFor={fieldId}
         className={cn(
-          field.required && !isSentinel && 'after:ml-0.5 after:text-destructive after:content-["*"]',
+          field.required && !isSentinel && 'after:text-destructive after:ml-0.5 after:content-["*"]'
         )}
       >
         {field.label}
@@ -272,13 +277,13 @@ export function ConfigFieldInput({
       )}
       {field.helpMarkdown && (
         <Collapsible>
-          <CollapsibleTrigger className="mt-1 flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+          <CollapsibleTrigger className="text-muted-foreground hover:text-foreground mt-1 flex items-center gap-1 text-xs transition-colors">
             <HelpCircle className="size-3" />
             Where do I find this?
             <ChevronDown className="size-3 transition-transform [[data-state=open]_&]:rotate-180" />
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="mt-2 rounded-md border bg-muted/50 p-3">
+            <div className="bg-muted/50 mt-2 rounded-md border p-3">
               <MarkdownContent content={field.helpMarkdown} className="text-xs" />
             </div>
           </CollapsibleContent>
@@ -304,12 +309,13 @@ export function ConfigFieldInput({
 interface ConfigFieldGroupProps {
   /** All field descriptors to render, potentially spanning multiple sections. */
   fields: ConfigField[];
-  /** Current form values keyed by field key. */
-  values: Record<string, unknown>;
-  /** Called when any field value changes. */
-  onChange: (key: string, value: unknown) => void;
-  /** Validation errors keyed by field key. */
-  errors: Record<string, string>;
+  /** All current form values — used to evaluate section visibility via `showWhen`. */
+  allValues: Record<string, unknown>;
+  /**
+   * Render prop called for each visible field.
+   * Receives the field descriptor; caller is responsible for rendering the input.
+   */
+  renderField: (field: ConfigField) => React.ReactNode;
 }
 
 /** Check whether a field is visible given current form values. */
@@ -321,13 +327,9 @@ function isFieldVisible(field: ConfigField, allValues: Record<string, unknown>):
 /**
  * Renders a list of `ConfigField` descriptors grouped by their `section` property.
  * Fields without a section are rendered first under no heading.
+ * Field rendering is delegated to the `renderField` prop.
  */
-export function ConfigFieldGroup({
-  fields,
-  values,
-  onChange,
-  errors,
-}: ConfigFieldGroupProps) {
+export function ConfigFieldGroup({ fields, allValues, renderField }: ConfigFieldGroupProps) {
   // Preserve insertion-order grouping by section name.
   const sections = new Map<string | undefined, ConfigField[]>();
   for (const field of fields) {
@@ -342,26 +344,15 @@ export function ConfigFieldGroup({
     <div className="space-y-6">
       {Array.from(sections.entries()).map(([section, sectionFields]) => {
         // Filter to visible fields to avoid empty separator gaps from showWhen nulls.
-        const visibleFields = sectionFields.filter((f) => isFieldVisible(f, values));
-        if (visibleFields.length === 0) return null;
+        const visibleSectionFields = sectionFields.filter((f) => isFieldVisible(f, allValues));
+        if (visibleSectionFields.length === 0) return null;
 
         return (
           <div key={section ?? '__default'} className="space-y-3">
-            {section && (
-              <h4 className="text-sm font-semibold">{section}</h4>
-            )}
+            {section && <h4 className="text-sm font-semibold">{section}</h4>}
             <FieldCard>
               <FieldCardContent>
-                {visibleFields.map((field) => (
-                  <ConfigFieldInput
-                    key={field.key}
-                    field={field}
-                    value={values[field.key]}
-                    onChange={onChange}
-                    error={errors[field.key]}
-                    allValues={values}
-                  />
-                ))}
+                {visibleSectionFields.map((field) => renderField(field))}
               </FieldCardContent>
             </FieldCard>
           </div>

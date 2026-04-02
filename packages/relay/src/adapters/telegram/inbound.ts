@@ -12,14 +12,12 @@ import type { Context as GrammyContext } from 'grammy';
 import type { StandardPayload } from '@dorkos/shared/relay-schemas';
 import type { RelayPublisher, AdapterInboundCallbacks, RelayLogger } from '../../types.js';
 import { noopLogger } from '../../types.js';
+import { TelegramThreadIdCodec } from '../../lib/thread-id.js';
 
 // === Constants ===
 
 /** Subject prefix for all Telegram adapter subjects. */
 export const SUBJECT_PREFIX = 'relay.human.telegram';
-
-/** Subject prefix segment added for group chats. */
-const GROUP_SEGMENT = 'group';
 
 /** Max length for a single Telegram message (Telegram's hard limit is 4096). */
 export const MAX_MESSAGE_LENGTH = 4096;
@@ -45,14 +43,16 @@ const TELEGRAM_FORMATTING_RULES = [
 /**
  * Build the Relay subject for a given Telegram chat.
  *
+ * @param codec - The thread ID codec to use for encoding
  * @param chatId - The Telegram chat ID (numeric, may be negative for groups)
  * @param isGroup - Whether the chat is a group or supergroup
  */
-export function buildSubject(chatId: number, isGroup: boolean): string {
-  if (isGroup) {
-    return `${SUBJECT_PREFIX}.${GROUP_SEGMENT}.${chatId}`;
-  }
-  return `${SUBJECT_PREFIX}.${chatId}`;
+export function buildSubject(
+  codec: TelegramThreadIdCodec,
+  chatId: number,
+  isGroup: boolean
+): string {
+  return codec.encode(String(chatId), isGroup ? 'group' : 'dm');
 }
 
 /**
@@ -60,24 +60,13 @@ export function buildSubject(chatId: number, isGroup: boolean): string {
  *
  * Returns null if the subject does not match the expected pattern.
  *
+ * @param codec - The thread ID codec to use for decoding
  * @param subject - A Relay subject under the telegram prefix
  */
-export function extractChatId(subject: string): number | null {
-  if (!subject.startsWith(SUBJECT_PREFIX)) return null;
-
-  const remainder = subject.slice(SUBJECT_PREFIX.length + 1);
-  if (!remainder) return null;
-
-  // Group format: group.{chatId}
-  if (remainder.startsWith(`${GROUP_SEGMENT}.`)) {
-    const idStr = remainder.slice(GROUP_SEGMENT.length + 1);
-    if (!idStr) return null; // Guard: Number("") === 0, which is invalid
-    const id = Number(idStr);
-    return Number.isInteger(id) ? id : null;
-  }
-
-  // DM format: {chatId}
-  const id = Number(remainder);
+export function extractChatId(codec: TelegramThreadIdCodec, subject: string): number | null {
+  const decoded = codec.decode(subject);
+  if (!decoded) return null;
+  const id = Number(decoded.platformId);
   return Number.isInteger(id) ? id : null;
 }
 
@@ -121,7 +110,10 @@ export async function handleInboundMessage(
   relay: RelayPublisher,
   callbacks: AdapterInboundCallbacks,
   logger: RelayLogger = noopLogger,
+  codec?: TelegramThreadIdCodec
 ): Promise<void> {
+  const resolvedCodec = codec ?? new TelegramThreadIdCodec();
+
   if (!ctx.message) {
     logger.debug('inbound skipped: no message in context');
     return;
@@ -134,7 +126,7 @@ export async function handleInboundMessage(
   }
 
   const isGroup = isGroupChat(chat.type);
-  const subject = buildSubject(chat.id, isGroup);
+  const subject = buildSubject(resolvedCodec, chat.id, isGroup);
 
   const rawText = message.text ?? message.caption ?? '';
   if (!rawText) {
@@ -146,9 +138,7 @@ export async function handleInboundMessage(
   const text = rawText.slice(0, MAX_CONTENT_LENGTH);
 
   const senderName = from
-    ? [from.first_name, from.last_name].filter(Boolean).join(' ') ||
-      from.username ||
-      UNKNOWN_SENDER
+    ? [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || UNKNOWN_SENDER
     : UNKNOWN_SENDER;
 
   const payload: StandardPayload = {
@@ -174,7 +164,7 @@ export async function handleInboundMessage(
 
   try {
     const result = await relay.publish(subject, payload, {
-      from: `${SUBJECT_PREFIX}.bot`,
+      from: `${resolvedCodec.prefix}.bot`,
       replyTo: subject,
     });
 
@@ -187,9 +177,15 @@ export async function handleInboundMessage(
     }
 
     callbacks.trackInbound();
-    logger.debug(`inbound from ${senderName} in chat ${chat.id}: "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}" (${text.length} chars) → ${subject}`);
+    callbacks.onPublished?.(chat.id);
+    logger.debug(
+      `inbound from ${senderName} in chat ${chat.id}: "${text.slice(0, 80)}${text.length > 80 ? '…' : ''}" (${text.length} chars) → ${subject}`
+    );
   } catch (err) {
     callbacks.recordError(err);
-    logger.warn(`inbound publish failed for chat ${chat.id}:`, err instanceof Error ? err.message : String(err));
+    logger.warn(
+      `inbound publish failed for chat ${chat.id}:`,
+      err instanceof Error ? err.message : String(err)
+    );
   }
 }

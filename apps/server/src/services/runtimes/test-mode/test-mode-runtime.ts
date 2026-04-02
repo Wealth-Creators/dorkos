@@ -39,9 +39,17 @@ export class TestModeRuntime implements AgentRuntime {
     return this._sessions.has(sessionId);
   }
 
+  async forkSession(): Promise<Session | null> {
+    return null;
+  }
+
+  async reloadPlugins(): Promise<null> {
+    return null;
+  }
+
   updateSession(
     sessionId: string,
-    opts: { permissionMode?: PermissionMode; model?: string },
+    opts: { permissionMode?: PermissionMode; model?: string }
   ): boolean {
     const existing = this._sessions.get(sessionId);
     if (!existing) return false;
@@ -52,7 +60,7 @@ export class TestModeRuntime implements AgentRuntime {
   async *sendMessage(
     sessionId: string,
     content: string,
-    _opts?: MessageOpts,
+    _opts?: MessageOpts
   ): AsyncGenerator<StreamEvent> {
     const scenario = scenarioStore.getScenario(sessionId);
     yield* scenario(content);
@@ -66,7 +74,7 @@ export class TestModeRuntime implements AgentRuntime {
     _sessionId: string,
     _projectDir: string,
     callback: (event: StreamEvent) => void,
-    clientId?: string,
+    clientId?: string
   ): () => void {
     if (!this._relay || !clientId) return () => {};
     // Subscribe to relay.human.console.{clientId} and forward events to the callback.
@@ -111,7 +119,7 @@ export class TestModeRuntime implements AgentRuntime {
   async readFromOffset(
     _projectDir: string,
     _id: string,
-    _offset: number,
+    _offset: number
   ): Promise<{ content: string; newOffset: number }> {
     return { content: '', newOffset: 0 };
   }
@@ -146,6 +154,14 @@ export class TestModeRuntime implements AgentRuntime {
     return [];
   }
 
+  async getSupportedSubagents(): Promise<import('@dorkos/shared/types').SubagentInfo[]> {
+    return [];
+  }
+
+  async renameSession(): Promise<void> {
+    // No-op in test mode
+  }
+
   getInternalSessionId(_id: string): string | undefined {
     return undefined;
   }
@@ -165,11 +181,20 @@ export class TestModeRuntime implements AgentRuntime {
     return false;
   }
 
-  submitAnswers(
+  submitAnswers(_id: string, _toolCallId: string, _answers: Record<string, string>): boolean {
+    return false;
+  }
+
+  submitElicitation(
     _id: string,
-    _toolCallId: string,
-    _answers: Record<string, string>,
+    _interactionId: string,
+    _action: 'accept' | 'decline' | 'cancel',
+    _content?: Record<string, unknown>
   ): boolean {
+    return false;
+  }
+
+  async stopTask(_sessionId: string, _taskId: string): Promise<boolean> {
     return false;
   }
 }

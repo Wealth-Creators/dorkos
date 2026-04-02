@@ -1,10 +1,12 @@
 import type { TranscriptReader } from '../transcript-reader.js';
-import type { PulseStore } from '../../../pulse/pulse-store.js';
+import type { TaskStore } from '../../../tasks/task-store.js';
 import type { RelayCore } from '@dorkos/relay';
 import type { AdapterManager } from '../../../relay/adapter-manager.js';
 import type { BindingStore } from '../../../relay/binding-store.js';
+import type { BindingRouter } from '../../../relay/binding-router.js';
 import type { TraceStore } from '../../../relay/trace-store.js';
 import type { MeshCore } from '@dorkos/mesh';
+import type { ExtensionManager } from '../../../extensions/extension-manager.js';
 import type { FigmaClient } from '../../../core/figma-client.js';
 
 /**
@@ -15,10 +17,8 @@ export interface McpToolDeps {
   transcriptReader: TranscriptReader;
   /** The default working directory for the server */
   defaultCwd: string;
-  /** The agent ID of this DorkOS instance — used to tag agent-created schedules */
-  selfAgentId?: string;
-  /** Optional Pulse store — undefined when Pulse is disabled */
-  pulseStore?: PulseStore;
+  /** Optional Task store — undefined when Tasks is disabled */
+  taskStore?: TaskStore;
   /** Optional RelayCore — undefined when Relay is disabled */
   relayCore?: RelayCore;
   /** Optional AdapterManager — undefined when Relay adapters are not configured */
@@ -27,9 +27,13 @@ export interface McpToolDeps {
   traceStore?: TraceStore;
   /** Optional BindingStore — undefined when Relay bindings are not configured */
   bindingStore?: BindingStore;
+  /** Optional BindingRouter for session map queries. */
+  bindingRouter?: BindingRouter;
   /** Optional MeshCore — undefined when Mesh is disabled */
   meshCore?: MeshCore;
-  /** Optional Figma client — undefined when FIGMA_ACCESS_TOKEN is not set */
+  /** Optional ExtensionManager — undefined when extensions are disabled */
+  extensionManager?: ExtensionManager;
+  /** Optional Figma API client — undefined when FIGMA_API_KEY is not set */
   figmaClient?: FigmaClient;
 }
 

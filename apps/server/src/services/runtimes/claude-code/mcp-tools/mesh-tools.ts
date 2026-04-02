@@ -1,5 +1,6 @@
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { readManifest } from '@dorkos/shared/manifest';
 import type { McpToolDeps } from './types.js';
 import { jsonContent } from './types.js';
 
@@ -13,19 +14,29 @@ function requireMesh(deps: McpToolDeps) {
 
 /** Discover agents by scanning directories. */
 export function createMeshDiscoverHandler(deps: McpToolDeps) {
-  return async (args: { roots: string[]; maxDepth?: number }) => {
+  return async (args: { roots: string[]; maxDepth?: number; includeRegistered?: boolean }) => {
     const err = requireMesh(deps);
     if (err) return err;
     try {
       const candidates = [];
+      const autoImported = [];
       for await (const event of deps.meshCore!.discover(args.roots, {
         maxDepth: args.maxDepth,
       })) {
         if (event.type === 'candidate') {
           candidates.push(event.data);
+        } else if (event.type === 'auto-import' && args.includeRegistered) {
+          autoImported.push(event.data);
         }
       }
-      return jsonContent({ candidates, count: candidates.length });
+      return jsonContent({
+        candidates,
+        count: candidates.length,
+        ...(args.includeRegistered && {
+          registered: autoImported,
+          registeredCount: autoImported.length,
+        }),
+      });
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Discovery failed';
       return jsonContent({ error: message, code: 'DISCOVER_FAILED' }, true);
@@ -45,11 +56,14 @@ export function createMeshRegisterHandler(deps: McpToolDeps) {
     const err = requireMesh(deps);
     if (err) return err;
     try {
-      const overrides: Record<string, unknown> = {};
-      if (args.name) overrides.name = args.name;
-      if (args.description) overrides.description = args.description;
-      if (args.runtime) overrides.runtime = args.runtime;
-      if (args.capabilities) overrides.capabilities = args.capabilities;
+      // Prevent overwriting a system agent's manifest
+      const existing = await readManifest(args.path);
+      if (existing?.isSystem) {
+        return jsonContent(
+          { error: 'Cannot re-register over a system agent', code: 'SYSTEM_AGENT' },
+          true
+        );
+      }
       const agent = await deps.meshCore!.registerByPath(
         args.path,
         {
@@ -58,7 +72,7 @@ export function createMeshRegisterHandler(deps: McpToolDeps) {
           ...(args.description && { description: args.description }),
           ...(args.capabilities && { capabilities: args.capabilities }),
         },
-        'mcp-tool',
+        'mcp-tool'
       );
       return jsonContent({ agent });
     } catch (e) {
@@ -81,7 +95,7 @@ export function createMeshListHandler(deps: McpToolDeps) {
             capability: args.capability,
             callerNamespace: args.callerNamespace,
           }
-        : undefined,
+        : undefined
     );
     return jsonContent({ agents, count: agents.length });
   };
@@ -112,6 +126,12 @@ export function createMeshUnregisterHandler(deps: McpToolDeps) {
       if (!agent) {
         return jsonContent({ error: `Agent ${args.agentId} not found` }, true);
       }
+      if (agent.isSystem) {
+        return jsonContent(
+          { error: 'System agents cannot be unregistered', code: 'SYSTEM_AGENT' },
+          true
+        );
+      }
       await deps.meshCore!.unregister(args.agentId);
       return jsonContent({ success: true, agentId: args.agentId });
     } catch (e) {
@@ -138,7 +158,10 @@ export function createMeshInspectHandler(deps: McpToolDeps) {
     if (err) return err;
     const result = deps.meshCore!.inspect(args.agentId);
     if (!result) {
-      return { content: [{ type: 'text' as const, text: `Agent ${args.agentId} not found` }], isError: true };
+      return {
+        content: [{ type: 'text' as const, text: `Agent ${args.agentId} not found` }],
+        isError: true,
+      };
     }
     return jsonContent(result);
   };
@@ -161,10 +184,21 @@ export function getMeshTools(deps: McpToolDeps) {
   return [
     tool(
       'mesh_discover',
-      'Scan directories for agent candidates. Returns paths with detected runtime, capabilities, and suggested names.',
+      'Scan directories for agent candidates. By default returns only unregistered agents (candidates). Set includeRegistered to also see already-registered agents found during the scan.',
       {
         roots: z.array(z.string()).describe('Root directories to scan for agents'),
-        maxDepth: z.number().int().min(1).optional().describe('Maximum directory depth (default 3)'),
+        maxDepth: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('Maximum directory depth (default: 5)'),
+        includeRegistered: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include already-registered agents in results (default: false — unregistered candidates only)'
+          ),
       },
       createMeshDiscoverHandler(deps)
     ),

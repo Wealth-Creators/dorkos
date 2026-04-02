@@ -9,6 +9,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
 } from '@/layers/shared/ui';
 import type { AgentManifest } from '@dorkos/shared/mesh-schemas';
 
@@ -35,8 +38,11 @@ interface IdentityTabProps {
 
 /**
  * Identity form with name, description, color picker, emoji picker, and runtime dropdown.
+ * System agents have their name and description fields disabled.
  */
 export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: IdentityTabProps) {
+  const isSystem = agent.isSystem === true;
+
   // Debounced name input
   const [nameValue, setNameValue] = useState(agent.name);
   const nameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,6 +109,38 @@ export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: Iden
     };
   }, []);
 
+  const nameInput = (
+    <input
+      id="agent-name"
+      type="text"
+      value={nameValue}
+      onChange={(e) => handleNameChange(e.target.value)}
+      onBlur={handleNameBlur}
+      disabled={isSystem}
+      className={cn(
+        'border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
+        isSystem && 'cursor-not-allowed opacity-50'
+      )}
+      placeholder="Agent name"
+    />
+  );
+
+  const descriptionInput = (
+    <textarea
+      id="agent-description"
+      value={descValue}
+      onChange={(e) => handleDescChange(e.target.value)}
+      onBlur={handleDescBlur}
+      disabled={isSystem}
+      rows={3}
+      className={cn(
+        'border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring w-full resize-none rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
+        isSystem && 'cursor-not-allowed opacity-50'
+      )}
+      placeholder="What does this agent do?"
+    />
+  );
+
   return (
     <div className="space-y-6">
       <FieldCard>
@@ -112,15 +150,16 @@ export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: Iden
             <Label htmlFor="agent-name" className="text-sm font-medium">
               Name
             </Label>
-            <input
-              id="agent-name"
-              type="text"
-              value={nameValue}
-              onChange={(e) => handleNameChange(e.target.value)}
-              onBlur={handleNameBlur}
-              className="border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring w-full rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-              placeholder="Agent name"
-            />
+            {isSystem ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div>{nameInput}</div>
+                </TooltipTrigger>
+                <TooltipContent>System agents cannot be renamed</TooltipContent>
+              </Tooltip>
+            ) : (
+              nameInput
+            )}
           </div>
 
           {/* Description */}
@@ -128,15 +167,16 @@ export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: Iden
             <Label htmlFor="agent-description" className="text-sm font-medium">
               Description
             </Label>
-            <textarea
-              id="agent-description"
-              value={descValue}
-              onChange={(e) => handleDescChange(e.target.value)}
-              onBlur={handleDescBlur}
-              rows={3}
-              className="border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring w-full resize-none rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-              placeholder="What does this agent do?"
-            />
+            {isSystem ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div>{descriptionInput}</div>
+                </TooltipTrigger>
+                <TooltipContent>System agent description cannot be modified</TooltipContent>
+              </Tooltip>
+            ) : (
+              descriptionInput
+            )}
           </div>
 
           {/* Runtime */}
@@ -144,9 +184,7 @@ export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: Iden
             <Label className="text-sm font-medium">Runtime</Label>
             <Select
               value={agent.runtime}
-              onValueChange={(v) =>
-                onUpdate({ runtime: v as AgentManifest['runtime'] })
-              }
+              onValueChange={(v) => onUpdate({ runtime: v as AgentManifest['runtime'] })}
             >
               <SelectTrigger className="w-48">
                 <SelectValue />
@@ -182,9 +220,7 @@ export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: Iden
               onClick={() => onUpdate({ color: c })}
               className={cn(
                 'size-7 rounded-full transition-all duration-150',
-                agent.color === c
-                  ? 'ring-foreground ring-2 ring-offset-2'
-                  : 'hover:scale-110'
+                agent.color === c ? 'ring-foreground ring-2 ring-offset-2' : 'hover:scale-110'
               )}
               style={{ backgroundColor: c }}
               aria-label={`Select color ${c}`}
@@ -213,9 +249,7 @@ export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: Iden
               onClick={() => onUpdate({ icon: emoji })}
               className={cn(
                 'flex size-8 items-center justify-center rounded-md text-base transition-all duration-150',
-                agent.icon === emoji
-                  ? 'bg-accent ring-foreground ring-1'
-                  : 'hover:bg-accent/50'
+                agent.icon === emoji ? 'bg-accent ring-foreground ring-1' : 'hover:bg-accent/50'
               )}
               aria-label={`Select icon ${emoji}`}
             >
@@ -224,7 +258,6 @@ export function IdentityTab({ agent, projectPath: _projectPath, onUpdate }: Iden
           ))}
         </div>
       </div>
-
     </div>
   );
 }

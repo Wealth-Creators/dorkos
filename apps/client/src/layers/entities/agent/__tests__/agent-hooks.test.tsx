@@ -7,7 +7,7 @@ import type { Transport } from '@dorkos/shared/transport';
 import { createMockTransport } from '@dorkos/test-utils';
 import { TransportProvider } from '@/layers/shared/model';
 import { useCurrentAgent } from '../model/use-current-agent';
-import { useCreateAgent } from '../model/use-create-agent';
+import { useInitAgent } from '../model/use-init-agent';
 import { useUpdateAgent } from '../model/use-update-agent';
 import { useResolvedAgents } from '../model/use-resolved-agents';
 import { useAgentVisual } from '../model/use-agent-visual';
@@ -74,7 +74,9 @@ describe('useCurrentAgent', () => {
     });
     const { Wrapper } = createWrapper(transport);
 
-    const { result } = renderHook(() => useCurrentAgent('/projects/no-agent'), { wrapper: Wrapper });
+    const { result } = renderHook(() => useCurrentAgent('/projects/no-agent'), {
+      wrapper: Wrapper,
+    });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -113,20 +115,20 @@ describe('useCurrentAgent', () => {
 });
 
 // ---------------------------------------------------------------------------
-// useCreateAgent
+// useInitAgent
 // ---------------------------------------------------------------------------
-describe('useCreateAgent', () => {
+describe('useInitAgent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('calls transport.createAgent with path and optional fields', async () => {
+  it('calls transport.initAgent with path and optional fields', async () => {
     const transport = createMockTransport({
-      createAgent: vi.fn().mockResolvedValue(mockAgent),
+      initAgent: vi.fn().mockResolvedValue(mockAgent),
     });
     const { Wrapper } = createWrapper(transport);
 
-    const { result } = renderHook(() => useCreateAgent(), { wrapper: Wrapper });
+    const { result } = renderHook(() => useInitAgent(), { wrapper: Wrapper });
 
     result.current.mutate({
       path: '/projects/newapp',
@@ -139,7 +141,7 @@ describe('useCreateAgent', () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(transport.createAgent).toHaveBeenCalledWith(
+    expect(transport.initAgent).toHaveBeenCalledWith(
       '/projects/newapp',
       'New Agent',
       'A new agent',
@@ -148,13 +150,13 @@ describe('useCreateAgent', () => {
     expect(result.current.data).toEqual(mockAgent);
   });
 
-  it('calls transport.createAgent with only path when no optional fields', async () => {
+  it('calls transport.initAgent with only path when no optional fields', async () => {
     const transport = createMockTransport({
-      createAgent: vi.fn().mockResolvedValue(mockAgent),
+      initAgent: vi.fn().mockResolvedValue(mockAgent),
     });
     const { Wrapper } = createWrapper(transport);
 
-    const { result } = renderHook(() => useCreateAgent(), { wrapper: Wrapper });
+    const { result } = renderHook(() => useInitAgent(), { wrapper: Wrapper });
 
     result.current.mutate({ path: '/projects/minimal' });
 
@@ -162,7 +164,7 @@ describe('useCreateAgent', () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(transport.createAgent).toHaveBeenCalledWith(
+    expect(transport.initAgent).toHaveBeenCalledWith(
       '/projects/minimal',
       undefined,
       undefined,
@@ -172,21 +174,20 @@ describe('useCreateAgent', () => {
 
   it('invalidates agent queries on success', async () => {
     const transport = createMockTransport({
-      createAgent: vi.fn().mockResolvedValue(mockAgent),
+      initAgent: vi.fn().mockResolvedValue(mockAgent),
       getAgentByPath: vi.fn().mockResolvedValue(null),
     });
     const { Wrapper, queryClient } = createWrapper(transport);
 
     // Prime the cache for the path
-    const { result: agentResult } = renderHook(
-      () => useCurrentAgent('/projects/newapp'),
-      { wrapper: Wrapper }
-    );
+    const { result: agentResult } = renderHook(() => useCurrentAgent('/projects/newapp'), {
+      wrapper: Wrapper,
+    });
     await waitFor(() => {
       expect(agentResult.current.isSuccess).toBe(true);
     });
 
-    const { result } = renderHook(() => useCreateAgent(), { wrapper: Wrapper });
+    const { result } = renderHook(() => useInitAgent(), { wrapper: Wrapper });
 
     result.current.mutate({ path: '/projects/newapp' });
 
@@ -204,11 +205,11 @@ describe('useCreateAgent', () => {
 
   it('exposes error state on transport failure', async () => {
     const transport = createMockTransport({
-      createAgent: vi.fn().mockRejectedValue(new Error('Create failed')),
+      initAgent: vi.fn().mockRejectedValue(new Error('Create failed')),
     });
     const { Wrapper } = createWrapper(transport);
 
-    const { result } = renderHook(() => useCreateAgent(), { wrapper: Wrapper });
+    const { result } = renderHook(() => useInitAgent(), { wrapper: Wrapper });
 
     result.current.mutate({ path: '/projects/failing' });
 
@@ -262,10 +263,9 @@ describe('useUpdateAgent', () => {
     const { Wrapper } = createWrapper(transport);
 
     // Prime the cache
-    const { result: agentResult } = renderHook(
-      () => useCurrentAgent('/projects/myapp'),
-      { wrapper: Wrapper }
-    );
+    const { result: agentResult } = renderHook(() => useCurrentAgent('/projects/myapp'), {
+      wrapper: Wrapper,
+    });
     await waitFor(() => {
       expect(agentResult.current.data).toEqual(mockAgent);
     });
@@ -300,10 +300,9 @@ describe('useUpdateAgent', () => {
     const { Wrapper } = createWrapper(transport);
 
     // Prime the cache
-    const { result: agentResult } = renderHook(
-      () => useCurrentAgent('/projects/myapp'),
-      { wrapper: Wrapper }
-    );
+    const { result: agentResult } = renderHook(() => useCurrentAgent('/projects/myapp'), {
+      wrapper: Wrapper,
+    });
     await waitFor(() => {
       expect(agentResult.current.data).toEqual(mockAgent);
     });
@@ -370,10 +369,9 @@ describe('useResolvedAgents', () => {
     });
     const { Wrapper } = createWrapper(transport);
 
-    const { result } = renderHook(
-      () => useResolvedAgents(['/projects/app1']),
-      { wrapper: Wrapper }
-    );
+    const { result } = renderHook(() => useResolvedAgents(['/projects/app1']), {
+      wrapper: Wrapper,
+    });
 
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
@@ -394,18 +392,14 @@ describe('useAgentVisual', () => {
       icon: '🤖',
     };
 
-    const { result } = renderHook(() =>
-      useAgentVisual(agentWithOverrides, '/projects/myapp')
-    );
+    const { result } = renderHook(() => useAgentVisual(agentWithOverrides, '/projects/myapp'));
 
     expect(result.current.color).toBe('#6366f1');
     expect(result.current.emoji).toBe('🤖');
   });
 
   it('hashes from agent.id when agent exists but has no overrides', () => {
-    const { result } = renderHook(() =>
-      useAgentVisual(mockAgent, '/projects/myapp')
-    );
+    const { result } = renderHook(() => useAgentVisual(mockAgent, '/projects/myapp'));
 
     // Should be deterministic from agent.id, not cwd
     const { result: resultSameCwd } = renderHook(() =>
@@ -417,9 +411,7 @@ describe('useAgentVisual', () => {
   });
 
   it('hashes from cwd when no agent is registered', () => {
-    const { result } = renderHook(() =>
-      useAgentVisual(null, '/projects/myapp')
-    );
+    const { result } = renderHook(() => useAgentVisual(null, '/projects/myapp'));
 
     const { result: resultDifferentCwd } = renderHook(() =>
       useAgentVisual(null, '/projects/different-app')
@@ -434,9 +426,7 @@ describe('useAgentVisual', () => {
   });
 
   it('hashes from cwd when agent is undefined', () => {
-    const { result } = renderHook(() =>
-      useAgentVisual(undefined, '/projects/myapp')
-    );
+    const { result } = renderHook(() => useAgentVisual(undefined, '/projects/myapp'));
 
     expect(result.current.color).toMatch(/^hsl\(/);
     expect(result.current.emoji).toBeTruthy();
@@ -449,22 +439,17 @@ describe('useAgentVisual', () => {
       // no icon override
     };
 
-    const { result } = renderHook(() =>
-      useAgentVisual(agentWithColorOnly, '/projects/myapp')
-    );
+    const { result } = renderHook(() => useAgentVisual(agentWithColorOnly, '/projects/myapp'));
 
     expect(result.current.color).toBe('#ff0000');
     // emoji should be hashed from agent.id, not cwd
-    const { result: noOverride } = renderHook(() =>
-      useAgentVisual(mockAgent, '/projects/myapp')
-    );
+    const { result: noOverride } = renderHook(() => useAgentVisual(mockAgent, '/projects/myapp'));
     expect(result.current.emoji).toBe(noOverride.current.emoji);
   });
 
   it('produces stable output for same inputs (memoization)', () => {
     const { result, rerender } = renderHook(
-      ({ agent, cwd }: { agent: AgentManifest | null; cwd: string }) =>
-        useAgentVisual(agent, cwd),
+      ({ agent, cwd }: { agent: AgentManifest | null; cwd: string }) => useAgentVisual(agent, cwd),
       { initialProps: { agent: mockAgent, cwd: '/projects/myapp' } }
     );
 

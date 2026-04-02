@@ -1,5 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router';
 import {
   TooltipProvider,
   Button,
@@ -18,7 +24,7 @@ import {
   Separator,
 } from '@/layers/shared/ui';
 import { TransportProvider, useTheme } from '@/layers/shared/model';
-import { LayoutDashboard, Palette, TextCursorInput, Component, MessageSquare, Blocks, Play, Sun, Monitor, Moon, Search } from 'lucide-react';
+import { ChevronLeft, LayoutDashboard, Sun, Monitor, Moon, Search } from 'lucide-react';
 import { createPlaygroundTransport } from './playground-transport';
 import { ChatPage } from './pages/ChatPage';
 import { FeaturesPage } from './pages/FeaturesPage';
@@ -26,8 +32,22 @@ import { TokensPage } from './pages/TokensPage';
 import { FormsPage } from './pages/FormsPage';
 import { ComponentsPage } from './pages/ComponentsPage';
 import { OverviewPage } from './pages/OverviewPage';
+import { PromosPage } from './pages/PromosPage';
+import { CommandPalettePage } from './pages/CommandPalettePage';
 import { SimulatorPage } from './pages/SimulatorPage';
+import { TopologyPage } from './pages/TopologyPage';
+import { ErrorStatesPage } from './pages/ErrorStatesPage';
+import { FilterBarPage } from './pages/FilterBarPage';
+import { OnboardingPage } from './pages/OnboardingPage';
+import { TablesPage } from './pages/TablesPage';
 import { PlaygroundSearch } from './PlaygroundSearch';
+import {
+  DESIGN_SYSTEM_NAV,
+  SESSION_NAV,
+  AGENTS_NAV,
+  APP_SHELL_NAV,
+  getPageFromPath,
+} from './playground-config';
 import type { Page, PlaygroundSection } from './playground-registry';
 
 const queryClient = new QueryClient({
@@ -38,42 +58,41 @@ const queryClient = new QueryClient({
 
 const transport = createPlaygroundTransport();
 
-interface PlaygroundRoute {
-  page: Page;
-  anchor: string | null;
+// Minimal router providing TanStack Router context for hooks (useSearch, useNavigate)
+// that are called transitively by showcase components. Uses memory history so it
+// doesn't interfere with the playground's own URL-based routing.
+const devRootRoute = createRootRoute({ component: DevPlaygroundShell });
+const devRouter = createRouter({
+  routeTree: devRootRoute,
+  history: createMemoryHistory({ initialEntries: ['/dev'] }),
+});
+
+/** Platform-aware modifier key symbol. */
+const MOD_KEY =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl+';
+
+/** Props shared by all playground page components. Only OverviewPage uses `onNavigate`. */
+interface PlaygroundPageProps {
+  onNavigate?: (page: Page) => void;
 }
 
-function getRouteFromPath(): PlaygroundRoute {
-  const path = window.location.pathname;
-  const anchor = window.location.hash.slice(1) || null;
-
-  if (path === '/dev' || path === '/dev/') return { page: 'overview', anchor };
-  if (path.startsWith('/dev/tokens')) return { page: 'tokens', anchor };
-  if (path.startsWith('/dev/forms')) return { page: 'forms', anchor };
-  if (path.startsWith('/dev/components')) return { page: 'components', anchor };
-  if (path.startsWith('/dev/chat')) return { page: 'chat', anchor };
-  if (path.startsWith('/dev/features')) return { page: 'features', anchor };
-  if (path.startsWith('/dev/simulator')) return { page: 'simulator', anchor };
-  return { page: 'overview', anchor };
-}
-
-interface NavItem {
-  id: Page;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-}
-
-const DESIGN_SYSTEM_NAV: NavItem[] = [
-  { id: 'tokens', label: 'Tokens', icon: Palette },
-  { id: 'forms', label: 'Forms', icon: TextCursorInput },
-  { id: 'components', label: 'Components', icon: Component },
-];
-
-const FEATURES_NAV: NavItem[] = [
-  { id: 'chat', label: 'Chat', icon: MessageSquare },
-  { id: 'features', label: 'Features', icon: Blocks },
-  { id: 'simulator', label: 'Simulator', icon: Play },
-];
+/** Page component lookup — maps page IDs to their React components. */
+const PAGE_COMPONENTS: Record<string, React.ComponentType<PlaygroundPageProps>> = {
+  overview: OverviewPage as React.ComponentType<PlaygroundPageProps>,
+  tokens: TokensPage,
+  forms: FormsPage,
+  components: ComponentsPage,
+  chat: ChatPage,
+  features: FeaturesPage,
+  topology: TopologyPage,
+  promos: PromosPage,
+  'command-palette': CommandPalettePage,
+  simulator: SimulatorPage,
+  'filter-bar': FilterBarPage,
+  'error-states': ErrorStatesPage,
+  onboarding: OnboardingPage,
+  tables: TablesPage,
+};
 
 /**
  * Scroll the SidebarInset scroll container to the element with the given id.
@@ -127,9 +146,13 @@ function ThemeToggle() {
   );
 }
 
-/** Dev-only playground shell with sidebar navigation, rendered at `/dev`. */
-export default function DevPlayground() {
-  const [page, setPage] = useState<Page>(() => getRouteFromPath().page);
+/**
+ * Inner shell rendered as the root route component of the dev router.
+ * Separated from the default export so that providers (QueryClient, Transport,
+ * Router) wrap it from outside.
+ */
+function DevPlaygroundShell() {
+  const [page, setPage] = useState<Page>(() => getPageFromPath(window.location.pathname) as Page);
   const [searchOpen, setSearchOpen] = useState(false);
 
   // Use `/dev` for the overview page; all other pages use `/dev/<id>`.
@@ -138,26 +161,23 @@ export default function DevPlayground() {
     history.pushState(null, '', id === 'overview' ? '/dev' : `/dev/${id}`);
   }, []);
 
-  const handleSelect = useCallback(
-    (section: PlaygroundSection) => {
-      const url = section.page === 'overview' ? '/dev' : `/dev/${section.page}`;
-      setPage(section.page);
-      history.pushState(null, '', `${url}#${section.id}`);
-      scrollToSection(section.id);
-    },
-    []
-  );
+  const handleSelect = useCallback((section: PlaygroundSection) => {
+    const url = section.page === 'overview' ? '/dev' : `/dev/${section.page}`;
+    setPage(section.page);
+    history.pushState(null, '', `${url}#${section.id}`);
+    scrollToSection(section.id);
+  }, []);
 
   // Sync page state when the user navigates with browser back/forward.
   useEffect(() => {
-    const onPopState = () => setPage(getRouteFromPath().page);
+    const onPopState = () => setPage(getPageFromPath(window.location.pathname) as Page);
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   // Scroll to any hash anchor after the page has rendered.
   useEffect(() => {
-    const { anchor } = getRouteFromPath();
+    const anchor = window.location.hash.slice(1) || null;
     if (anchor) {
       scrollToSection(anchor);
     }
@@ -174,102 +194,154 @@ export default function DevPlayground() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  const ActivePage = useMemo(() => PAGE_COMPONENTS[page], [page]);
+
+  return (
+    <TooltipProvider>
+      <div className="bg-background text-foreground h-dvh">
+        <SidebarProvider defaultOpen className="h-full min-h-0">
+          <Sidebar variant="inset">
+            <SidebarHeader className="border-b p-3">
+              <div className="flex items-center gap-2 py-1">
+                <SidebarMenuButton
+                  data-slot="app-link"
+                  type="button"
+                  size="sm"
+                  tooltip="Back to app"
+                  aria-label="Back to app"
+                  onClick={() => {
+                    window.location.href = '/';
+                  }}
+                  className="text-muted-foreground hover:bg-accent hover:text-foreground h-7! w-7! shrink-0 justify-center p-0 transition-all duration-100 active:scale-[0.98]"
+                >
+                  <ChevronLeft className="size-(--size-icon-sm)" />
+                </SidebarMenuButton>
+                <h2 className="text-sm font-semibold">DorkOS Dev</h2>
+              </div>
+            </SidebarHeader>
+            <SidebarContent>
+              <SidebarGroup>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      isActive={page === 'overview'}
+                      onClick={() => navigateTo('overview')}
+                    >
+                      <LayoutDashboard className="size-4" />
+                      Overview
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroup>
+              <SidebarGroup>
+                <SidebarGroupLabel>Design System</SidebarGroupLabel>
+                <SidebarMenu>
+                  {DESIGN_SYSTEM_NAV.map((item) => (
+                    <SidebarMenuItem key={item.id}>
+                      <SidebarMenuButton
+                        isActive={page === item.id}
+                        onClick={() => navigateTo(item.id as Page)}
+                      >
+                        <item.icon className="size-4" />
+                        {item.label}
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroup>
+              <SidebarGroup>
+                <SidebarGroupLabel>Session</SidebarGroupLabel>
+                <SidebarMenu>
+                  {SESSION_NAV.map((item) => (
+                    <SidebarMenuItem key={item.id}>
+                      <SidebarMenuButton
+                        isActive={page === item.id}
+                        onClick={() => navigateTo(item.id as Page)}
+                      >
+                        <item.icon className="size-4" />
+                        {item.label}
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroup>
+              <SidebarGroup>
+                <SidebarGroupLabel>Agents</SidebarGroupLabel>
+                <SidebarMenu>
+                  {AGENTS_NAV.map((item) => (
+                    <SidebarMenuItem key={item.id}>
+                      <SidebarMenuButton
+                        isActive={page === item.id}
+                        onClick={() => navigateTo(item.id as Page)}
+                      >
+                        <item.icon className="size-4" />
+                        {item.label}
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroup>
+              <SidebarGroup>
+                <SidebarGroupLabel>App Shell</SidebarGroupLabel>
+                <SidebarMenu>
+                  {APP_SHELL_NAV.map((item) => (
+                    <SidebarMenuItem key={item.id}>
+                      <SidebarMenuButton
+                        isActive={page === item.id}
+                        onClick={() => navigateTo(item.id as Page)}
+                      >
+                        <item.icon className="size-4" />
+                        {item.label}
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroup>
+            </SidebarContent>
+            <ThemeToggle />
+          </Sidebar>
+
+          <SidebarInset className="overflow-y-auto">
+            <header className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
+              <SidebarTrigger className="-ml-0.5" />
+              <Separator orientation="vertical" className="mr-1 h-4" />
+              <span className="text-muted-foreground text-xs">Dev Playground</span>
+              <div className="ml-auto flex items-center">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSearchOpen(true)}
+                  className="text-muted-foreground h-7 gap-1.5 px-2 text-xs"
+                  aria-label={`Search sections (${MOD_KEY}K)`}
+                >
+                  <Search className="size-3.5" />
+                  Search
+                  <kbd className="bg-muted rounded px-1 py-0.5 font-mono text-[10px]">
+                    {MOD_KEY}K
+                  </kbd>
+                </Button>
+              </div>
+            </header>
+            {ActivePage && <ActivePage onNavigate={navigateTo} />}
+          </SidebarInset>
+
+          <PlaygroundSearch
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+            onSelect={handleSelect}
+          />
+        </SidebarProvider>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+/** Dev-only playground shell with sidebar navigation, rendered at `/dev`. */
+export default function DevPlayground() {
   return (
     <QueryClientProvider client={queryClient}>
       <TransportProvider transport={transport}>
-        <TooltipProvider>
-          <div className="bg-background text-foreground h-dvh">
-            <SidebarProvider defaultOpen className="h-full min-h-0">
-              <Sidebar variant="inset">
-                <SidebarHeader>
-                  <h2 className="px-2 text-sm font-semibold">DorkOS Dev</h2>
-                </SidebarHeader>
-                <SidebarContent>
-                  <SidebarGroup>
-                    <SidebarMenu>
-                      <SidebarMenuItem>
-                        <SidebarMenuButton
-                          isActive={page === 'overview'}
-                          onClick={() => navigateTo('overview')}
-                        >
-                          <LayoutDashboard className="size-4" />
-                          Overview
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    </SidebarMenu>
-                  </SidebarGroup>
-                  <SidebarGroup>
-                    <SidebarGroupLabel>Design System</SidebarGroupLabel>
-                    <SidebarMenu>
-                      {DESIGN_SYSTEM_NAV.map((item) => (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
-                            isActive={page === item.id}
-                            onClick={() => navigateTo(item.id)}
-                          >
-                            <item.icon className="size-4" />
-                            {item.label}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      ))}
-                    </SidebarMenu>
-                  </SidebarGroup>
-                  <SidebarGroup>
-                    <SidebarGroupLabel>Features</SidebarGroupLabel>
-                    <SidebarMenu>
-                      {FEATURES_NAV.map((item) => (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
-                            isActive={page === item.id}
-                            onClick={() => navigateTo(item.id)}
-                          >
-                            <item.icon className="size-4" />
-                            {item.label}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      ))}
-                    </SidebarMenu>
-                  </SidebarGroup>
-                </SidebarContent>
-                <ThemeToggle />
-              </Sidebar>
-
-              <SidebarInset className="overflow-y-auto">
-                <header className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
-                  <SidebarTrigger className="-ml-0.5" />
-                  <Separator orientation="vertical" className="mr-1 h-4" />
-                  <span className="text-muted-foreground text-xs">Dev Playground</span>
-                  <div className="ml-auto flex items-center">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSearchOpen(true)}
-                      className="text-muted-foreground h-7 gap-1.5 px-2 text-xs"
-                      aria-label="Search sections (Cmd+K)"
-                    >
-                      <Search className="size-3.5" />
-                      Search
-                      <kbd className="bg-muted rounded px-1 py-0.5 font-mono text-[10px]">⌘K</kbd>
-                    </Button>
-                  </div>
-                </header>
-                {page === 'overview' && <OverviewPage onNavigate={navigateTo} />}
-                {page === 'tokens' && <TokensPage />}
-                {page === 'forms' && <FormsPage />}
-                {page === 'components' && <ComponentsPage />}
-                {page === 'chat' && <ChatPage />}
-                {page === 'features' && <FeaturesPage />}
-                {page === 'simulator' && <SimulatorPage />}
-              </SidebarInset>
-
-              <PlaygroundSearch
-                open={searchOpen}
-                onOpenChange={setSearchOpen}
-                onSelect={handleSelect}
-              />
-            </SidebarProvider>
-          </div>
-        </TooltipProvider>
+        <RouterProvider router={devRouter} />
       </TransportProvider>
     </QueryClientProvider>
   );

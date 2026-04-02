@@ -16,10 +16,12 @@ import { initSSEStream } from '../services/core/stream-adapter.js';
 import { DEFAULT_CWD } from '../lib/resolve-root.js';
 import type { AdapterManager } from '../services/relay/adapter-manager.js';
 import type { TraceStore } from '../services/relay/trace-store.js';
+import type { ActivityService } from '../services/activity/activity-service.js';
 import { resolveSubjectLabels, type SubjectLabel } from '../services/relay/subject-resolver.js';
 import { runtimeRegistry } from '../services/core/runtime-registry.js';
 import { readManifest } from '@dorkos/shared/manifest';
 import { createAdapterRouter } from './relay-adapters.js';
+import { logger } from '../lib/logger.js';
 
 /** Allowed subject prefixes for SSE subscription patterns. */
 const ALLOWED_PREFIXES = ['relay.human.console.', 'relay.system.', 'relay.signal.'];
@@ -73,7 +75,7 @@ function validateSubscriptionPattern(pattern: string): boolean {
 export function buildConversations(
   messages: RelayMsg[],
   deadLetters: DeadLetterEntry[],
-  labelMap: Map<string, SubjectLabel>,
+  labelMap: Map<string, SubjectLabel>
 ): Conversation[] {
   // O(1) dead-letter lookup by messageId
   const deadLetterMap = new Map(deadLetters.map((dl) => [dl.messageId, dl]));
@@ -83,10 +85,7 @@ export function buildConversations(
   const responseChunksBySubject = new Map<string, RelayMsg[]>();
 
   for (const msg of messages) {
-    if (
-      msg.subject.startsWith('relay.agent.') ||
-      msg.subject.startsWith('relay.system.')
-    ) {
+    if (msg.subject.startsWith('relay.agent.') || msg.subject.startsWith('relay.system.')) {
       requests.push(msg);
     } else if (msg.subject.startsWith('relay.human.console.')) {
       const existing = responseChunksBySubject.get(msg.subject) ?? [];
@@ -103,7 +102,7 @@ export function buildConversations(
     if (!from) {
       if (req.subject.startsWith('relay.agent.')) {
         from = 'relay.human.console.inferred';
-      } else if (req.subject.startsWith('relay.system.pulse.')) {
+      } else if (req.subject.startsWith('relay.system.tasks.')) {
         from = 'relay.system.console';
       }
     }
@@ -150,8 +149,7 @@ export function buildConversations(
       sentAt: req.createdAt,
       completedAt: lastChunk?.createdAt as string | undefined,
       durationMs: lastChunk
-        ? new Date(lastChunk.createdAt as string).getTime() -
-          new Date(req.createdAt).getTime()
+        ? new Date(lastChunk.createdAt as string).getTime() - new Date(req.createdAt).getTime()
         : undefined,
       subject: req.subject,
       sessionId,
@@ -171,7 +169,7 @@ export function buildConversations(
 export function createRelayRouter(
   relayCore: RelayCore,
   adapterManager?: AdapterManager,
-  traceStore?: TraceStore,
+  traceStore?: TraceStore
 ): Router {
   const router = Router();
 
@@ -187,12 +185,57 @@ export function createRelayRouter(
         replyTo: result.data.replyTo,
         budget: result.data.budget,
       });
+
+      // Emit message delivery/failure activity events when an adapter was involved
+      if (publishResult.adapterResult && adapterManager) {
+        const activityService = req.app.locals.activityService as ActivityService | undefined;
+        if (activityService) {
+          const from = result.data.from;
+          const isAgent = from?.startsWith('relay.agent.');
+          const actorType = isAgent ? ('agent' as const) : ('system' as const);
+          const actorLabel = isAgent ? (from.split('.')[2] ?? 'Agent') : 'System';
+
+          // Resolve adapter from the subject
+          const matchedAdapter = adapterManager.getRegistry().getBySubject(result.data.subject);
+          const adapterId = matchedAdapter?.id ?? 'unknown';
+          const adapterName = adapterManager.resolveAdapterName(adapterId);
+
+          if (publishResult.adapterResult.success) {
+            await activityService.emit({
+              actorType,
+              actorLabel,
+              category: 'relay',
+              eventType: 'relay.message_delivered',
+              resourceType: 'adapter',
+              resourceId: adapterId,
+              resourceLabel: adapterName,
+              summary: `Delivered message via ${adapterName}`,
+              linkPath: '/',
+            });
+          } else {
+            await activityService.emit({
+              actorType,
+              actorLabel,
+              category: 'relay',
+              eventType: 'relay.message_failed',
+              resourceType: 'adapter',
+              resourceId: adapterId,
+              resourceLabel: adapterName,
+              summary: `Failed to deliver via ${adapterName}: ${publishResult.adapterResult.error ?? 'unknown error'}`,
+              linkPath: '/',
+              metadata: { error: publishResult.adapterResult.error ?? 'unknown error' },
+            });
+          }
+        }
+      }
+
       return res.json(publishResult);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Publish failed';
-      return res
-        .status(422)
-        .json({ error: message, code: (err as Error & { code?: string })?.code ?? 'PUBLISH_FAILED' });
+      return res.status(422).json({
+        error: message,
+        code: (err as Error & { code?: string })?.code ?? 'PUBLISH_FAILED',
+      });
     }
   });
 
@@ -286,9 +329,7 @@ export function createRelayRouter(
   // GET /dead-letters — List dead-letter messages
   router.get('/dead-letters', async (_req, res) => {
     const endpointHash = _req.query.endpointHash as string | undefined;
-    const deadLetters = await relayCore.getDeadLetters(
-      endpointHash ? { endpointHash } : undefined,
-    );
+    const deadLetters = await relayCore.getDeadLetters(endpointHash ? { endpointHash } : undefined);
     return res.json(deadLetters);
   });
 
@@ -339,7 +380,7 @@ export function createRelayRouter(
     }
     const deadLetters = await relayCore.getDeadLetters();
     const toRemove = deadLetters.filter(
-      (dl) => (dl.envelope?.from ?? 'unknown') === source && dl.reason === reason,
+      (dl) => (dl.envelope?.from ?? 'unknown') === source && dl.reason === reason
     );
     for (const dl of toRemove) {
       await relayCore.removeDeadLetter(dl.endpointHash, dl.messageId);
@@ -367,9 +408,12 @@ export function createRelayRouter(
 
   // GET /stream — SSE event stream with server-side subject filtering
   router.get('/stream', (req, res) => {
+    logger.warn('[DEPRECATED] GET /api/relay/stream — use GET /api/events instead');
     const pattern = (req.query.subject as string) || 'relay.human.console.>';
     if (!validateSubscriptionPattern(pattern)) {
-      return res.status(400).json({ error: 'Invalid subscription pattern', allowedPrefixes: ALLOWED_PREFIXES });
+      return res
+        .status(400)
+        .json({ error: 'Invalid subscription pattern', allowedPrefixes: ALLOWED_PREFIXES });
     }
     initSSEStream(res);
     res.write(`event: relay_connected\n`);
@@ -386,7 +430,9 @@ export function createRelayRouter(
         const canContinue = res.write(`data: ${JSON.stringify(envelope)}\n\n`);
         if (!canContinue) {
           paused = true;
-          res.once('drain', () => { paused = false; });
+          res.once('drain', () => {
+            paused = false;
+          });
         }
       } catch {
         // Write failure — cleaned up on close
@@ -401,7 +447,9 @@ export function createRelayRouter(
         const canContinue = res.write(`data: ${JSON.stringify(signal)}\n\n`);
         if (!canContinue) {
           paused = true;
-          res.once('drain', () => { paused = false; });
+          res.once('drain', () => {
+            paused = false;
+          });
         }
       } catch {
         // Write failure — cleaned up on close
@@ -409,11 +457,22 @@ export function createRelayRouter(
     });
 
     const keepalive = setInterval(() => {
-      if (res.writableEnded) { clearInterval(keepalive); return; }
-      try { res.write(`: keepalive\n\n`); } catch { clearInterval(keepalive); }
+      if (res.writableEnded) {
+        clearInterval(keepalive);
+        return;
+      }
+      try {
+        res.write(`: keepalive\n\n`);
+      } catch {
+        clearInterval(keepalive);
+      }
     }, 15_000);
 
-    req.on('close', () => { clearInterval(keepalive); unsubMessages(); unsubSignals(); });
+    req.on('close', () => {
+      clearInterval(keepalive);
+      unsubMessages();
+      unsubSignals();
+    });
   });
 
   // --- Adapter Management Routes ---

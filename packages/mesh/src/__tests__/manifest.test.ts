@@ -19,6 +19,7 @@ function makeManifest(overrides?: Partial<AgentManifest>): AgentManifest {
     registeredAt: '2026-02-24T00:00:00.000Z',
     registeredBy: 'test-suite',
     personaEnabled: true,
+    isSystem: false,
     enabledToolGroups: {},
     ...overrides,
   };
@@ -75,7 +76,7 @@ describe('readManifest / writeManifest', () => {
     await fs.writeFile(
       path.join(dorkDir, 'agent.json'),
       JSON.stringify({ name: 'incomplete' }),
-      'utf-8',
+      'utf-8'
     );
 
     const result = await readManifest(projectDir);

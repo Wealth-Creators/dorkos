@@ -47,9 +47,22 @@ vi.mock('../../services/core/runtime-registry.js', () => ({
 vi.mock('../../services/core/tunnel-manager.js', () => ({
   tunnelManager: {
     status: {
-      enabled: false, connected: false, url: null, port: null, startedAt: null,
-      authEnabled: false, tokenConfigured: false, domain: null,
+      enabled: false,
+      connected: false,
+      url: null,
+      port: null,
+      startedAt: null,
+      authEnabled: false,
+      tokenConfigured: false,
+      domain: null,
     },
+  },
+}));
+
+vi.mock('../../services/core/config-manager.js', () => ({
+  configManager: {
+    get: vi.fn().mockReturnValue(null),
+    set: vi.fn(),
   },
 }));
 
@@ -106,7 +119,7 @@ describe('Capabilities Route', () => {
 
     vi.mocked(runtimeRegistry.getAllCapabilities).mockReturnValueOnce({
       'claude-code': mockCapabilities,
-      'opencode': opencodeCapabilities,
+      opencode: opencodeCapabilities,
     });
 
     const res = await request(app).get('/api/capabilities');

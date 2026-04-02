@@ -5,7 +5,7 @@ import { configManager } from '../services/core/config-manager.js';
 import { env } from '../env.js';
 import { UserConfigSchema, SENSITIVE_CONFIG_KEYS } from '@dorkos/shared/config-schema';
 import { getLatestVersion } from '../services/core/update-checker.js';
-import { isPulseEnabled, getPulseInitError } from '../services/pulse/pulse-state.js';
+import { isTasksEnabled, getTasksInitError } from '../services/tasks/task-state.js';
 import { isRelayEnabled, getRelayInitError } from '../services/relay/relay-state.js';
 import { getMeshInitError } from '../services/mesh/mesh-state.js';
 import { getBoundary } from '../lib/boundary.js';
@@ -98,11 +98,12 @@ router.get('/', async (_req, res) => {
     tunnel: {
       ...tunnel,
       authEnabled: tunnel.authEnabled || !!env.TUNNEL_AUTH,
-      tokenConfigured: tunnel.tokenConfigured || !!(env.NGROK_AUTHTOKEN || configManager.get('tunnel')?.authtoken),
+      tokenConfigured:
+        tunnel.tokenConfigured || !!(env.NGROK_AUTHTOKEN || configManager.get('tunnel')?.authtoken),
     },
-    pulse: {
-      enabled: isPulseEnabled(),
-      ...(getPulseInitError() && { initError: getPulseInitError() }),
+    tasks: {
+      enabled: isTasksEnabled(),
+      ...(getTasksInitError() && { initError: getTasksInitError() }),
     },
     relay: {
       enabled: isRelayEnabled(),
@@ -123,6 +124,10 @@ router.get('/', async (_req, res) => {
       relayTools: true,
       meshTools: true,
       adapterTools: true,
+    },
+    agents: configManager.get('agents') ?? {
+      defaultDirectory: '~/.dork/agents',
+      defaultAgent: 'dorkbot',
     },
   });
 });
@@ -174,6 +179,28 @@ router.patch('/', (req, res) => {
     });
   } catch (err) {
     logger.error('[Config] PATCH failed', logError(err));
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/** PUT /api/config/agents/defaultAgent — set the default agent by name. */
+router.put('/agents/defaultAgent', (req, res) => {
+  try {
+    const { value } = req.body ?? {};
+    if (typeof value !== 'string' || !value.trim()) {
+      return res.status(400).json({ error: 'Body must include a non-empty "value" string' });
+    }
+
+    const agents = configManager.get('agents') ?? {
+      defaultDirectory: '~/.dork/agents',
+      defaultAgent: 'dorkbot',
+    };
+    configManager.set('agents', { ...agents, defaultAgent: value.trim() });
+    logger.debug(`[Config] Default agent set to "${value.trim()}"`);
+
+    return res.json({ success: true, defaultAgent: value.trim() });
+  } catch (err) {
+    logger.error('[Config] PUT agents/defaultAgent failed', logError(err));
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -11,7 +11,7 @@ export function useGlobalPalette() {
   const toggleGlobalPalette = useAppStore((s) => s.toggleGlobalPalette);
   const setGlobalPaletteOpen = useAppStore((s) => s.setGlobalPaletteOpen);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
-  const setPulseOpen = useAppStore((s) => s.setPulseOpen);
+  const setTasksOpen = useAppStore((s) => s.setTasksOpen);
   const setRelayOpen = useAppStore((s) => s.setRelayOpen);
   const setMeshOpen = useAppStore((s) => s.setMeshOpen);
   const globalPaletteOpen = useAppStore((s) => s.globalPaletteOpen);
@@ -23,7 +23,7 @@ export function useGlobalPalette() {
         // Close any open feature dialogs before opening the palette
         if (!globalPaletteOpen) {
           setSettingsOpen(false);
-          setPulseOpen(false);
+          setTasksOpen(false);
           setRelayOpen(false);
           setMeshOpen(false);
         }
@@ -32,7 +32,14 @@ export function useGlobalPalette() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [toggleGlobalPalette, setSettingsOpen, setPulseOpen, setRelayOpen, setMeshOpen, globalPaletteOpen]);
+  }, [
+    toggleGlobalPalette,
+    setSettingsOpen,
+    setTasksOpen,
+    setRelayOpen,
+    setMeshOpen,
+    globalPaletteOpen,
+  ]);
 
   return {
     globalPaletteOpen,

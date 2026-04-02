@@ -20,7 +20,7 @@ let relay: RelayCore;
  * Each test gets a clean filesystem to avoid cross-test contamination.
  */
 function createRelay(
-  options?: Partial<{ maxHops: number; defaultTtlMs: number; defaultCallBudget: number }>,
+  options?: Partial<{ maxHops: number; defaultTtlMs: number; defaultCallBudget: number }>
 ): RelayCore {
   return new RelayCore({
     dataDir: tmpDir,
@@ -65,7 +65,7 @@ describe('constructor and lifecycle', () => {
   it('throws after close for publish', async () => {
     await relay.close();
     await expect(
-      relay.publish('relay.test', { data: true }, { from: 'relay.sender' }),
+      relay.publish('relay.test', { data: true }, { from: 'relay.sender' })
     ).rejects.toThrow('RelayCore has been closed');
   });
 
@@ -76,9 +76,7 @@ describe('constructor and lifecycle', () => {
 
   it('throws after close for registerEndpoint', async () => {
     await relay.close();
-    await expect(relay.registerEndpoint('relay.test')).rejects.toThrow(
-      'RelayCore has been closed',
-    );
+    await expect(relay.registerEndpoint('relay.test')).rejects.toThrow('RelayCore has been closed');
   });
 });
 
@@ -91,8 +89,7 @@ describe('endpoint registration', () => {
     const info = await relay.registerEndpoint('relay.agent.backend');
 
     expect(info.subject).toBe('relay.agent.backend');
-    expect(info.hash).toBeDefined();
-    expect(info.hash.length).toBe(12);
+    expect(info.hash).toBe('relay.agent.backend');
     expect(info.maildirPath).toContain('mailboxes');
     expect(info.registeredAt).toBeDefined();
   });
@@ -120,7 +117,7 @@ describe('endpoint registration', () => {
   it('rejects duplicate endpoint registration', async () => {
     await relay.registerEndpoint('relay.agent.dup');
     await expect(relay.registerEndpoint('relay.agent.dup')).rejects.toThrow(
-      'Endpoint already registered',
+      'Endpoint already registered'
     );
   });
 
@@ -140,7 +137,7 @@ describe('publish - basic', () => {
     const result = await relay.publish(
       'relay.agent.proj.backend',
       { msg: 'hello' },
-      { from: 'relay.agent.proj.frontend' },
+      { from: 'relay.agent.proj.frontend' }
     );
 
     expect(result.messageId).toBeDefined();
@@ -151,7 +148,7 @@ describe('publish - basic', () => {
     const result = await relay.publish(
       'relay.nobody.here',
       { msg: 'hello' },
-      { from: 'relay.sender' },
+      { from: 'relay.sender' }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -161,19 +158,15 @@ describe('publish - basic', () => {
   });
 
   it('rejects invalid subjects', async () => {
-    await expect(
-      relay.publish('', { msg: 'hello' }, { from: 'relay.sender' }),
-    ).rejects.toThrow('Invalid subject');
+    await expect(relay.publish('', { msg: 'hello' }, { from: 'relay.sender' })).rejects.toThrow(
+      'Invalid subject'
+    );
   });
 
   it('message is indexed in SQLite after publish', async () => {
     await relay.registerEndpoint('relay.agent.indexed');
 
-    await relay.publish(
-      'relay.agent.indexed',
-      { data: 'test' },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.indexed', { data: 'test' }, { from: 'relay.sender' });
 
     const metrics = relay.getMetrics();
     expect(metrics.totalMessages).toBeGreaterThanOrEqual(1);
@@ -182,11 +175,7 @@ describe('publish - basic', () => {
   it('assigns a ULID message ID', async () => {
     await relay.registerEndpoint('relay.agent.ulid');
 
-    const result = await relay.publish(
-      'relay.agent.ulid',
-      { data: 1 },
-      { from: 'relay.sender' },
-    );
+    const result = await relay.publish('relay.agent.ulid', { data: 1 }, { from: 'relay.sender' });
 
     // ULID is 26 characters
     expect(result.messageId.length).toBe(26);
@@ -202,7 +191,7 @@ describe('publish - basic', () => {
     await relay.publish(
       'relay.agent.reply',
       { data: 1 },
-      { from: 'relay.sender', replyTo: 'relay.sender.reply' },
+      { from: 'relay.sender', replyTo: 'relay.sender.reply' }
     );
 
     expect(received.length).toBe(1);
@@ -225,14 +214,14 @@ describe('publish - fan-out', () => {
     const result1 = await relay.publish(
       'relay.agent.proj.backend',
       { msg: 'hello' },
-      { from: 'relay.sender' },
+      { from: 'relay.sender' }
     );
     expect(result1.deliveredTo).toBe(1);
 
     const result2 = await relay.publish(
       'relay.agent.proj.frontend',
       { msg: 'hello' },
-      { from: 'relay.sender' },
+      { from: 'relay.sender' }
     );
     expect(result2.deliveredTo).toBe(1);
   });
@@ -249,7 +238,7 @@ describe('publish - budget enforcement', () => {
     const result = await relay.publish(
       'relay.agent.budget-ttl',
       { data: 'expired' },
-      { from: 'relay.sender', budget: { ttl: Date.now() - 1000 } },
+      { from: 'relay.sender', budget: { ttl: Date.now() - 1000 } }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -265,7 +254,7 @@ describe('publish - budget enforcement', () => {
     const result = await relay.publish(
       'relay.agent.budget-hops',
       { data: 'too many hops' },
-      { from: 'relay.sender', budget: { hopCount: 5, maxHops: 5 } },
+      { from: 'relay.sender', budget: { hopCount: 5, maxHops: 5 } }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -281,7 +270,7 @@ describe('publish - budget enforcement', () => {
     const result = await relay.publish(
       'relay.agent.budget-calls',
       { data: 'no budget' },
-      { from: 'relay.sender', budget: { callBudgetRemaining: 0 } },
+      { from: 'relay.sender', budget: { callBudgetRemaining: 0 } }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -297,7 +286,7 @@ describe('publish - budget enforcement', () => {
     const result = await relay.publish(
       'relay.agent.budget-cycle',
       { data: 'cycle' },
-      { from: 'relay.sender', budget: { ancestorChain: ['relay.agent.budget-cycle'] } },
+      { from: 'relay.sender', budget: { ancestorChain: ['relay.agent.budget-cycle'] } }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -318,13 +307,11 @@ describe('publish - budget enforcement', () => {
 
     const received: RelayEnvelope[] = [];
     await relay.registerEndpoint('relay.agent.custom-budget');
-    relay.subscribe('relay.agent.custom-budget', (env) => { received.push(env); });
+    relay.subscribe('relay.agent.custom-budget', (env) => {
+      received.push(env);
+    });
 
-    await relay.publish(
-      'relay.agent.custom-budget',
-      { data: 1 },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.custom-budget', { data: 1 }, { from: 'relay.sender' });
 
     expect(received.length).toBe(1);
     expect(received[0].budget.maxHops).toBe(2);
@@ -357,11 +344,7 @@ describe('publish - access control', () => {
     await relay.registerEndpoint('relay.agent.protected');
 
     await expect(
-      relay.publish(
-        'relay.agent.protected',
-        { data: 'blocked' },
-        { from: 'relay.attacker' },
-      ),
+      relay.publish('relay.agent.protected', { data: 'blocked' }, { from: 'relay.attacker' })
     ).rejects.toThrow('Access denied');
   });
 
@@ -371,7 +354,7 @@ describe('publish - access control', () => {
     const result = await relay.publish(
       'relay.agent.allowed',
       { msg: 'ok' },
-      { from: 'relay.friendly' },
+      { from: 'relay.friendly' }
     );
 
     expect(result.deliveredTo).toBe(1);
@@ -391,11 +374,7 @@ describe('subscribe - dispatch', () => {
       received.push(envelope);
     });
 
-    await relay.publish(
-      'relay.agent.push',
-      { hello: 'push' },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.push', { hello: 'push' }, { from: 'relay.sender' });
 
     // Dispatch is synchronous — no wait needed
     expect(received.length).toBe(1);
@@ -415,11 +394,7 @@ describe('subscribe - dispatch', () => {
       received2.push(envelope);
     });
 
-    await relay.publish(
-      'relay.agent.multi-sub',
-      { data: 'multi' },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.multi-sub', { data: 'multi' }, { from: 'relay.sender' });
 
     expect(received1.length).toBe(1);
     expect(received2.length).toBe(1);
@@ -433,11 +408,7 @@ describe('subscribe - dispatch', () => {
       received.push(envelope);
     });
 
-    await relay.publish(
-      'relay.agent.proj.backend',
-      { data: 'wildcard' },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.proj.backend', { data: 'wildcard' }, { from: 'relay.sender' });
 
     expect(received.length).toBe(1);
     expect(received[0].subject).toBe('relay.agent.proj.backend');
@@ -454,11 +425,7 @@ describe('subscribe - dispatch', () => {
     // Unsubscribe before publishing
     unsub();
 
-    await relay.publish(
-      'relay.agent.unsub',
-      { data: 'ignored' },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.unsub', { data: 'ignored' }, { from: 'relay.sender' });
 
     expect(received.length).toBe(0);
   });
@@ -472,7 +439,7 @@ describe('subscribe - dispatch', () => {
     await relay.publish(
       'relay.agent.fail-handler',
       { data: 'will fail' },
-      { from: 'relay.sender' },
+      { from: 'relay.sender' }
     );
 
     // The message should have been moved to failed/
@@ -490,11 +457,7 @@ describe('subscribe - dispatch', () => {
       received.push(envelope);
     });
 
-    await relay.publish(
-      'relay.agent.budget-update',
-      { data: 1 },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.budget-update', { data: 1 }, { from: 'relay.sender' });
 
     expect(received.length).toBe(1);
     expect(received[0].budget.hopCount).toBe(1);
@@ -583,7 +546,7 @@ describe('dead letters', () => {
     const result = await relay.publish(
       'relay.agent.nomatch',
       { data: 'lost' },
-      { from: 'relay.sender' },
+      { from: 'relay.sender' }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -605,7 +568,7 @@ describe('dead letters', () => {
     await relay.publish(
       'relay.agent.dlq-query',
       { data: 'expired' },
-      { from: 'relay.sender', budget: { ttl: Date.now() - 1000 } },
+      { from: 'relay.sender', budget: { ttl: Date.now() - 1000 } }
     );
 
     const deadLetters = await relay.getDeadLetters({ endpointHash: info.hash });
@@ -714,15 +677,13 @@ describe('access rule management', () => {
         to: 'relay.b',
         action: 'deny',
         priority: 10,
-      }),
+      })
     ).toThrow('RelayCore has been closed');
   });
 
   it('removeAccessRule throws after close', async () => {
     await relay.close();
-    expect(() => relay.removeAccessRule('relay.a', 'relay.b')).toThrow(
-      'RelayCore has been closed',
-    );
+    expect(() => relay.removeAccessRule('relay.a', 'relay.b')).toThrow('RelayCore has been closed');
   });
 
   it('listAccessRules throws after close', async () => {
@@ -744,8 +705,8 @@ describe('access rule management', () => {
       relay.publish(
         'relay.agent.guarded',
         { data: 'should-be-blocked' },
-        { from: 'relay.blocked-sender' },
-      ),
+        { from: 'relay.blocked-sender' }
+      )
     ).rejects.toThrow('Access denied');
   });
 
@@ -761,11 +722,7 @@ describe('access rule management', () => {
 
     // Should be blocked
     await expect(
-      relay.publish(
-        'relay.agent.unblocked',
-        { data: 'blocked' },
-        { from: 'relay.temp-blocked' },
-      ),
+      relay.publish('relay.agent.unblocked', { data: 'blocked' }, { from: 'relay.temp-blocked' })
     ).rejects.toThrow('Access denied');
 
     // Remove the rule
@@ -775,7 +732,7 @@ describe('access rule management', () => {
     const result = await relay.publish(
       'relay.agent.unblocked',
       { data: 'allowed' },
-      { from: 'relay.temp-blocked' },
+      { from: 'relay.temp-blocked' }
     );
     expect(result.deliveredTo).toBe(1);
   });
@@ -841,7 +798,7 @@ describe('graceful shutdown', () => {
     await relay.close();
 
     await expect(
-      relay.publish('relay.agent.shutdown', { data: 1 }, { from: 'relay.sender' }),
+      relay.publish('relay.agent.shutdown', { data: 1 }, { from: 'relay.sender' })
     ).rejects.toThrow('closed');
   });
 
@@ -850,11 +807,7 @@ describe('graceful shutdown', () => {
 
     await relay.unregisterEndpoint('relay.agent.unreg');
 
-    const result = await relay.publish(
-      'relay.agent.unreg',
-      { data: 1 },
-      { from: 'relay.sender' },
-    );
+    const result = await relay.publish('relay.agent.unreg', { data: 1 }, { from: 'relay.sender' });
     expect(result.deliveredTo).toBe(0);
   });
 });
@@ -875,7 +828,7 @@ describe('end-to-end integration', () => {
     const result = await relay.publish(
       'relay.agent.e2e',
       { e2e: true },
-      { from: 'relay.agent.orchestrator', replyTo: 'relay.agent.orchestrator.reply' },
+      { from: 'relay.agent.orchestrator', replyTo: 'relay.agent.orchestrator.reply' }
     );
 
     expect(result.messageId).toBeDefined();
@@ -910,11 +863,7 @@ describe('end-to-end integration', () => {
     });
 
     // Publish a persistent message
-    await relay.publish(
-      'relay.agent.mixed',
-      { persistent: true },
-      { from: 'relay.sender' },
-    );
+    await relay.publish('relay.agent.mixed', { persistent: true }, { from: 'relay.sender' });
 
     // Emit an ephemeral signal
     relay.signal('relay.agent.mixed', {
@@ -947,7 +896,7 @@ describe('end-to-end integration', () => {
     const result = await relay.publish(
       'relay.agent.proj.a',
       { target: 'a' },
-      { from: 'relay.sender' },
+      { from: 'relay.sender' }
     );
 
     expect(result.deliveredTo).toBe(1);
@@ -987,11 +936,7 @@ describe('reliability pipeline integration', () => {
 
     // Exhaust the rate limit (maxPerWindow: 5) by publishing to endpoint A
     for (let i = 0; i < 5; i++) {
-      await rRelay.publish(
-        'relay.agent.proj.a',
-        { i },
-        { from: 'relay.flood' },
-      );
+      await rRelay.publish('relay.agent.proj.a', { i }, { from: 'relay.flood' });
     }
 
     // The 6th publish from the same sender should be rate-limited
@@ -999,7 +944,7 @@ describe('reliability pipeline integration', () => {
     const result = await rRelay.publish(
       'relay.agent.proj.b',
       { data: 'blocked' },
-      { from: 'relay.flood' },
+      { from: 'relay.flood' }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -1012,24 +957,18 @@ describe('reliability pipeline integration', () => {
 
     // Exhaust the rate limit
     for (let i = 0; i < 5; i++) {
-      await rRelay.publish(
-        'relay.agent.rate',
-        { i },
-        { from: 'relay.sender.rate' },
-      );
+      await rRelay.publish('relay.agent.rate', { i }, { from: 'relay.sender.rate' });
     }
 
     const result = await rRelay.publish(
       'relay.agent.rate',
       { data: 'over-limit' },
-      { from: 'relay.sender.rate' },
+      { from: 'relay.sender.rate' }
     );
 
     expect(result.messageId).toBe('');
     expect(result.deliveredTo).toBe(0);
-    expect(result.rejected).toEqual([
-      { endpointHash: '*', reason: 'rate_limited' },
-    ]);
+    expect(result.rejected).toEqual([{ endpointHash: '*', reason: 'rate_limited' }]);
   });
 
   it('backpressure rejection skips Maildir delivery', async () => {
@@ -1048,18 +987,14 @@ describe('reliability pipeline integration', () => {
 
     // Fill the mailbox to capacity
     for (let i = 0; i < 3; i++) {
-      await rRelay.publish(
-        'relay.agent.bp',
-        { i },
-        { from: 'relay.sender.bp' },
-      );
+      await rRelay.publish('relay.agent.bp', { i }, { from: 'relay.sender.bp' });
     }
 
     // Next publish should be rejected by backpressure
     const result = await rRelay.publish(
       'relay.agent.bp',
       { data: 'backpressured' },
-      { from: 'relay.sender.bp' },
+      { from: 'relay.sender.bp' }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -1092,11 +1027,7 @@ describe('reliability pipeline integration', () => {
 
     // Cause enough failures to trip the circuit breaker (failureThreshold: 3)
     for (let i = 0; i < 3; i++) {
-      await rRelay.publish(
-        'relay.agent.cb',
-        { i },
-        { from: 'relay.sender.cb' },
-      );
+      await rRelay.publish('relay.agent.cb', { i }, { from: 'relay.sender.cb' });
     }
 
     // Restore the tmp/ directory so the Maildir write check isn't what blocks
@@ -1107,7 +1038,7 @@ describe('reliability pipeline integration', () => {
     const result = await rRelay.publish(
       'relay.agent.cb',
       { data: 'circuit-open' },
-      { from: 'relay.sender.cb' },
+      { from: 'relay.sender.cb' }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -1139,7 +1070,7 @@ describe('reliability pipeline integration', () => {
     const result = await rRelay.publish(
       'relay.agent.cb-ok',
       { data: 'success' },
-      { from: 'relay.sender.cb-ok' },
+      { from: 'relay.sender.cb-ok' }
     );
 
     expect(result.deliveredTo).toBe(1);
@@ -1149,7 +1080,7 @@ describe('reliability pipeline integration', () => {
     const result2 = await rRelay.publish(
       'relay.agent.cb-ok',
       { data: 'also-success' },
-      { from: 'relay.sender.cb-ok' },
+      { from: 'relay.sender.cb-ok' }
     );
 
     expect(result2.deliveredTo).toBe(1);
@@ -1173,22 +1104,14 @@ describe('reliability pipeline integration', () => {
     await fs.rm(path.join(info.maildirPath, 'tmp'), { recursive: true, force: true });
 
     // These publishes should fail at the Maildir write stage
-    await rRelay.publish(
-      'relay.agent.cb-fail',
-      { data: 'fail1' },
-      { from: 'relay.sender.write' },
-    );
-    await rRelay.publish(
-      'relay.agent.cb-fail',
-      { data: 'fail2' },
-      { from: 'relay.sender.write' },
-    );
+    await rRelay.publish('relay.agent.cb-fail', { data: 'fail1' }, { from: 'relay.sender.write' });
+    await rRelay.publish('relay.agent.cb-fail', { data: 'fail2' }, { from: 'relay.sender.write' });
 
     // After 2 failures (failureThreshold: 2), the circuit breaker should trip
     const result = await rRelay.publish(
       'relay.agent.cb-fail',
       { data: 'should-be-circuit-open' },
-      { from: 'relay.sender.write' },
+      { from: 'relay.sender.write' }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -1216,11 +1139,7 @@ describe('reliability pipeline integration', () => {
 
     // Publish 3 messages to reach 3/5 = 0.6 pressure (equal to warning threshold)
     for (let i = 0; i < 3; i++) {
-      await rRelay.publish(
-        'relay.agent.bp-signal',
-        { i },
-        { from: 'relay.sender.bp-signal' },
-      );
+      await rRelay.publish('relay.agent.bp-signal', { i }, { from: 'relay.sender.bp-signal' });
     }
 
     // At 3/5 = 0.6 >= pressureWarningAt (0.6), a backpressure warning signal should be emitted
@@ -1233,7 +1152,7 @@ describe('reliability pipeline integration', () => {
     await rRelay.publish(
       'relay.agent.bp-signal',
       { data: 'trigger-signal' },
-      { from: 'relay.sender.bp-signal' },
+      { from: 'relay.sender.bp-signal' }
     );
 
     expect(signals.length).toBeGreaterThanOrEqual(1);
@@ -1260,7 +1179,7 @@ describe('reliability pipeline integration', () => {
     const result = await rRelay.publish(
       'relay.agent.pressure.a',
       { data: 'pressure-test' },
-      { from: 'relay.sender.pressure' },
+      { from: 'relay.sender.pressure' }
     );
 
     // mailboxPressure should be included with pressure for endpoint A
@@ -1285,18 +1204,14 @@ describe('reliability pipeline integration', () => {
 
     // Fill mailbox to capacity
     for (let i = 0; i < 2; i++) {
-      await rRelay.publish(
-        'relay.agent.no-dlq',
-        { i },
-        { from: 'relay.sender.no-dlq' },
-      );
+      await rRelay.publish('relay.agent.no-dlq', { i }, { from: 'relay.sender.no-dlq' });
     }
 
     // This message should be rejected by backpressure
     const result = await rRelay.publish(
       'relay.agent.no-dlq',
       { data: 'rejected' },
-      { from: 'relay.sender.no-dlq' },
+      { from: 'relay.sender.no-dlq' }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -1328,7 +1243,7 @@ describe('reliability pipeline integration', () => {
     const result = await rRelay.publish(
       'relay.agent.disabled',
       { data: 'normal' },
-      { from: 'relay.sender.disabled' },
+      { from: 'relay.sender.disabled' }
     );
 
     expect(result.deliveredTo).toBe(1);
@@ -1346,7 +1261,7 @@ describe('reliability pipeline integration', () => {
     const result = await rRelay.publish(
       'relay.agent.budget-after-reliability',
       { data: 'expired' },
-      { from: 'relay.sender.budget', budget: { ttl: Date.now() - 1000 } },
+      { from: 'relay.sender.budget', budget: { ttl: Date.now() - 1000 } }
     );
 
     expect(result.deliveredTo).toBe(0);
@@ -1372,11 +1287,7 @@ describe('reliability pipeline integration', () => {
 
     // Fill endpoint A's mailbox to capacity (no subscriber, messages stay in new/)
     for (let i = 0; i < 2; i++) {
-      await rRelay.publish(
-        'relay.agent.multi.a',
-        { i },
-        { from: 'relay.sender.multi' },
-      );
+      await rRelay.publish('relay.agent.multi.a', { i }, { from: 'relay.sender.multi' });
     }
 
     // Now publish to both endpoints at once using a subscriber on endpoint B
@@ -1389,19 +1300,21 @@ describe('reliability pipeline integration', () => {
     const resultA = await rRelay.publish(
       'relay.agent.multi.a',
       { target: 'a' },
-      { from: 'relay.sender.multi' },
+      { from: 'relay.sender.multi' }
     );
 
     const resultB = await rRelay.publish(
       'relay.agent.multi.b',
       { target: 'b' },
-      { from: 'relay.sender.multi' },
+      { from: 'relay.sender.multi' }
     );
 
     // Endpoint A should be rejected by backpressure
     expect(resultA.deliveredTo).toBe(0);
     expect(resultA.rejected).toBeDefined();
-    expect(resultA.rejected!.some((r) => r.reason === 'backpressure' && r.endpointHash === infoA.hash)).toBe(true);
+    expect(
+      resultA.rejected!.some((r) => r.reason === 'backpressure' && r.endpointHash === infoA.hash)
+    ).toBe(true);
 
     // Endpoint B should be delivered successfully
     expect(resultB.deliveredTo).toBe(1);
@@ -1428,7 +1341,7 @@ describe('reliability pipeline integration', () => {
       const result = await relayWithAdapter.publish(
         'relay.agent.test-session',
         { content: 'hello' },
-        { from: 'relay.test.sender' },
+        { from: 'relay.test.sender' }
       );
 
       expect(result.deliveredTo).toBe(1);
@@ -1436,7 +1349,7 @@ describe('reliability pipeline integration', () => {
       expect(mockAdapter.deliver).toHaveBeenCalledWith(
         'relay.agent.test-session',
         expect.objectContaining({ subject: 'relay.agent.test-session' }),
-        undefined,
+        undefined
       );
 
       await relayWithAdapter.close();
@@ -1457,7 +1370,7 @@ describe('reliability pipeline integration', () => {
       const result = await relayMixed.publish(
         'relay.agent.test-session',
         { content: 'hello' },
-        { from: 'relay.test.sender' },
+        { from: 'relay.test.sender' }
       );
 
       expect(result.deliveredTo).toBe(2); // Maildir + adapter
@@ -1482,7 +1395,7 @@ describe('reliability pipeline integration', () => {
       const result = await relayFailing.publish(
         'relay.agent.fail-session',
         { content: 'hello' },
-        { from: 'relay.test.sender' },
+        { from: 'relay.test.sender' }
       );
 
       expect(result.deliveredTo).toBe(0);
@@ -1507,7 +1420,7 @@ describe('reliability pipeline integration', () => {
       const result = await relayPartial.publish(
         'relay.agent.partial',
         { content: 'hello' },
-        { from: 'relay.test.sender' },
+        { from: 'relay.test.sender' }
       );
 
       expect(result.deliveredTo).toBe(1); // Maildir succeeded
@@ -1532,12 +1445,16 @@ describe('reliability pipeline integration', () => {
         adapterContextBuilder: () => mockContext,
       });
 
-      await relayWithContext.publish('relay.agent.ctx', { content: 'hi' }, { from: 'relay.test.sender' });
+      await relayWithContext.publish(
+        'relay.agent.ctx',
+        { content: 'hi' },
+        { from: 'relay.test.sender' }
+      );
 
       expect(mockAdapter.deliver).toHaveBeenCalledWith(
         'relay.agent.ctx',
         expect.any(Object),
-        mockContext,
+        mockContext
       );
 
       await relayWithContext.close();
@@ -1547,7 +1464,7 @@ describe('reliability pipeline integration', () => {
       const result = await relay.publish(
         'relay.test.no-adapter',
         { content: 'hello' },
-        { from: 'relay.test.sender' },
+        { from: 'relay.test.sender' }
       );
 
       expect(result.adapterResult).toBeUndefined();
@@ -1583,14 +1500,14 @@ describe('trace store integration', () => {
     await traceRelay.publish(
       'relay.test.subject',
       { content: 'hello' },
-      { from: 'relay.test.sender', replyTo: 'relay.test.sender' },
+      { from: 'relay.test.sender', replyTo: 'relay.test.sender' }
     );
 
     expect(mockTraceStore.insertSpan).toHaveBeenCalledWith(
       expect.objectContaining({
         subject: 'relay.test.subject',
         status: 'delivered',
-      }),
+      })
     );
   });
 
@@ -1598,13 +1515,13 @@ describe('trace store integration', () => {
     await traceRelay.publish(
       'relay.nowhere.subject',
       { content: 'lost' },
-      { from: 'relay.test.sender', replyTo: 'relay.test.sender' },
+      { from: 'relay.test.sender', replyTo: 'relay.test.sender' }
     );
 
     expect(mockTraceStore.insertSpan).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 'failed',
-      }),
+      })
     );
   });
 
@@ -1613,24 +1530,20 @@ describe('trace store integration', () => {
     const result = await traceRelay.publish(
       'relay.test.traceid',
       { content: 'trace' },
-      { from: 'relay.test.sender' },
+      { from: 'relay.test.sender' }
     );
 
     expect(mockTraceStore.insertSpan).toHaveBeenCalledWith(
       expect.objectContaining({
         messageId: result.messageId,
         traceId: result.messageId,
-      }),
+      })
     );
   });
 
   it('includes delivery metadata in trace span', async () => {
     await traceRelay.registerEndpoint('relay.test.meta');
-    await traceRelay.publish(
-      'relay.test.meta',
-      { content: 'meta' },
-      { from: 'relay.test.sender' },
-    );
+    await traceRelay.publish('relay.test.meta', { content: 'meta' }, { from: 'relay.test.sender' });
 
     const call = (mockTraceStore.insertSpan as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(call.metadata).toEqual(
@@ -1638,7 +1551,7 @@ describe('trace store integration', () => {
         deliveredTo: 1,
         rejectedCount: 0,
         hasAdapterResult: false,
-      }),
+      })
     );
     expect(typeof call.metadata.durationMs).toBe('number');
   });
@@ -1652,7 +1565,7 @@ describe('trace store integration', () => {
     const result = await traceRelay.publish(
       'relay.test.trace-error',
       { content: 'ok' },
-      { from: 'relay.test.sender' },
+      { from: 'relay.test.sender' }
     );
 
     expect(result.deliveredTo).toBe(1);
@@ -1662,11 +1575,7 @@ describe('trace store integration', () => {
   it('does not record trace span when traceStore is not provided', async () => {
     // Use the default relay (no traceStore)
     await relay.registerEndpoint('relay.test.no-trace');
-    await relay.publish(
-      'relay.test.no-trace',
-      { content: 'hello' },
-      { from: 'relay.test.sender' },
-    );
+    await relay.publish('relay.test.no-trace', { content: 'hello' }, { from: 'relay.test.sender' });
 
     // The mockTraceStore should not have been called since it belongs to traceRelay, not relay
     expect(mockTraceStore.insertSpan).not.toHaveBeenCalled();

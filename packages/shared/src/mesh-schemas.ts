@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
+import { AGENT_NAME_REGEX } from './validation.js';
 
 extendZodWithOpenApi(z);
 
@@ -57,11 +58,11 @@ export type AgentBudget = z.infer<typeof AgentBudgetSchema>;
  * Implicit grouping rules:
  * - `adapter: false` also disables Binding tools (`binding_list`, `binding_create`, `binding_delete`)
  * - `relay: false` also disables Trace tools (`relay_get_trace`, `relay_get_metrics`)
- * - Core tools (`ping`, `get_server_info`, `get_session_count`, `get_current_agent`) are always enabled
+ * - Core tools (`ping`, `get_server_info`, `get_session_count`, `get_agent`) are always enabled
  */
 export const EnabledToolGroupsSchema = z
   .object({
-    pulse: z.boolean().optional(),
+    tasks: z.boolean().optional(),
     relay: z.boolean().optional(),
     mesh: z.boolean().optional(),
     adapter: z.boolean().optional(),
@@ -74,6 +75,32 @@ export const EnabledToolGroupsSchema = z
   });
 
 export type EnabledToolGroups = z.infer<typeof EnabledToolGroupsSchema>;
+
+// === Agent Personality ===
+
+/** Personality trait levels (1-5 scale, default 3 = Balanced) */
+export const TraitsSchema = z
+  .object({
+    tone: z.number().int().min(1).max(5).default(3),
+    autonomy: z.number().int().min(1).max(5).default(3),
+    caution: z.number().int().min(1).max(5).default(3),
+    communication: z.number().int().min(1).max(5).default(3),
+    creativity: z.number().int().min(1).max(5).default(3),
+  })
+  .openapi('Traits');
+
+export type Traits = z.infer<typeof TraitsSchema>;
+
+/** Convention file injection toggles */
+export const ConventionsSchema = z
+  .object({
+    soul: z.boolean().default(true),
+    nope: z.boolean().default(true),
+    dorkosKnowledge: z.boolean().default(true),
+  })
+  .openapi('Conventions');
+
+export type Conventions = z.infer<typeof ConventionsSchema>;
 
 // === Agent Manifest ===
 
@@ -96,6 +123,8 @@ export const AgentManifestSchema = z
     personaEnabled: z.boolean().default(true).openapi({
       description: 'Whether persona text is injected into system prompt',
     }),
+    traits: TraitsSchema.optional(),
+    conventions: ConventionsSchema.optional(),
     color: z.string().optional().openapi({
       description: 'CSS color override for visual identity (e.g., "#6366f1")',
       example: '#6366f1',
@@ -103,6 +132,9 @@ export const AgentManifestSchema = z
     icon: z.string().optional().openapi({
       description: 'Emoji override for visual identity',
       example: '🤖',
+    }),
+    isSystem: z.boolean().default(false).optional().openapi({
+      description: 'System agents are auto-managed and cannot be deleted',
     }),
     enabledToolGroups: EnabledToolGroupsSchema,
   })
@@ -154,7 +186,6 @@ export type DiscoveryCandidate = z.infer<typeof DiscoveryCandidateSchema>;
 export const DenialRecordSchema = z
   .object({
     path: z.string().min(1),
-    strategy: z.string().min(1),
     reason: z.string().optional(),
     deniedBy: z.string().min(1),
     deniedAt: z.string().datetime(),
@@ -171,7 +202,7 @@ export const TopologyAgentSchema = AgentManifestSchema.extend({
   healthStatus: AgentHealthStatusSchema.default('stale'),
   relayAdapters: z.array(z.string()).default([]),
   relaySubject: z.string().nullable().default(null),
-  pulseScheduleCount: z.number().int().default(0),
+  taskCount: z.number().int().default(0),
   lastSeenAt: z.string().nullable().default(null),
   lastSeenEvent: z.string().nullable().default(null),
 }).openapi('TopologyAgent');
@@ -253,12 +284,28 @@ export const UpdateAgentRequestSchema = AgentManifestSchema.pick({
   namespace: true,
   persona: true,
   personaEnabled: true,
+  traits: true,
+  conventions: true,
   color: true,
   icon: true,
   enabledToolGroups: true,
-}).partial().openapi('UpdateAgentRequest');
+})
+  .partial()
+  .openapi('UpdateAgentRequest');
 
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
+
+/** Request body for PATCH /api/mesh/agents/:id/conventions — update convention file content and personality toggles. */
+export const UpdateAgentConventionsSchema = z
+  .object({
+    soulContent: z.string().max(4000).optional(),
+    nopeContent: z.string().max(2000).optional(),
+    traits: TraitsSchema.optional(),
+    conventions: ConventionsSchema.optional(),
+  })
+  .openapi('UpdateAgentConventions');
+
+export type UpdateAgentConventions = z.infer<typeof UpdateAgentConventionsSchema>;
 
 /** Request body for PUT /api/mesh/topology/access */
 export const UpdateAccessRuleRequestSchema = z
@@ -288,6 +335,21 @@ export const ResolveAgentsResponseSchema = z
   .openapi('ResolveAgentsResponse');
 
 export type ResolveAgentsResponse = z.infer<typeof ResolveAgentsResponseSchema>;
+
+/** Options for programmatic agent creation — used by CLI, client, and server creation pipeline. */
+export const CreateAgentOptionsSchema = z
+  .object({
+    name: z.string().regex(AGENT_NAME_REGEX, 'Kebab-case required'),
+    directory: z.string().optional(),
+    template: z.string().optional(),
+    description: z.string().optional(),
+    runtime: AgentRuntimeSchema.optional(),
+    traits: TraitsSchema.optional(),
+    conventions: ConventionsSchema.optional(),
+  })
+  .openapi('CreateAgentOptions');
+
+export type CreateAgentOptions = z.infer<typeof CreateAgentOptionsSchema>;
 
 /** Request body for POST /api/mesh/agents/create */
 export const CreateAgentRequestSchema = z
@@ -395,11 +457,28 @@ export const ScanProgressSchema = z
 export type ScanProgress = z.infer<typeof ScanProgressSchema>;
 
 /**
+ * Lightweight representation of an agent that was auto-imported from an
+ * existing `.dork/agent.json` during a discovery scan. Sent to the client
+ * so the onboarding flow can show already-configured agents.
+ */
+export interface ExistingAgent {
+  /** Absolute path to the agent's project directory. */
+  path: string;
+  /** Agent name from the manifest. */
+  name: string;
+  /** Agent runtime from the manifest. */
+  runtime: AgentRuntime;
+  /** Agent description from the manifest (may be empty). */
+  description: string;
+}
+
+/**
  * Transport-level discovery scan event — discriminated union of all event types
- * surfaced to the client. Intentionally omits `auto-import` (server-internal concern).
+ * surfaced to the client.
  */
 export type TransportScanEvent =
   | { type: 'candidate'; data: DiscoveryCandidate }
+  | { type: 'existing-agent'; data: ExistingAgent }
   | { type: 'progress'; data: ScanProgress }
   | { type: 'complete'; data: ScanProgress & { timedOut: boolean } }
   | { type: 'error'; data: { error: string } };

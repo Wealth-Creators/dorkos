@@ -38,6 +38,12 @@ vi.mock('../../services/core/tunnel-manager.js', () => ({
   },
 }));
 
+vi.mock('../../services/core/config-manager.js', () => ({
+  configManager: {
+    get: vi.fn().mockReturnValue(null),
+    set: vi.fn(),
+  },
+}));
 
 // Dynamically import after mocks are set up
 import request from 'supertest';
@@ -290,7 +296,9 @@ describe('Sessions Routes', () => {
     it('approves pending tool call', async () => {
       fakeRuntime.approveTool.mockReturnValue(true);
 
-      const res = await request(app).post(`/api/sessions/${S1}/approve`).send({ toolCallId: 'tc1' });
+      const res = await request(app)
+        .post(`/api/sessions/${S1}/approve`)
+        .send({ toolCallId: 'tc1' });
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: true });
@@ -300,7 +308,9 @@ describe('Sessions Routes', () => {
     it('returns 404 when no pending approval', async () => {
       fakeRuntime.approveTool.mockReturnValue(false);
 
-      const res = await request(app).post(`/api/sessions/${S1}/approve`).send({ toolCallId: 'tc1' });
+      const res = await request(app)
+        .post(`/api/sessions/${S1}/approve`)
+        .send({ toolCallId: 'tc1' });
 
       expect(res.status).toBe(404);
       expect(res.body.error).toBe('No pending approval');
@@ -336,20 +346,36 @@ describe('Sessions Routes', () => {
     /** Helper: make an SSE request with AbortController so it doesn't hang. */
     async function sseRequest(url: string) {
       const controller = new AbortController();
-      const responsePromise = new Promise<{ status: number; headers: Record<string, string>; body: string }>((resolve) => {
+      const responsePromise = new Promise<{
+        status: number;
+        headers: Record<string, string>;
+        body: string;
+      }>((resolve) => {
         const req = request(app).get(url);
         // Supertest doesn't support AbortController natively, so use .buffer(true) + custom parser
-        req.buffer(true).parse(
-          (res: { statusCode: number; headers: Record<string, string>; on: (event: string, handler: (chunk: Buffer) => void) => void }, callback: (err: null, data: string) => void) => {
-            let data = '';
-            res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-            // Give the route enough time to call watchSession and write initial SSE events
-            setTimeout(() => {
-              resolve({ status: res.statusCode, headers: res.headers, body: data });
-              callback(null, data);
-            }, 150);
-          },
-        ).end();
+        req
+          .buffer(true)
+          .parse(
+            (
+              res: {
+                statusCode: number;
+                headers: Record<string, string>;
+                on: (event: string, handler: (chunk: Buffer) => void) => void;
+              },
+              callback: (err: null, data: string) => void
+            ) => {
+              let data = '';
+              res.on('data', (chunk: Buffer) => {
+                data += chunk.toString();
+              });
+              // Give the route enough time to call watchSession and write initial SSE events
+              setTimeout(() => {
+                resolve({ status: res.statusCode, headers: res.headers, body: data });
+                callback(null, data);
+              }, 150);
+            }
+          )
+          .end();
       });
       const result = await responsePromise;
       controller.abort();
@@ -377,7 +403,7 @@ describe('Sessions Routes', () => {
         S1,
         expect.any(String),
         expect.any(Function),
-        undefined,
+        undefined
       );
     });
 
@@ -393,7 +419,7 @@ describe('Sessions Routes', () => {
         INTERNAL_ID,
         expect.any(String),
         expect.any(Function),
-        undefined,
+        undefined
       );
     });
 
@@ -407,7 +433,7 @@ describe('Sessions Routes', () => {
         S1,
         expect.any(String),
         expect.any(Function),
-        undefined,
+        undefined
       );
     });
   });
@@ -445,10 +471,7 @@ describe('Sessions Routes', () => {
 
       await request(app).get(`/api/sessions/${S1}/messages`);
 
-      expect(fakeRuntime.getMessageHistory).toHaveBeenCalledWith(
-        expect.any(String),
-        S1
-      );
+      expect(fakeRuntime.getMessageHistory).toHaveBeenCalledWith(expect.any(String), S1);
     });
 
     it('GET /:id uses internal session ID for metadata lookup', async () => {
@@ -464,10 +487,7 @@ describe('Sessions Routes', () => {
       const res = await request(app).get(`/api/sessions/${S1}`);
 
       expect(res.status).toBe(200);
-      expect(fakeRuntime.getSession).toHaveBeenCalledWith(
-        expect.any(String),
-        'sdk-uuid-456'
-      );
+      expect(fakeRuntime.getSession).toHaveBeenCalledWith(expect.any(String), 'sdk-uuid-456');
     });
 
     it('GET /:id/tasks uses internal session ID', async () => {
@@ -475,10 +495,7 @@ describe('Sessions Routes', () => {
 
       await request(app).get(`/api/sessions/${S1}/tasks`);
 
-      expect(fakeRuntime.getSessionTasks).toHaveBeenCalledWith(
-        expect.any(String),
-        'sdk-uuid-789'
-      );
+      expect(fakeRuntime.getSessionTasks).toHaveBeenCalledWith(expect.any(String), 'sdk-uuid-789');
     });
   });
 
@@ -512,7 +529,9 @@ describe('Sessions Routes', () => {
         new BoundaryError('Access denied: path outside directory boundary', 'OUTSIDE_BOUNDARY')
       );
 
-      const res = await request(app).get(`/api/sessions/${S1}/messages`).query({ cwd: '/tmp/evil' });
+      const res = await request(app)
+        .get(`/api/sessions/${S1}/messages`)
+        .query({ cwd: '/tmp/evil' });
 
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('OUTSIDE_BOUNDARY');
@@ -540,6 +559,82 @@ describe('Sessions Routes', () => {
 
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('NULL_BYTE');
+    });
+  });
+
+  // ---- POST /api/sessions/:id/fork ----
+
+  describe('POST /api/sessions/:id/fork', () => {
+    it('returns 400 for invalid session ID', async () => {
+      const res = await request(app).post('/api/sessions/not-a-uuid/fork').send({});
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_SESSION_ID');
+    });
+
+    it('forks a session and returns 201 with new session', async () => {
+      const forkedSession = {
+        id: '00000000-0000-4000-8000-000000000099',
+        title: 'Test conversation (fork)',
+        createdAt: '2024-01-01',
+        updatedAt: '2024-01-01',
+        permissionMode: 'default' as const,
+      };
+      fakeRuntime.forkSession.mockResolvedValue(forkedSession);
+
+      const res = await request(app).post(`/api/sessions/${S1}/fork`).send({});
+      expect(res.status).toBe(201);
+      expect(res.body).toEqual(forkedSession);
+      expect(fakeRuntime.forkSession).toHaveBeenCalledWith(expect.any(String), S1, {});
+    });
+
+    it('passes upToMessageId and title to runtime', async () => {
+      fakeRuntime.forkSession.mockResolvedValue({
+        id: '00000000-0000-4000-8000-000000000099',
+        title: 'Custom fork',
+        createdAt: '2024-01-01',
+        updatedAt: '2024-01-01',
+        permissionMode: 'default' as const,
+      });
+
+      await request(app)
+        .post(`/api/sessions/${S1}/fork`)
+        .send({ upToMessageId: 'msg-123', title: 'Custom fork' });
+
+      expect(fakeRuntime.forkSession).toHaveBeenCalledWith(expect.any(String), S1, {
+        upToMessageId: 'msg-123',
+        title: 'Custom fork',
+      });
+    });
+
+    it('returns 404 when fork fails (session not found)', async () => {
+      fakeRuntime.forkSession.mockResolvedValue(null);
+
+      const res = await request(app).post(`/api/sessions/${S1}/fork`).send({});
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('FORK_FAILED');
+    });
+
+    it('returns 500 when runtime throws', async () => {
+      fakeRuntime.forkSession.mockRejectedValue(new Error('SDK crash'));
+
+      const res = await request(app).post(`/api/sessions/${S1}/fork`).send({});
+      expect(res.status).toBe(500);
+      expect(res.body.code).toBe('FORK_ERROR');
+    });
+
+    it('translates session ID via getInternalSessionId', async () => {
+      const internalId = '00000000-0000-4000-8000-internal00001';
+      fakeRuntime.getInternalSessionId.mockReturnValue(internalId);
+      fakeRuntime.forkSession.mockResolvedValue({
+        id: '00000000-0000-4000-8000-forked0000001',
+        title: 'Forked',
+        createdAt: '2024-01-01',
+        updatedAt: '2024-01-01',
+        permissionMode: 'default' as const,
+      });
+
+      await request(app).post(`/api/sessions/${S1}/fork`).send({});
+      expect(fakeRuntime.forkSession).toHaveBeenCalledWith(expect.any(String), internalId, {});
     });
   });
 });

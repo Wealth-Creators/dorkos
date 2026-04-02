@@ -17,10 +17,18 @@ import type { UserConfig } from '@dorkos/shared/config-schema';
 
 const MOCK_CONFIG: UserConfig = {
   version: 1,
-  server: { port: 4242, cwd: null, boundary: null },
-  tunnel: { enabled: false, domain: null, authtoken: null, auth: null },
-  ui: { theme: 'system' },
-};
+  server: { port: 4242, cwd: null, boundary: null, open: true },
+  tunnel: {
+    enabled: false,
+    domain: null,
+    authtoken: null,
+    auth: null,
+    passcodeEnabled: false,
+    passcodeHash: null,
+    passcodeSalt: null,
+  },
+  ui: { theme: 'system', dismissedUpgradeVersions: [] },
+} as unknown as UserConfig;
 
 /**
  * Create a mock ConfigStore for testing.
@@ -70,7 +78,9 @@ describe('runInitWizard', () => {
       expect(input).not.toHaveBeenCalled();
       expect(select).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Config initialized with defaults'));
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Config initialized with defaults')
+      );
 
       logSpy.mockRestore();
     });
@@ -116,12 +126,12 @@ describe('runInitWizard', () => {
       fs.writeFileSync(path.join(tmpDir, 'config.json'), '{}');
 
       vi.mocked(confirm)
-        .mockResolvedValueOnce(true)  // overwrite confirmation
+        .mockResolvedValueOnce(true) // overwrite confirmation
         .mockResolvedValueOnce(false); // tunnel enabled
 
       vi.mocked(input)
         .mockResolvedValueOnce('4242') // port
-        .mockResolvedValueOnce('');     // cwd
+        .mockResolvedValueOnce(''); // cwd
 
       vi.mocked(select).mockResolvedValueOnce('system'); // theme
 
@@ -138,8 +148,8 @@ describe('runInitWizard', () => {
       const store = createMockStore();
 
       vi.mocked(input)
-        .mockResolvedValueOnce('8080')   // port
-        .mockResolvedValueOnce('');       // cwd (empty)
+        .mockResolvedValueOnce('8080') // port
+        .mockResolvedValueOnce(''); // cwd (empty)
 
       vi.mocked(select).mockResolvedValueOnce('dark'); // theme
       vi.mocked(confirm).mockResolvedValueOnce(false); // tunnel enabled
@@ -160,11 +170,11 @@ describe('runInitWizard', () => {
       const store = createMockStore();
 
       vi.mocked(input)
-        .mockResolvedValueOnce('4242')             // port
+        .mockResolvedValueOnce('4242') // port
         .mockResolvedValueOnce('/home/user/proj'); // cwd
 
       vi.mocked(select).mockResolvedValueOnce('system'); // theme
-      vi.mocked(confirm).mockResolvedValueOnce(false);   // tunnel
+      vi.mocked(confirm).mockResolvedValueOnce(false); // tunnel
 
       await runInitWizard({ yes: false, dorkHome: tmpDir, store });
 
@@ -179,17 +189,15 @@ describe('runInitWizard', () => {
 
       vi.mocked(input)
         .mockResolvedValueOnce('4242') // port
-        .mockResolvedValueOnce('');     // cwd (empty)
+        .mockResolvedValueOnce(''); // cwd (empty)
 
       vi.mocked(select).mockResolvedValueOnce('light'); // theme
-      vi.mocked(confirm).mockResolvedValueOnce(true);   // tunnel
+      vi.mocked(confirm).mockResolvedValueOnce(true); // tunnel
 
       await runInitWizard({ yes: false, dorkHome: tmpDir, store });
 
       // Verify server.cwd was NOT called (only port, theme, tunnel)
-      const cwdCalls = vi.mocked(store.setDot).mock.calls.filter(
-        ([key]) => key === 'server.cwd'
-      );
+      const cwdCalls = vi.mocked(store.setDot).mock.calls.filter(([key]) => key === 'server.cwd');
       expect(cwdCalls).toHaveLength(0);
 
       logSpy.mockRestore();
@@ -201,7 +209,7 @@ describe('runInitWizard', () => {
 
       vi.mocked(input)
         .mockResolvedValueOnce('4242') // port
-        .mockResolvedValueOnce('   ');  // cwd (whitespace only)
+        .mockResolvedValueOnce('   '); // cwd (whitespace only)
 
       vi.mocked(select).mockResolvedValueOnce('dark'); // theme
       vi.mocked(confirm).mockResolvedValueOnce(false); // tunnel
@@ -209,9 +217,7 @@ describe('runInitWizard', () => {
       await runInitWizard({ yes: false, dorkHome: tmpDir, store });
 
       // Verify server.cwd was NOT called
-      const cwdCalls = vi.mocked(store.setDot).mock.calls.filter(
-        ([key]) => key === 'server.cwd'
-      );
+      const cwdCalls = vi.mocked(store.setDot).mock.calls.filter(([key]) => key === 'server.cwd');
       expect(cwdCalls).toHaveLength(0);
 
       logSpy.mockRestore();
@@ -222,18 +228,16 @@ describe('runInitWizard', () => {
       const store = createMockStore();
 
       vi.mocked(input)
-        .mockResolvedValueOnce('4242')    // port
+        .mockResolvedValueOnce('4242') // port
         .mockResolvedValueOnce('../test'); // relative cwd
 
       vi.mocked(select).mockResolvedValueOnce('system'); // theme
-      vi.mocked(confirm).mockResolvedValueOnce(false);   // tunnel
+      vi.mocked(confirm).mockResolvedValueOnce(false); // tunnel
 
       await runInitWizard({ yes: false, dorkHome: tmpDir, store });
 
       // Verify path was resolved (not just passed through)
-      const cwdCalls = vi.mocked(store.setDot).mock.calls.filter(
-        ([key]) => key === 'server.cwd'
-      );
+      const cwdCalls = vi.mocked(store.setDot).mock.calls.filter(([key]) => key === 'server.cwd');
       expect(cwdCalls).toHaveLength(1);
       const resolvedPath = cwdCalls[0][1] as string;
       expect(path.isAbsolute(resolvedPath)).toBe(true);
@@ -247,10 +251,10 @@ describe('runInitWizard', () => {
 
       vi.mocked(input)
         .mockResolvedValueOnce('4242') // port
-        .mockResolvedValueOnce('');     // cwd
+        .mockResolvedValueOnce(''); // cwd
 
       vi.mocked(select).mockResolvedValueOnce('light'); // theme
-      vi.mocked(confirm).mockResolvedValueOnce(true);   // tunnel enabled
+      vi.mocked(confirm).mockResolvedValueOnce(true); // tunnel enabled
 
       await runInitWizard({ yes: false, dorkHome: tmpDir, store });
 
@@ -265,10 +269,10 @@ describe('runInitWizard', () => {
 
       vi.mocked(input)
         .mockResolvedValueOnce('3000') // port as string
-        .mockResolvedValueOnce('');     // cwd
+        .mockResolvedValueOnce(''); // cwd
 
       vi.mocked(select).mockResolvedValueOnce('system'); // theme
-      vi.mocked(confirm).mockResolvedValueOnce(false);   // tunnel
+      vi.mocked(confirm).mockResolvedValueOnce(false); // tunnel
 
       await runInitWizard({ yes: false, dorkHome: tmpDir, store });
 

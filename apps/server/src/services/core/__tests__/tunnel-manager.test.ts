@@ -9,7 +9,14 @@ vi.mock('@ngrok/ngrok', () => ({
   forward: vi.fn().mockResolvedValue(mockListener),
 }));
 
+vi.mock('../config-manager.js', () => ({
+  configManager: {
+    get: vi.fn().mockReturnValue({ passcodeEnabled: false, passcodeHash: null }),
+  },
+}));
+
 import { TunnelManager } from '../tunnel-manager.js';
+import { configManager } from '../config-manager.js';
 
 let manager: TunnelManager;
 
@@ -29,6 +36,7 @@ describe('TunnelManager', () => {
       authEnabled: false,
       tokenConfigured: false,
       domain: null,
+      passcodeEnabled: false,
     });
   });
 
@@ -40,7 +48,7 @@ describe('TunnelManager', () => {
       expect.objectContaining({
         addr: 4242,
         authtoken_from_env: true,
-      }),
+      })
     );
   });
 
@@ -94,6 +102,47 @@ describe('TunnelManager', () => {
     expect(manager.status.url).toBe('https://test.ngrok.io');
   });
 
+  describe('passcodeEnabled', () => {
+    it('reports passcodeEnabled true when config has both passcodeEnabled and passcodeHash', () => {
+      vi.mocked(configManager.get).mockReturnValue({
+        passcodeEnabled: true,
+        passcodeHash: 'abc123',
+      } as ReturnType<typeof configManager.get>);
+
+      expect(manager.status.passcodeEnabled).toBe(true);
+    });
+
+    it('reports passcodeEnabled false when passcodeHash is missing', () => {
+      vi.mocked(configManager.get).mockReturnValue({
+        passcodeEnabled: true,
+        passcodeHash: null,
+      } as ReturnType<typeof configManager.get>);
+
+      expect(manager.status.passcodeEnabled).toBe(false);
+    });
+
+    it('reports passcodeEnabled false when config flag is false', () => {
+      vi.mocked(configManager.get).mockReturnValue({
+        passcodeEnabled: false,
+        passcodeHash: 'abc123',
+      } as ReturnType<typeof configManager.get>);
+
+      expect(manager.status.passcodeEnabled).toBe(false);
+    });
+  });
+
+  describe('refreshStatus', () => {
+    it('emits status_change event', () => {
+      const handler = vi.fn();
+      manager.on('status_change', handler);
+
+      manager.refreshStatus();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ passcodeEnabled: false }));
+    });
+  });
+
   describe('EventEmitter', () => {
     it('emits status_change on start', async () => {
       const handler = vi.fn();
@@ -102,7 +151,7 @@ describe('TunnelManager', () => {
       await manager.start({ port: 4242 });
 
       expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({ enabled: true, connected: true, url: 'https://test.ngrok.io' }),
+        expect.objectContaining({ enabled: true, connected: true, url: 'https://test.ngrok.io' })
       );
     });
 
@@ -115,7 +164,7 @@ describe('TunnelManager', () => {
       await manager.stop();
 
       expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({ enabled: false, connected: false, url: null }),
+        expect.objectContaining({ enabled: false, connected: false, url: null })
       );
     });
 
@@ -123,10 +172,12 @@ describe('TunnelManager', () => {
       const ngrok = await import('@ngrok/ngrok');
       let onStatusChange: ((addr: string, status: string) => void) | undefined;
 
-      (ngrok.forward as ReturnType<typeof vi.fn>).mockImplementation(async (opts: Record<string, unknown>) => {
-        onStatusChange = opts.on_status_change as (addr: string, status: string) => void;
-        return mockListener;
-      });
+      (ngrok.forward as ReturnType<typeof vi.fn>).mockImplementation(
+        async (opts: Record<string, unknown>) => {
+          onStatusChange = opts.on_status_change as (addr: string, status: string) => void;
+          return mockListener;
+        }
+      );
 
       const handler = vi.fn();
       manager.on('status_change', handler);
@@ -143,10 +194,12 @@ describe('TunnelManager', () => {
       const ngrok = await import('@ngrok/ngrok');
       let onStatusChange: ((addr: string, status: string) => void) | undefined;
 
-      (ngrok.forward as ReturnType<typeof vi.fn>).mockImplementation(async (opts: Record<string, unknown>) => {
-        onStatusChange = opts.on_status_change as (addr: string, status: string) => void;
-        return mockListener;
-      });
+      (ngrok.forward as ReturnType<typeof vi.fn>).mockImplementation(
+        async (opts: Record<string, unknown>) => {
+          onStatusChange = opts.on_status_change as (addr: string, status: string) => void;
+          return mockListener;
+        }
+      );
 
       const handler = vi.fn();
       manager.on('status_change', handler);

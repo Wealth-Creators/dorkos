@@ -15,6 +15,346 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.30.0] - 2026-03-31
+
+> Discovery and documentation refinement — unified scan actions, onboarding polish, and a full contributing guide refresh bring consistency to both the agent discovery experience and developer documentation.
+
+### Added
+
+- Unify Skip/Deny actions and add scan options to onboarding
+
+### Changed
+
+- Update contributing guides, external docs, and CLAUDE.md
+- Fix review issues — FSD compliance, DRY extractions, resetActed
+- Unify scan UI — fix DiscoveryView parity, extract shared utilities
+- Complete Pulse→Tasks terminology migration and improve docs infrastructure
+- Update CLI README and config guide for Tasks rename and new features
+
+### Fixed
+
+- Add resetActed to handleRescan dependency array
+- Surface existing agents during onboarding scan
+- Update SettingsDialog tests after Remote indicator relocation
+
+---
+
+## [0.29.0] - 2026-03-30
+
+> Agent fleet management and UI refinement — DataTable-powered agent lists, command palette agent settings, breadcrumb navigation, and a streamlined dashboard bring polish and power to the operator experience.
+
+### Added
+
+- Enhance command palette with agent settings dialog
+- Convert agents list to DataTable with responsive column hiding
+- Auto-focus prompt textarea on session change
+- Add Table primitives, DataTable, and Dev Playground showcase
+- Add AgentIdentity to shortcut chips row
+- Add dedicated Onboarding page to dev playground
+
+### Changed
+
+- Consolidate agent identity to chat input, add breadcrumb nav
+- Reorganize Dev Playground sidebar into domain-oriented groups
+- Relocate Remote indicator from status bar to sidebar footer
+- Streamline dashboard — remove Active Sessions, fix status alignment, unify activity feed
+- Polish onboarding flow UI and extract OnboardingNavBar
+
+### Fixed
+
+- Remove unused AgentVisual type import from AppShell
+- Remote-access promo opens TunnelDialog directly
+- Align sidebar back chevron with content below
+- Use dynamic agent name in chat input placeholder
+- Improve dev playground overview card layout
+- Expand tilde paths in boundary validation and add startup diagnostics
+- Cast spawn proc through EventEmitter to fix CI type resolution
+- Remove unnecessary ChildProcess cast that fails in CI Node 20
+
+---
+
+## [0.28.0] - 2026-03-30
+
+> Tasks redesign, DorkBot system agent, and the extensibility platform matures — file-based task definitions, manifest-driven settings, extension hooks, session forking, and MCP elicitation bring DorkOS closer to a fully autonomous coordination layer.
+
+### Added
+
+- Redesign Tasks system — rename Pulse→Tasks, add file-based definitions, and make scheduling optional for on-demand tasks
+- Replace Damon with DorkBot as the sole system agent
+- Add MCP elicitation UI for auth flows and form inputs
+- Add session forking via SDK forkSession() and session rename via renameSession()
+- Add server-side extension hooks with encrypted secrets and Linear reference extension
+- Add manifest-driven settings forms with placeholder hints and grouped sections
+- Auto-generate settings UI from extension manifests
+- Add plugin hot-reload via reloadPlugins()
+- Show available subagents via supportedAgents()
+- Evolve linear-issues into Loop-aware dashboard
+- Add commands for product management and issue handling
+- Add 5-level error handling hierarchy with Dev Playground showcase
+- Display context usage meter with category breakdown tooltip for token visibility
+- Decouple chat state from React lifecycle into session-keyed Zustand store
+- Add openBlank() to task template dialog store
+- Fix prompt suggestions, add api_retry events, and effort level controls
+- Add spec manifest management system
+
+### Changed
+
+- Extract PageHeader for consistent top-level route headers
+- Extract SessionStore, RuntimeCache, and constants from ClaudeCodeRuntime
+- Extract extension-manager into focused collaborators
+- Extract setting field renderers to separate file
+- Document getSubagents() across architecture, API, and data-fetching guides
+- Update docs and templates for auto-generated settings tabs
+
+### Fixed
+
+- Eliminate setState-during-render errors on session and tasks pages
+- Resolve all 15 client lint warnings
+- Update stale test mocks after Tasks rename (Pulse→Tasks)
+- Tighten activity filter bar chip sizing and spacing
+- Exclude archived issues and fix query complexity in Linear queries
+- Unify dashboard section styling for visual consistency
+- Add padding to collapsible settings groups and vertical layout for wide controls
+- Expose React globally for extension runtime and fix Linear example import
+- Clean up lint warnings and fix site build frontmatter
+- Fork UX feedback, tests, and tooltip accessibility
+- Spread process.env in SDK env option to prevent code 127
+- Load local settings so project-level plugin MCP servers are discovered
+
+---
+
+## [0.27.0] - 2026-03-28
+
+> Canvas as a first-class surface — persistent, toggleable, and mobile-ready.
+
+### Added
+
+- Add canvas toggle button in session header with `Cmd+.` keyboard shortcut and command palette action
+- Persist canvas state (open/closed, content, panel width) per session in localStorage — survives page refreshes and session switches
+- Show dot indicator on canvas toggle when content is available but panel is closed
+
+### Changed
+
+- Remove "New Session" and "Schedule" buttons from dashboard header to reduce clutter
+
+### Fixed
+
+- Match canvas background to sidebar color (`bg-sidebar`) for visual consistency
+- Replace chunky 6px resize handle with a subtle 1px line and 8px hit target
+- Render canvas as a full-width Sheet on mobile instead of an unusable side panel
+
+---
+
+## [0.26.0] - 2026-03-28
+
+> Network resilience and operator onboarding — faster SSE streams with custom headers and a welcoming first-time experience.
+
+### Added
+
+- Upgrade to fetch-based SSE transport with custom headers, HTTP/2 multiplexing, and retry backoff for more reliable streaming
+- Consolidate all SSE connections into a unified /api/events stream for simpler client integration and improved sync reliability
+- Add splash screen with onboarding flow and command palette quick-launch entry for faster agent discovery
+
+### Changed
+
+- Update architecture guide to reflect fetch-based SSE transport implementation
+
+---
+
+## [0.25.0] - 2026-03-27
+
+> Extensibility platform and composable filtering — agents can now build and install extensions, and every list surface gets URL-synced, filterable, sortable data views.
+
+### Added
+
+- Build extensions that agents install, configure, and run — the extensibility platform spans agent UI control, extension point registry, extension system core, and agent-built extensions (Phases 1–4)
+- Filter and sort agent lists with a composable filter system — text search, enum pills, date ranges, boolean toggles, and URL-synced state
+- Redesign Remote Access dialog with progressive disclosure
+- Show the default agent in the dashboard sidebar
+- Add AgentAvatar and AgentIdentity primitives for consistent agent visual identity
+- Add /adr:review command for ADR lifecycle management
+- Absorb superpowers plugin into first-party skills and agents
+- Add dedicated Feature Promos page to dev playground
+
+### Changed
+
+- Migrate agents list to the composable filter system
+- Consolidate agent display to use shared AgentAvatar primitive
+- Simplify AgentNode, extract sidebar hooks, update session list
+- Unify dev playground with PAGE_CONFIG and shared layout
+- Extract resolveAgentVisual for consistent agent visual identity
+- Update README screenshot to dark mode with real chat session
+- Reconcile contributing and doc guides for extensions and FilterBar
+
+### Fixed
+
+- Wire UI tools to session and align sidebar tab schema
+- Harden extension system security and fix flaky tests
+- Display human-readable labels for dateRange, boolean, and numericRange filters
+- Fix dynamic enum deserialize and color dot rendering in FilterBar
+- Resolve workspace packages in electron-vite renderer build
+- Alias @dorkos/shared subpaths to source for CI compat
+- Add better-sqlite3 as direct dependency for packaging
+- Update SchedulesView tests to match rewritten component
+- Provide TanStack Router context in DevPlayground
+
+---
+
+## [0.24.0] - 2026-03-25
+
+> Desktop app, tunnel security, and resilience — native macOS distribution, passcode-gated remote access, and SSE auto-reconnect harden the operator experience.
+
+### Added
+
+- Add 6-digit passcode gate for remote access
+- Add Electron desktop app for native macOS distribution
+- Add status bar inline management with scroll and configure popover
+- Generalize subagent system to background task model with stopTask support
+- Add rotating placeholder hints in chat input
+- Move version display from status bar to sidebar footer
+- Add declarative feature promo system with contextual discovery
+- Add SSE resilience infrastructure with connection health UI
+- Display friendly tool names in ToolApproval
+- Add relay outbound awareness for agent-initiated messaging
+
+### Changed
+
+- Remove unnecessary border from SidebarFooterBar component
+- Reconcile harness inventory counts with actual files
+
+### Fixed
+
+- Target arm64, externalize manifest, skip codesign discovery
+- Remove postinstall electron-rebuild, add dual-mode server spawning
+- Exclude desktop from default dev, approve electron builds
+
+---
+
+## [0.23.0] - 2026-03-23
+
+> Task visibility and execution awareness — progress bars, dependencies, and animated background indicators bring your agent fleet to life.
+
+### Added
+
+- View task dependencies and progress at a glance — TaskListPanel now displays real-time progress bars, dependency-aware sorting (blocked tasks dimmed), and click-to-expand detail view with description, owner, elapsed time, and dependency links
+- See running background agents with animated indicator showing active subagent execution
+- Poll tasks automatically when background refresh is enabled — subagent todo updates appear without manual reload
+
+### Changed
+
+- Extract shared `useTabVisibility` hook for consistent tab-aware polling across features
+- Decompose TaskListPanel into focused sub-components (TaskProgressHeader, TaskRow, TaskDetail, TaskActiveForm)
+
+### Fixed
+
+- Fix indicator bar exit animation and always-render pattern
+- Fix Rules of Hooks violation in TaskListPanel where useCallback was called after conditional return
+
+---
+
+## [0.22.0] - 2026-03-23
+
+> TodoWrite task system, speculative sessions, and brand icon refresh
+
+### Added
+
+- Add TodoWrite support to task system — recognize the SDK's new batch todo tool with snapshot semantics so tasks appear in the TaskListPanel during streaming and on reload
+- Eliminate null sessionId with speculative UUID pattern — sessions get a client-generated ID immediately, avoiding null guards and 404s during the first message
+- Replace emoji adapter icons with real brand SVG logos for Slack, Telegram, and other adapters
+
+### Fixed
+
+- Preserve session state across SDK remaps and inline errors — model, permission mode, and cost survive session ID transitions and tool validation failures
+
+---
+
+## [0.21.0] - 2026-03-23
+
+> Agent creation pipeline, fleet management surface, and A2A gateway
+
+### Added
+
+- Create agents from a guided dialog with name validation, directory resolution, personality sliders, and workspace template picker
+- Overhaul tool call display with MCP server parsing, streaming state tracking, and classified output rendering
+- Redesign agents page as a fleet management surface with health monitoring, filtering, and session launch
+- Improve Slack adapter with 8 enhancements including message threading, reaction management, and format fidelity
+- Implement A2A external gateway for cross-platform agent interoperability
+- Improve ConnectionsTab UX with decomposed components and actionable deep-links to adapter setup
+- Adopt TanStack Form for submit-lifecycle forms with validation and error handling
+- Add Telegram typing indicator during agent processing for real-time feedback
+
+### Fixed
+
+- Resolve architectural debt from agent creation review — consolidate duplicated route/service logic, fix FSD cross-feature import, add auth token redaction
+- Restore result border separator and clean up OutputRenderer imports
+- Make dashboard responsive on mobile with proper viewport handling
+- Fix Chat SDK HTML rendering, port splitMessage utility, and deprecate legacy adapter
+- Update server integration tests for new validation and convention-files patterns
+
+---
+
+## [0.20.0] - 2026-03-22
+
+> Adapter ecosystem expansion — Chat SDK Telegram integration, A2A gateway spec, and agent personality conventions
+
+### Added
+
+- Improve adapter binding validation, routing, and instance-aware codecs
+- Add A2A external gateway spec and drop Channels from scope
+- Add Chat SDK Telegram adapter and PlatformClient architecture
+- Add SOUL.md and NOPE.md convention files for agent personality
+
+### Changed
+
+- Reconcile guides after chat-sdk-relay-adapter-refactor spec
+
+### Fixed
+
+- Add StreamEvent buffering to Chat SDK Telegram adapter
+- Normalize Chat SDK thread IDs before relay subject encoding
+- Eliminate visible scroll animation on session load
+- Improve binding row UX with consistent icons and clearer overflow
+- Add missing traits_json and conventions_json migration
+
+---
+
+## [0.19.0] - 2026-03-21
+
+> Fleet management dashboard — dedicated agents page, mission control, and client-side routing
+
+### Added
+
+- Browse and manage agents from a dedicated fleet management page with health monitoring, filtering, and session launch
+- Access mission control dashboard with needs-attention alerts, active sessions, system status, and activity feed
+- Navigate between dashboard, sessions, and agents with animated sidebar and header transitions
+- Add TanStack Router with code-based route definitions and URL search params
+- Browse features by product and category on SEO-optimized catalog pages
+- Monitor chat status at a glance with a unified status strip combining inference and system indicators
+- Toggle multi-window sync and background refresh from the status bar
+- Experience smoother chat with per-word text animation and spring-based scroll physics
+
+### Changed
+
+- MCP tools require agent context for session counts and use clearer naming (get_agent)
+- Relay tools renamed for clarity: relay_send_and_wait (was relay_query), relay_send_async (was relay_dispatch)
+- Relay mailboxes use human-readable subject strings instead of SHA-256 hashes
+- Feature catalog split into product and category dimensions for richer filtering
+- Clean up routing migration — remove dead code, fix test/code consistency
+- Move scan line effect to chat input area with subtle edge fade
+
+### Fixed
+
+- Resolve all ESLint warnings across the monorepo (0 errors, 0 warnings)
+- Code review fixes for mesh discovery, MCP tools, and schema validation
+- Adapter setup pipeline protected with timeout guards and diagnostic logging
+- Relay and Pulse enabled by default on fresh installations
+- Fix llms.txt feature categories formatting
+- Fix Stop hook hanging and add auto-format on file write
+- Fix dashboard navigation router context and auto-select suppression
+- Fix DoneEventSchema missing messageIds and export SubagentStatus
+
+---
+
 ## [0.18.0] - 2026-03-19
 
 > Chat simulator, interactive tool fixes, and developer guide refresh
@@ -352,9 +692,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redesign chat message theming — semantic tokens, TV variants, MessageItem decomposition
 - Add chat microinteraction polish — spring physics, layoutId, session crossfade
 - Unify discovery scanners and fix onboarding scan root
-- Add endpoint types, dispatch TTL sweeper, and relay_query progress accumulation
+- Add endpoint types, dispatch TTL sweeper, and relay_send_and_wait progress accumulation
 - Add /chat:self-test slash command
-- Add relay_dispatch fire-and-poll for long-running tasks
+- Add relay_send_async fire-and-poll for long-running tasks
 
 ### Changed
 
@@ -396,7 +736,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Per-agent tool filtering and cascade disable — configure which tools each agent can access
-- Add relay_query blocking MCP tool for inter-agent communication
+- Add relay_send_and_wait blocking MCP tool for inter-agent communication
 - Rebuild command palette with preview panel, fuzzy search, and sub-menu navigation for agent discovery
 - Migrate sidebar to Shadcn Sidebar component with agent-centric layout
 - Add tool context injection with configurable toggles throughout the interface
@@ -417,7 +757,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clean up command palette cmdk prop usage and @ filtering logic
 - Enforce file-first write-through storage pattern for agent identity (ADR-0043)
 - Improve onboarding step completion logic to handle rapid user interactions
-- Register relay_query in tool filter and add test coverage
+- Register relay_send_and_wait in tool filter and add test coverage
 
 ---
 
@@ -664,7 +1004,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keyboard shortcuts for navigation
 - Directory picker for working directory selection
 
-[Unreleased]: https://github.com/dork-labs/dorkos/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/dork-labs/dorkos/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/dork-labs/dorkos/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/dork-labs/dorkos/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/dork-labs/dorkos/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/dork-labs/dorkos/compare/v0.17.2...v0.18.0
 [0.17.2]: https://github.com/dork-labs/dorkos/compare/v0.17.1...v0.17.2
 [0.17.1]: https://github.com/dork-labs/dorkos/compare/v0.17.0...v0.17.1

@@ -1,112 +1,27 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SessionStatusEvent, MessagePart, HistoryMessage, PresenceUpdateEvent, HookPart } from '@dorkos/shared/types';
-import { useTransport, useAppStore } from '@/layers/shared/model';
-import { QUERY_TIMING, TIMING } from '@/layers/shared/lib';
-import { insertOptimisticSession } from '@/layers/entities/session';
-import type { ChatMessage, ChatSessionOptions, TransportErrorInfo } from './chat-types';
-import { createStreamEventHandler } from './stream-event-handler';
-import { deriveFromParts } from './stream-event-helpers';
+import { useEffect, useMemo, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAppStore } from '@/layers/shared/model';
+import { useTransport } from '@/layers/shared/model';
+import { useSessionChatStore, useSessionChatState } from '@/layers/entities/session';
+import { useSessionStoreActions } from './use-session-store-actions';
+import { useSessionHistory } from './use-session-history';
+import { useSessionSubmit } from './use-session-submit';
+import type { ChatSessionOptions } from './chat-types';
 
 // Re-export types for backward compat
-export type { ChatMessage, ToolCallState, HookState, GroupPosition, MessageGrouping, ChatStatus, ChatSessionOptions, TransportErrorInfo } from './chat-types';
+export type {
+  ChatMessage,
+  ToolCallState,
+  HookState,
+  GroupPosition,
+  MessageGrouping,
+  ChatStatus,
+  ChatSessionOptions,
+  TransportErrorInfo,
+} from './chat-types';
 
-/**
- * Classify a transport-level error for structured banner display.
- *
- * @internal Exported for testing only.
- */
-export function classifyTransportError(err: unknown): TransportErrorInfo {
-  const error = err instanceof Error ? err : new Error(String(err));
-  const code = (err as { code?: string } | null | undefined)?.code;
-  const status = (err as { status?: number } | null | undefined)?.status;
-
-  // Session locked by another client
-  if (code === 'SESSION_LOCKED') {
-    return {
-      heading: 'Session in use',
-      message: 'Another client is sending a message. Try again in a few seconds.',
-      retryable: false,
-      autoDismissMs: TIMING.SESSION_BUSY_CLEAR_MS,
-    };
-  }
-
-  // Network/fetch errors
-  if (error instanceof TypeError || /fetch|network/i.test(error.message)) {
-    return {
-      heading: 'Connection failed',
-      message: 'Could not reach the server. Check your connection and try again.',
-      retryable: true,
-    };
-  }
-
-  // HTTP 500-599 server errors
-  if (status && status >= 500 && status <= 599) {
-    return {
-      heading: 'Server error',
-      message: 'The server encountered an error. Try again.',
-      retryable: true,
-    };
-  }
-
-  // HTTP 408 or timeout
-  if (status === 408 || /timeout/i.test(error.message)) {
-    return {
-      heading: 'Request timed out',
-      message: 'The server took too long to respond. Try again.',
-      retryable: true,
-    };
-  }
-
-  // Default unknown
-  return {
-    heading: 'Error',
-    message: error.message,
-    retryable: false,
-  };
-}
-
-/** Map HistoryMessage from server to internal ChatMessage format. */
-function mapHistoryMessage(m: HistoryMessage): ChatMessage {
-  const parts: MessagePart[] = m.parts ? [...m.parts] : [];
-  if (parts.length === 0) {
-    if (m.content) {
-      parts.push({ type: 'text', text: m.content });
-    }
-    if (m.toolCalls) {
-      for (const tc of m.toolCalls) {
-        parts.push({
-          type: 'tool_call',
-          toolCallId: tc.toolCallId,
-          toolName: tc.toolName,
-          input: tc.input,
-          result: tc.result,
-          status: tc.status,
-          ...(tc.questions
-            ? {
-                interactiveType: 'question' as const,
-                questions: tc.questions,
-                answers: tc.answers,
-              }
-            : {}),
-        });
-      }
-    }
-  }
-
-  const derived = deriveFromParts(parts);
-  return {
-    id: m.id,
-    role: m.role,
-    content: derived.content,
-    toolCalls: derived.toolCalls.length > 0 ? derived.toolCalls : undefined,
-    parts,
-    timestamp: m.timestamp || '',
-    messageType: m.messageType,
-    commandName: m.commandName,
-    commandArgs: m.commandArgs,
-  };
-}
+// Re-export for consumers
+export { classifyTransportError } from './classify-transport-error';
 
 /** Orchestrates chat session state, message history, SSE streaming, and optimistic UI updates. */
 export function useChatSession(sessionId: string | null, options: ChatSessionOptions = {}) {
@@ -115,497 +30,164 @@ export function useChatSession(sessionId: string | null, options: ChatSessionOpt
   const selectedCwd = useAppStore((s) => s.selectedCwd);
   const enableCrossClientSync = useAppStore((s) => s.enableCrossClientSync);
   const enableMessagePolling = useAppStore((s) => s.enableMessagePolling);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [status, setStatus] = useState<'idle' | 'streaming' | 'error'>('idle');
-  const [error, setError] = useState<TransportErrorInfo | null>(null);
-  const [sessionBusy, setSessionBusy] = useState(false);
-  const sessionStatusRef = useRef<SessionStatusEvent | null>(null);
-  const [sessionStatus, setSessionStatus] = useState<SessionStatusEvent | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const currentPartsRef = useRef<MessagePart[]>([]);
-  // Buffer for hook events that arrive before their owning tool_call_start
-  const orphanHooksRef = useRef<Map<string, HookPart[]>>(new Map());
-  const assistantIdRef = useRef<string>('');
-  const assistantCreatedRef = useRef(false);
-  const historySeededRef = useRef(false);
-  const streamStartTimeRef = useRef<number | null>(null);
-  const estimatedTokensRef = useRef<number>(0);
-  const [streamStartTime, setStreamStartTime] = useState<number | null>(null);
-  const [estimatedTokens, setEstimatedTokens] = useState<number>(0);
-  const textStreamingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isTextStreamingRef = useRef(false);
-  const [isTextStreaming, setIsTextStreaming] = useState(false);
-  const thinkingStartRef = useRef<number | null>(null);
-  const [rateLimitRetryAfter, setRateLimitRetryAfter] = useState<number | null>(null);
-  const [isRateLimited, setIsRateLimited] = useState(false);
-  const rateLimitClearRef = useRef<(() => void) | null>(null);
-  const [systemStatus, setSystemStatus] = useState<string | null>(null);
-  const [promptSuggestions, setPromptSuggestions] = useState<string[]>([]);
-  const systemStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sessionBusyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [presenceInfo, setPresenceInfo] = useState<PresenceUpdateEvent | null>(null);
-  const [presencePulse, setPresencePulse] = useState(false);
-  const presenceInfoRef = useRef<PresenceUpdateEvent | null>(null);
-  const presencePulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const selectedCwdRef = useRef(selectedCwd);
-  const [isTabVisible, setIsTabVisible] = useState(!document.hidden);
-  const messagesRef = useRef<ChatMessage[]>(messages);
-  // Tracks the optimistic user message ID so it can be removed on error
-  const pendingUserIdRef = useRef<string | null>(null);
-  // Signals that a sessionId change is a server remap (not user navigation).
-  // Set synchronously in the done handler BEFORE onSessionIdChange fires,
-  // so the session change effect can skip clearing messages.
-  const isRemappingRef = useRef(false);
+  const sid = sessionId ?? '';
 
-  // Keep refs in sync with state
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-  useEffect(() => {
-    selectedCwdRef.current = selectedCwd;
-  }, [selectedCwd]);
-  useEffect(() => {
-    presenceInfoRef.current = presenceInfo;
-  }, [presenceInfo]);
+  // Single store subscription for all per-session fields.
+  // useSessionChatState returns DEFAULT_SESSION_STATE (stable module-level constant)
+  // when the session doesn't exist yet — avoiding the new-object-per-render trap that
+  // per-field selectors with inline `?? []` / `?? {}` defaults would cause.
+  const {
+    messages,
+    input,
+    status,
+    error,
+    sessionBusy,
+    sessionStatus,
+    streamStartTime,
+    estimatedTokens,
+    isTextStreaming,
+    isRateLimited,
+    rateLimitRetryAfter,
+    systemStatus,
+    promptSuggestions,
+    presenceInfo,
+    presenceTasks,
+  } = useSessionChatState(sid);
 
-  // Track tab visibility for adaptive polling interval
+  // ---------------------------------------------------------------------------
+  // Lifecycle refs — declared early so they can be passed to useSessionStoreActions
+  // ---------------------------------------------------------------------------
+
+  // isAliveRef: secondary unmount guard for in-flight callbacks that resolve
+  // after this component instance cleanly unmounts.
+  const isAliveRef = useRef(true);
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      setIsTabVisible(!document.hidden);
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    isAliveRef.current = true;
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      isAliveRef.current = false;
     };
   }, []);
 
-  const isStreaming = status === 'streaming';
-  // Keep status in a ref so the sync_update handler sees current status without a stale closure
-  const statusRef = useRef(status);
+  // Per-session mount generation Map. Each entry records the mountGeneration at
+  // the time initSession was called for that session ID. Lets setMessages detect
+  // stale closures from a destroyed-and-recreated session.
+  const mountGenerationMapRef = useRef<Map<string, number>>(new Map());
+
+  // ---------------------------------------------------------------------------
+  // Store write actions
+  // ---------------------------------------------------------------------------
+
+  const {
+    setMessages,
+    setInput,
+    setStatus,
+    setError,
+    setSessionBusy,
+    setSessionStatus,
+    setEstimatedTokens,
+    setStreamStartTime,
+    setIsTextStreaming,
+    setRateLimitRetryAfter,
+    setIsRateLimited,
+    setSystemStatusWithClear,
+    setPromptSuggestions,
+    setPresenceInfo,
+    setPresenceTasks,
+  } = useSessionStoreActions(sid, isAliveRef, mountGenerationMapRef);
+
+  // ---------------------------------------------------------------------------
+  // Session initialisation
+  // ---------------------------------------------------------------------------
+
+  // Eagerly call initSession during render — it's a no-op (no set()) when the
+  // session already exists. For brand-new sessions this is still safe because
+  // the store is external to the React tree (Zustand), so the setState doesn't
+  // trigger re-render of a *different* component.
+  if (sid) useSessionChatStore.getState().initSession(sid);
+  if (sid) {
+    const gen = useSessionChatStore.getState().getSession(sid).mountGeneration;
+    if (!mountGenerationMapRef.current.has(sid)) {
+      mountGenerationMapRef.current.set(sid, gen);
+    }
+  }
+
+  // Re-init, capture mountGeneration, and touch access order when the active
+  // session changes. initSession is idempotent; touchSession updates LRU order.
   useEffect(() => {
-    statusRef.current = status;
-  });
-
-  // Keep rateLimitClearRef in sync — avoids stale closures in the stream handler
-  rateLimitClearRef.current = () => {
-    setIsRateLimited(false);
-    setRateLimitRetryAfter(null);
-  };
-
-  const setSystemStatusWithClear = useCallback((message: string | null) => {
-    if (systemStatusTimerRef.current) {
-      clearTimeout(systemStatusTimerRef.current);
-      systemStatusTimerRef.current = null;
+    if (sessionId) {
+      useSessionChatStore.getState().initSession(sessionId);
+      useSessionChatStore.getState().touchSession(sessionId);
+      mountGenerationMapRef.current.set(
+        sessionId,
+        useSessionChatStore.getState().getSession(sessionId).mountGeneration
+      );
     }
-    setSystemStatus(message);
-    if (message) {
-      systemStatusTimerRef.current = setTimeout(() => {
-        setSystemStatus(null);
-        systemStatusTimerRef.current = null;
-      }, TIMING.SYSTEM_STATUS_DISMISS_MS);
-    }
-  }, []);
-
-  // Ref-stabilize callbacks to prevent streamEventHandler identity churn.
-  // Synced on every render (refs are synchronous — no useEffect needed).
-  const onTaskEventRef = useRef(options.onTaskEvent);
-  const onSessionIdChangeRef = useRef(options.onSessionIdChange);
-  const onStreamingDoneRef = useRef(options.onStreamingDone);
-  const transformContentRef = useRef(options.transformContent);
-  onTaskEventRef.current = options.onTaskEvent;
-  onSessionIdChangeRef.current = options.onSessionIdChange;
-  onStreamingDoneRef.current = options.onStreamingDone;
-  transformContentRef.current = options.transformContent;
-
-  // Create stream event handler at hook level for the SSE streaming path
-  const streamEventHandler = useMemo(
-    () =>
-      createStreamEventHandler({
-        currentPartsRef,
-        orphanHooksRef,
-        assistantCreatedRef,
-        sessionStatusRef,
-        streamStartTimeRef,
-        estimatedTokensRef,
-        textStreamingTimerRef,
-        isTextStreamingRef,
-        thinkingStartRef,
-        setMessages,
-        setError,
-        setStatus,
-        setSessionStatus,
-        setEstimatedTokens,
-        setStreamStartTime,
-        setIsTextStreaming,
-        setRateLimitRetryAfter,
-        setIsRateLimited,
-        setSystemStatus: setSystemStatusWithClear,
-        setPromptSuggestions,
-        rateLimitClearRef,
-        sessionId: sessionId ?? '',
-        onTaskEventRef,
-        onSessionIdChangeRef,
-        onStreamingDoneRef,
-        isRemappingRef,
-      }),
-
-    [sessionId, setSystemStatusWithClear]
-  );
-
-  // Load message history from SDK transcript via TanStack Query with adaptive polling
-  const historyQuery = useQuery({
-    queryKey: ['messages', sessionId, selectedCwd],
-    queryFn: () => transport.getMessages(sessionId!, selectedCwd ?? undefined),
-    staleTime: QUERY_TIMING.MESSAGE_STALE_TIME_MS,
-    refetchOnWindowFocus: false,
-    enabled: sessionId !== null,
-    refetchInterval: () => {
-      if (isStreaming) return false;
-      if (!enableMessagePolling) return false;
-      return isTabVisible
-        ? QUERY_TIMING.ACTIVE_TAB_REFETCH_MS
-        : QUERY_TIMING.BACKGROUND_TAB_REFETCH_MS;
-    },
-  });
-
-  // Reset history seed flag when session or cwd changes.
-  // Don't clear messages during streaming — preserves state during
-  // create-on-first-message (null → clientId).
-  // Don't clear messages during remap — the done handler sets isRemappingRef
-  // before changing sessionId (clientId → sdkId); we keep messages and force
-  // Branch 2 (incremental dedup) so tagged-dedup reconciles IDs correctly.
-  useEffect(() => {
-    if (isRemappingRef.current) {
-      isRemappingRef.current = false;
-      // Force incremental dedup path (Branch 2) — messages are preserved,
-      // and the tagged-dedup logic will reconcile IDs when history loads.
-      historySeededRef.current = true;
-      return;
-    }
-    historySeededRef.current = false;
-    if (statusRef.current !== 'streaming') {
-      setMessages([]);
-    }
-  }, [sessionId, selectedCwd]);
-
-  // Clear presence state when the active session changes
-  useEffect(() => {
-    setPresenceInfo(null);
-    setPresencePulse(false);
   }, [sessionId]);
 
-  // Seed local messages state from history (initial load + post-stream replace)
+  // Clear background activity indicator when this session becomes active.
   useEffect(() => {
-    if (!historyQuery.data) return;
-
-    const history = historyQuery.data.messages;
-
-    if (!historySeededRef.current && history.length > 0) {
-      // Don't seed during streaming — server history is incomplete and would
-      // overwrite optimistic messages (e.g. create-on-first-message sessionId change).
-      // Seeding defers until streaming completes and this effect re-runs.
-      if (isStreaming) return;
-      historySeededRef.current = true;
-      setMessages(history.map(mapHistoryMessage));
-      return;
+    if (sessionId) {
+      useSessionChatStore.getState().updateSession(sessionId, { hasUnseenActivity: false });
     }
+  }, [sessionId]);
 
-    if (historySeededRef.current && !isStreaming) {
-      const currentIds = new Set(messagesRef.current.map((m) => m.id));
-      const taggedMessages = messagesRef.current.filter((m) => m._streaming);
+  // ---------------------------------------------------------------------------
+  // History, sync, and presence
+  // ---------------------------------------------------------------------------
 
-      // Find the tagged user message (if any) for content matching
-      const taggedUser = taggedMessages.find((m) => m.role === 'user');
-      const taggedAssistant = taggedMessages.find((m) => m.role === 'assistant');
+  const { historyQuery, syncConnectionState, syncFailedAttempts } = useSessionHistory({
+    sessionId,
+    sid,
+    transport,
+    selectedCwd,
+    enableCrossClientSync,
+    enableMessagePolling,
+    isStreaming: status === 'streaming',
+    presenceInfo,
+    setMessages,
+    setPresenceTasks,
+    setPresenceInfo,
+    queryClient,
+  });
 
-      const newMessages: typeof history = [];
-      let matchedUserIdx = -1;
+  // ---------------------------------------------------------------------------
+  // Submission
+  // ---------------------------------------------------------------------------
 
-      for (let i = 0; i < history.length; i++) {
-        const serverMsg = history[i];
-        if (currentIds.has(serverMsg.id)) continue;
-
-        // Try to match tagged user message by exact content
-        if (
-          taggedUser &&
-          serverMsg.role === 'user' &&
-          serverMsg.content === taggedUser.content
-        ) {
-          matchedUserIdx = i;
-          // Replace tagged user with server version, clear tag
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === taggedUser.id
-                ? { ...mapHistoryMessage(serverMsg), _streaming: false }
-                : m,
-            ),
-          );
-          continue;
-        }
-
-        // Match tagged assistant by position (immediately after matched user)
-        if (
-          taggedAssistant &&
-          matchedUserIdx >= 0 &&
-          i === matchedUserIdx + 1 &&
-          serverMsg.role === 'assistant'
-        ) {
-          // Carry over client-only parts that the server version lacks
-          const serverMapped = mapHistoryMessage(serverMsg);
-          // Carry over subagent parts not already in the server response (the
-          // transcript parser may or may not extract them depending on SDK version).
-          const serverSubagentIds = new Set(
-            serverMapped.parts
-              .filter((p) => p.type === 'subagent')
-              .map((p) => p.taskId),
-          );
-          const clientOnlyParts = taggedAssistant.parts.filter(
-            (p) => p.type === 'subagent' && !serverSubagentIds.has(p.taskId),
-          );
-          const mergedParts =
-            clientOnlyParts.length > 0
-              ? [...serverMapped.parts, ...clientOnlyParts]
-              : serverMapped.parts;
-
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === taggedAssistant.id
-                ? { ...serverMapped, parts: mergedParts, _streaming: false }
-                : m,
-            ),
-          );
-          continue;
-        }
-
-        // No match — append as new message (existing behavior)
-        newMessages.push(serverMsg);
-      }
-
-      if (newMessages.length > 0) {
-        setMessages((prev) => [...prev, ...newMessages.map(mapHistoryMessage)]);
-      }
-    }
-  }, [historyQuery.data, isStreaming]);
-
-  // Persistent SSE connection for session sync updates.
-  // Closes during streaming since SSE events arrive inline on the POST response.
-  useEffect(() => {
-    if (!sessionId) return;
-    if (isStreaming) return;
-    if (!enableCrossClientSync) return;
-
-    const clientIdParam = transport.clientId ? `?clientId=${encodeURIComponent(transport.clientId)}` : '';
-    const url = `/api/sessions/${sessionId}/stream${clientIdParam}`;
-    const eventSource = new EventSource(url);
-
-    eventSource.addEventListener('sync_update', () => {
-      queryClient.invalidateQueries({ queryKey: ['messages', sessionId, selectedCwdRef.current] });
-      queryClient.invalidateQueries({ queryKey: ['tasks', sessionId, selectedCwdRef.current] });
-
-      // Pulse the presence badge when another client's change arrives
-      if (presenceInfoRef.current && presenceInfoRef.current.clientCount > 1) {
-        setPresencePulse(true);
-        if (presencePulseTimerRef.current) clearTimeout(presencePulseTimerRef.current);
-        presencePulseTimerRef.current = setTimeout(() => {
-          setPresencePulse(false);
-          presencePulseTimerRef.current = null;
-        }, 1000);
-      }
+  const { handleSubmit, submitContent, stop, retryMessage, markToolCallResponded } =
+    useSessionSubmit({
+      sessionId,
+      input,
+      status,
+      transport,
+      queryClient,
+      selectedCwd,
+      onTaskEvent: options.onTaskEvent,
+      onSessionIdChange: options.onSessionIdChange,
+      onStreamingDone: options.onStreamingDone,
+      transformContent: options.transformContent,
+      setMessages,
+      setInput,
+      setError,
+      setStatus,
+      setSessionBusy,
+      setSessionStatus,
+      setEstimatedTokens,
+      setStreamStartTime,
+      setIsTextStreaming,
+      setRateLimitRetryAfter,
+      setIsRateLimited,
+      setSystemStatus: setSystemStatusWithClear,
+      setPromptSuggestions,
     });
 
-    eventSource.addEventListener('presence_update', (e) => {
-      try {
-        const data = JSON.parse(e.data) as PresenceUpdateEvent;
-        setPresenceInfo(data);
-      } catch {
-        // Ignore malformed presence events
-      }
-    });
+  // ---------------------------------------------------------------------------
+  // Derived values
+  // ---------------------------------------------------------------------------
 
-    return () => {
-      eventSource.close();
-    };
-  }, [sessionId, isStreaming, queryClient, transport.clientId, enableCrossClientSync]);
-
-  // Cleanup timers on unmount
-  useEffect(() => {
-    return () => {
-      if (sessionBusyTimerRef.current) clearTimeout(sessionBusyTimerRef.current);
-      if (systemStatusTimerRef.current) clearTimeout(systemStatusTimerRef.current);
-      if (presencePulseTimerRef.current) clearTimeout(presencePulseTimerRef.current);
-    };
-  }, []);
-
-  /**
-   * Core submission logic shared by `handleSubmit` and `submitContent`.
-   *
-   * @param content - The trimmed message text to send.
-   * @param clearInput - When true, clears the `input` state after enqueueing (used by handleSubmit). When false, the textarea draft is preserved (used by submitContent/queue flush).
-   * @param restoreContentOnLock - Content to restore to `input` if the session is locked. Only meaningful when clearInput is true.
-   */
-  const executeSubmission = useCallback(async (
-    content: string,
-    clearInput: boolean,
-    restoreContentOnLock: string,
-  ) => {
-    // Create session on first message if no active session
-    let targetSessionId = sessionId;
-    if (!targetSessionId) {
-      targetSessionId = crypto.randomUUID();
-      const now = new Date().toISOString();
-      insertOptimisticSession(queryClient, selectedCwdRef.current, {
-        id: targetSessionId,
-        title: `Session ${targetSessionId.slice(0, 8)}`,
-        createdAt: now,
-        updatedAt: now,
-        permissionMode: 'default',
-      });
-      onSessionIdChangeRef.current?.(targetSessionId);
-    }
-
-    // Add optimistic user message directly to the messages array so it appears
-    // in the virtualizer BEFORE the streaming assistant message. This fixes the
-    // ordering bug where the assistant appeared above the user message (the old
-    // pendingUserContent bubble was rendered outside the virtualizer).
-    const pendingUserId = `pending-user-${crypto.randomUUID()}`;
-    pendingUserIdRef.current = pendingUserId;
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: pendingUserId,
-        role: 'user' as const,
-        content,
-        parts: [{ type: 'text', text: content }],
-        timestamp: new Date().toISOString(),
-        _streaming: true,
-      },
-    ]);
-    if (clearInput) setInput('');
-    setPromptSuggestions([]);
-    setStatus('streaming');
-    statusRef.current = 'streaming'; // Sync ref immediately — closes the timing window where sync_update could invalidate stale history
-    setError(null);
-    currentPartsRef.current = [];
-    const streamStart = Date.now();
-    streamStartTimeRef.current = streamStart;
-    estimatedTokensRef.current = 0;
-    setStreamStartTime(streamStart);
-    setEstimatedTokens(0);
-
-    assistantIdRef.current = crypto.randomUUID();
-    assistantCreatedRef.current = false;
-
-    const abortController = new AbortController();
-    abortRef.current = abortController;
-
-    try {
-      const finalContent = transformContentRef.current
-        ? await transformContentRef.current(content)
-        : content;
-
-      await transport.sendMessage(
-        targetSessionId,
-        finalContent,
-        (event) => streamEventHandler(event.type, event.data, assistantIdRef.current),
-        abortController.signal,
-        selectedCwd ?? undefined,
-        { clientMessageId: pendingUserId },
-      );
-      pendingUserIdRef.current = null;
-      setStatus('idle');
-    } catch (err) {
-      // Remove optimistic user message on error — must not linger if delivery fails
-      if (pendingUserIdRef.current) {
-        const failedId = pendingUserIdRef.current;
-        setMessages((prev) => prev.filter((m) => m.id !== failedId));
-        pendingUserIdRef.current = null;
-      }
-      if ((err as Error).name !== 'AbortError') {
-        if ((err as { code?: string }).code === 'SESSION_LOCKED') {
-          setSessionBusy(true);
-          setError(classifyTransportError(err));
-          if (clearInput) setInput(restoreContentOnLock);
-          if (sessionBusyTimerRef.current) clearTimeout(sessionBusyTimerRef.current);
-          sessionBusyTimerRef.current = setTimeout(() => {
-            setSessionBusy(false);
-            setError(null);
-            sessionBusyTimerRef.current = null;
-          }, TIMING.SESSION_BUSY_CLEAR_MS);
-        } else {
-          setError(classifyTransportError(err));
-        }
-        setStatus('error');
-      }
-      if (textStreamingTimerRef.current) clearTimeout(textStreamingTimerRef.current);
-      isTextStreamingRef.current = false;
-      setIsTextStreaming(false);
-      setIsRateLimited(false);
-      setRateLimitRetryAfter(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentional: stable refs for transport/options/cwd
-  }, [sessionId, streamEventHandler, queryClient]);
-
-  const handleSubmit = useCallback(async () => {
-    if (!input.trim() || status === 'streaming') return;
-    const userContent = input.trim();
-    await executeSubmission(userContent, true, userContent);
-     
-  }, [input, status, executeSubmission]);
-
-  /**
-   * Submit a message by content string directly, without clearing the `input` state.
-   * Used by the auto-flush mechanism to send queued messages while preserving the
-   * user's current draft in the textarea.
-   */
-  const submitContent = useCallback(async (content: string) => {
-    if (!content.trim() || status === 'streaming') return;
-    await executeSubmission(content.trim(), false, '');
-     
-  }, [status, executeSubmission]);
-
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
-    if (textStreamingTimerRef.current) clearTimeout(textStreamingTimerRef.current);
-    isTextStreamingRef.current = false;
-    setIsTextStreaming(false);
-    setIsRateLimited(false);
-    setRateLimitRetryAfter(null);
-    setStatus('idle');
-  }, []);
-
-  /** Optimistically mark a tool call as responded (approved/denied/answered). */
-  const markToolCallResponded = useCallback(
-    (toolCallId: string) => {
-      const part = currentPartsRef.current.find(
-        (p) => p.type === 'tool_call' && p.toolCallId === toolCallId
-      );
-      if (part && part.type === 'tool_call') {
-        part.status = 'running';
-        const parts = currentPartsRef.current.map((p) => ({ ...p }));
-        const derived = deriveFromParts(parts);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantIdRef.current
-              ? {
-                  ...m,
-                  content: derived.content,
-                  toolCalls: derived.toolCalls.length > 0 ? derived.toolCalls : [],
-                  parts,
-                }
-              : m
-          )
-        );
-      }
-    },
-    [] // Refs are stable
-  );
-
-  // Only show loading when we have no local messages to display.
-  // During session ID remap (clientId → sdkId), messages are preserved in
-  // local state but the query key changes — causing isLoading to briefly
-  // become true. Without this guard, ChatPanel swaps in a loading spinner
-  // and the messages "flash" despite being available in local state.
+  // Only show loading when there are no local messages to display.
+  // During session ID remap (clientId → sdkId) messages are preserved in local
+  // state but the query key changes, causing isLoading to briefly be true.
   const isLoadingHistory = historyQuery.isLoading && messages.length === 0;
 
   const pendingInteractions = useMemo(() => {
@@ -628,6 +210,7 @@ export function useChatSession(sessionId: string | null, options: ChatSessionOpt
     error,
     sessionBusy,
     stop,
+    retryMessage,
     isLoadingHistory,
     sessionStatus,
     streamStartTime,
@@ -642,6 +225,8 @@ export function useChatSession(sessionId: string | null, options: ChatSessionOpt
     systemStatus,
     promptSuggestions,
     presenceInfo,
-    presencePulse,
+    presenceTasks,
+    syncConnectionState,
+    syncFailedAttempts,
   };
 }

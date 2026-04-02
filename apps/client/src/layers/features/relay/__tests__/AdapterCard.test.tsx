@@ -14,23 +14,36 @@ import type { AdapterManifest, CatalogInstance } from '@dorkos/shared/relay-sche
 const mockUseBindings = vi.fn();
 const mockUseRegisteredAgents = vi.fn();
 const mockMutate = vi.fn();
+const mockMutateAsync = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@/layers/entities/binding', () => ({
   useBindings: (...args: unknown[]) => mockUseBindings(...args),
-  useCreateBinding: () => ({ mutate: mockMutate }),
-  useUpdateBinding: () => ({ mutate: mockMutate }),
-  useDeleteBinding: () => ({ mutate: mockMutate }),
+  useCreateBinding: () => ({ mutate: mockMutate, mutateAsync: mockMutateAsync, isPending: false }),
+  useUpdateBinding: () => ({ mutate: mockMutate, mutateAsync: mockMutateAsync, isPending: false }),
+  useDeleteBinding: () => ({ mutate: mockMutate, mutateAsync: mockMutateAsync, isPending: false }),
 }));
 
 vi.mock('@/layers/entities/mesh', () => ({
   useRegisteredAgents: (...args: unknown[]) => mockUseRegisteredAgents(...args),
 }));
 
-// Stub BindingDialog to avoid deep rendering — AdapterCard tests focus on card behaviour.
-vi.mock('@/layers/features/mesh/ui/BindingDialog', () => ({
-  BindingDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="binding-dialog" /> : null,
+// Mock adapter logos — renders a simple span for testability
+vi.mock('@dorkos/icons/adapter-logos', () => ({
+  ADAPTER_LOGO_MAP: {
+    telegram: ({ className }: { size?: number; className?: string }) => (
+      <span data-testid="adapter-logo" data-icon="telegram" className={className}>
+        TelegramLogo
+      </span>
+    ),
+    'claude-code': ({ className }: { size?: number; className?: string }) => (
+      <span data-testid="adapter-logo" data-icon="claude-code" className={className}>
+        AnthropicLogo
+      </span>
+    ),
+  },
 }));
+
+// BindingDialog is no longer rendered inside AdapterCard — dialogs live in ConnectionsTab.
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -40,7 +53,7 @@ const baseManifest: AdapterManifest = {
   type: 'telegram',
   displayName: 'Telegram',
   description: 'Telegram messaging adapter',
-  iconEmoji: '📨',
+  iconId: 'telegram',
   category: 'messaging',
   builtin: false,
   configFields: [],
@@ -51,7 +64,7 @@ const claudeManifest: AdapterManifest = {
   type: 'claude-code',
   displayName: 'Claude Code',
   description: 'Built-in Claude Code adapter',
-  iconEmoji: '🤖',
+  iconId: 'claude-code',
   category: 'internal',
   builtin: true,
   configFields: [],
@@ -121,7 +134,10 @@ function defaultProps(overrides: Partial<Parameters<typeof AdapterCard>[0]> = {}
     manifest: baseManifest,
     onToggle: vi.fn(),
     onConfigure: vi.fn(),
-    onRemove: vi.fn(),
+    onShowEvents: vi.fn(),
+    onEditBinding: vi.fn(),
+    onRemoveConfirm: vi.fn(),
+    onAddBinding: vi.fn(),
     ...overrides,
   };
 }
@@ -178,9 +194,9 @@ describe('AdapterCard', () => {
     expect(screen.getByText('messaging')).toBeTruthy();
   });
 
-  it('renders the icon emoji', () => {
+  it('renders the adapter icon', () => {
     render(<AdapterCard {...defaultProps()} />);
-    expect(screen.getByText('📨')).toBeTruthy();
+    expect(screen.getByTestId('adapter-logo')).toBeTruthy();
   });
 
   it('does not render raw message counts', () => {
@@ -214,7 +230,7 @@ describe('AdapterCard', () => {
 
   it('renders CCA card with dashed border', () => {
     const { container } = render(
-      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />,
+      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />
     );
     const card = container.firstElementChild;
     expect(card?.className).toContain('border-dashed');
@@ -233,7 +249,7 @@ describe('AdapterCard', () => {
   it('shows amber pulsing status dot when connected with no bindings', () => {
     const { container } = render(<AdapterCard {...defaultProps()} />);
     expect(container.querySelector('.bg-amber-500')).toBeTruthy();
-    expect(container.querySelector('.animate-pulse')).toBeTruthy();
+    expect(container.querySelector('.animate-tasks')).toBeTruthy();
   });
 
   it('shows red status dot when adapter is in error state', () => {
@@ -249,7 +265,7 @@ describe('AdapterCard', () => {
   it('shows green status dot for CCA when connected (always considered bound)', () => {
     mockUseBindings.mockReturnValue({ data: [] });
     const { container } = render(
-      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />,
+      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />
     );
     expect(container.querySelector('.bg-green-500')).toBeTruthy();
     expect(container.querySelector('.bg-amber-500')).toBeNull();
@@ -261,10 +277,16 @@ describe('AdapterCard', () => {
 
   it('shows "Serving N agents" for CCA instead of "No agent bound"', () => {
     mockUseRegisteredAgents.mockReturnValue({
-      data: { agents: [{ id: 'a1', name: 'Bot 1' }, { id: 'a2', name: 'Bot 2' }, { id: 'a3', name: 'Bot 3' }] },
+      data: {
+        agents: [
+          { id: 'a1', name: 'Bot 1' },
+          { id: 'a2', name: 'Bot 2' },
+          { id: 'a3', name: 'Bot 3' },
+        ],
+      },
     });
     render(
-      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />,
+      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />
     );
     expect(screen.getByText(/Serving 3 agents/)).toBeTruthy();
     expect(screen.queryByText('No agent bound')).toBeNull();
@@ -275,14 +297,14 @@ describe('AdapterCard', () => {
       data: { agents: [{ id: 'a1', name: 'Solo Bot' }] },
     });
     render(
-      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />,
+      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />
     );
     expect(screen.getByText(/Serving 1 agent/)).toBeTruthy();
   });
 
   it('does not show System badge for CCA', () => {
     render(
-      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />,
+      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />
     );
     expect(screen.queryByText('System')).toBeNull();
   });
@@ -299,7 +321,12 @@ describe('AdapterCard', () => {
       ],
     });
     mockUseRegisteredAgents.mockReturnValue({
-      data: { agents: [{ id: 'agent-1', name: 'Alpha Bot' }, { id: 'agent-2', name: 'Beta Bot' }] },
+      data: {
+        agents: [
+          { id: 'agent-1', name: 'Alpha Bot' },
+          { id: 'agent-2', name: 'Beta Bot' },
+        ],
+      },
     });
     render(<AdapterCard {...defaultProps()} />);
     expect(screen.getByText('Alpha Bot')).toBeTruthy();
@@ -347,7 +374,7 @@ describe('AdapterCard', () => {
       ],
     });
     render(<AdapterCard {...defaultProps()} />);
-    expect(screen.getByText('and 2 more')).toBeTruthy();
+    expect(screen.getByText('Show 2 more')).toBeTruthy();
   });
 
   // -------------------------------------------------------------------------
@@ -522,8 +549,9 @@ describe('AdapterCard', () => {
     expect(onConfigure).toHaveBeenCalledTimes(1);
   });
 
-  it('opens confirmation dialog when Remove menu item is clicked', async () => {
-    render(<AdapterCard {...defaultProps()} />);
+  it('calls onRemoveConfirm when Remove menu item is clicked', async () => {
+    const onRemoveConfirm = vi.fn();
+    render(<AdapterCard {...defaultProps({ onRemoveConfirm })} />);
 
     await openKebabMenu();
 
@@ -535,46 +563,46 @@ describe('AdapterCard', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: /Remove/i }));
     });
 
-    await waitFor(() => {
-      expect(screen.getByText('Remove adapter')).toBeTruthy();
-      expect(screen.getByText(/Are you sure you want to remove/)).toBeTruthy();
-    });
+    expect(onRemoveConfirm).toHaveBeenCalledWith('tg-main', 'Main Telegram');
   });
 
-  it('calls onRemove when confirmation dialog is confirmed', async () => {
-    const onRemove = vi.fn();
-    render(<AdapterCard {...defaultProps({ onRemove })} />);
+  it('calls onShowEvents when Events menu item is clicked', async () => {
+    const onShowEvents = vi.fn();
+    render(<AdapterCard {...defaultProps({ onShowEvents })} />);
 
     await openKebabMenu();
 
     await waitFor(() => {
-      expect(screen.getByRole('menuitem', { name: /Remove/i })).toBeTruthy();
+      expect(screen.getByRole('menuitem', { name: /Events/i })).toBeTruthy();
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('menuitem', { name: /Remove/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /Events/i }));
     });
+
+    expect(onShowEvents).toHaveBeenCalledWith('tg-main');
+  });
+
+  it('calls onAddBinding when Add Binding menu item is clicked', async () => {
+    const onAddBinding = vi.fn();
+    render(<AdapterCard {...defaultProps({ onAddBinding })} />);
+
+    await openKebabMenu();
 
     await waitFor(() => {
-      expect(screen.getByRole('alertdialog')).toBeTruthy();
+      expect(screen.getByRole('menuitem', { name: /Add Binding/i })).toBeTruthy();
     });
-
-    const dialog = screen.getByRole('alertdialog');
-    const buttons = dialog.querySelectorAll('button');
-    const confirmBtn = buttons[buttons.length - 1];
 
     await act(async () => {
-      fireEvent.click(confirmBtn);
+      fireEvent.click(screen.getByRole('menuitem', { name: /Add Binding/i }));
     });
 
-    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onAddBinding).toHaveBeenCalledWith('tg-main', 'tg-main');
   });
 
   it('disables Remove for built-in claude-code adapter', async () => {
     render(
-      <AdapterCard
-        {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })}
-      />,
+      <AdapterCard {...defaultProps({ instance: claudeInstance, manifest: claudeManifest })} />
     );
 
     await openKebabMenu();

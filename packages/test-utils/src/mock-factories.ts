@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { vi } from 'vitest';
-import type { Session, StreamEvent, CommandEntry, PulseSchedule, PulseRun } from '@dorkos/shared/types';
+import type { Session, StreamEvent, CommandEntry, Task, TaskRun } from '@dorkos/shared/types';
 import type { Transport } from '@dorkos/shared/transport';
 import type { AgentManifest } from '@dorkos/shared/mesh-schemas';
 import type { RelayAdapter, AdapterStatus } from '@dorkos/relay';
@@ -38,8 +38,8 @@ export function createMockCommandEntry(overrides: Partial<CommandEntry> = {}): C
   };
 }
 
-/** Create a mock PulseSchedule with sensible defaults. */
-export function createMockSchedule(overrides: Partial<PulseSchedule> = {}): PulseSchedule {
+/** Create a mock Task with sensible defaults. */
+export function createMockSchedule(overrides: Partial<Task> = {}): Task {
   return {
     id: 'sched-1',
     name: 'Daily review',
@@ -52,6 +52,8 @@ export function createMockSchedule(overrides: Partial<PulseSchedule> = {}): Puls
     timezone: null,
     maxRuntime: null,
     permissionMode: 'acceptEdits',
+    filePath: '/tmp/tasks/daily-review.md',
+    tags: [],
     nextRun: new Date(Date.now() + 86400000).toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -59,8 +61,8 @@ export function createMockSchedule(overrides: Partial<PulseSchedule> = {}): Puls
   };
 }
 
-/** Create a mock PulseRun with sensible defaults. */
-export function createMockRun(overrides: Partial<PulseRun> = {}): PulseRun {
+/** Create a mock TaskRun with sensible defaults. */
+export function createMockRun(overrides: Partial<TaskRun> = {}): TaskRun {
   return {
     id: 'run-1',
     scheduleId: 'sched-1',
@@ -89,6 +91,7 @@ const mockAgent: AgentManifest = {
   registeredAt: '2025-01-01T00:00:00.000Z',
   registeredBy: 'test',
   personaEnabled: true,
+  isSystem: false,
   enabledToolGroups: {},
 };
 
@@ -103,9 +106,23 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
     approveTool: vi.fn(),
     denyTool: vi.fn(),
     submitAnswers: vi.fn().mockResolvedValue({ ok: true }),
+    submitElicitation: vi.fn().mockResolvedValue({ ok: true }),
+    stopTask: vi.fn().mockResolvedValue({ success: true, taskId: '' }),
     getCommands: vi.fn(),
     health: vi.fn(),
     updateSession: vi.fn(),
+    forkSession: vi.fn().mockResolvedValue({
+      id: 'forked-id',
+      title: 'Fork',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      permissionMode: 'default',
+    }),
+    reloadPlugins: vi.fn().mockResolvedValue({
+      commandCount: 0,
+      pluginCount: 0,
+      errorCount: 0,
+    }),
     browseDirectory: vi.fn().mockResolvedValue({ path: '/test', entries: [], parent: null }),
     getDefaultCwd: vi.fn().mockResolvedValue({ path: '/test/cwd' }),
     listFiles: vi.fn().mockResolvedValue({ files: [], truncated: false, total: 0 }),
@@ -123,7 +140,7 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
         authEnabled: false,
         tokenConfigured: false,
       },
-      pulse: {
+      tasks: {
         enabled: true,
       },
     }),
@@ -133,6 +150,7 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
       { value: 'claude-sonnet-4-5-20250929', displayName: 'Sonnet 4.5', description: 'Fast model' },
       { value: 'claude-opus-4-6', displayName: 'Opus 4.6', description: 'Capable model' },
     ]),
+    getSubagents: vi.fn().mockResolvedValue([]),
     getCapabilities: vi.fn().mockResolvedValue({
       capabilities: {
         'claude-code': {
@@ -149,16 +167,21 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
     }),
     startTunnel: vi.fn().mockResolvedValue({ url: 'https://test.ngrok.io' }),
     stopTunnel: vi.fn().mockResolvedValue(undefined),
-    // Pulse
-    listSchedules: vi.fn().mockResolvedValue([]),
-    createSchedule: vi.fn(),
-    updateSchedule: vi.fn(),
-    deleteSchedule: vi.fn().mockResolvedValue({ success: true }),
-    triggerSchedule: vi.fn().mockResolvedValue({ runId: 'run-1' }),
-    listRuns: vi.fn().mockResolvedValue([]),
-    getRun: vi.fn(),
-    cancelRun: vi.fn().mockResolvedValue({ success: true }),
-    getPulsePresets: vi.fn().mockResolvedValue([]),
+    verifyTunnelPasscode: vi.fn().mockResolvedValue({ ok: false }),
+    checkTunnelSession: vi
+      .fn()
+      .mockResolvedValue({ authenticated: false, passcodeRequired: false }),
+    setTunnelPasscode: vi.fn().mockResolvedValue({ ok: true }),
+    // Tasks
+    listTasks: vi.fn().mockResolvedValue([]),
+    createTask: vi.fn(),
+    updateTask: vi.fn(),
+    deleteTask: vi.fn().mockResolvedValue({ success: true }),
+    triggerTask: vi.fn().mockResolvedValue({ runId: 'run-1' }),
+    listTaskRuns: vi.fn().mockResolvedValue([]),
+    getTaskRun: vi.fn(),
+    cancelTaskRun: vi.fn().mockResolvedValue({ success: true }),
+    getTaskTemplates: vi.fn().mockResolvedValue([]),
     // Relay
     listRelayMessages: vi.fn().mockResolvedValue({ messages: [] }),
     getRelayMessage: vi.fn(),
@@ -219,14 +242,21 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
     getMeshAgentHealth: vi.fn().mockResolvedValue(undefined),
     sendMeshHeartbeat: vi.fn().mockResolvedValue({ success: true }),
     // Mesh Topology
-    getMeshTopology: vi.fn().mockResolvedValue({ callerNamespace: '*', namespaces: [], accessRules: [] }),
-    updateMeshAccessRule: vi.fn().mockResolvedValue({ sourceNamespace: '', targetNamespace: '', action: 'allow' }),
+    getMeshTopology: vi
+      .fn()
+      .mockResolvedValue({ callerNamespace: '*', namespaces: [], accessRules: [] }),
+    updateMeshAccessRule: vi
+      .fn()
+      .mockResolvedValue({ sourceNamespace: '', targetNamespace: '', action: 'allow' }),
     getMeshAgentAccess: vi.fn().mockResolvedValue({ agents: [] }),
     // Agent Identity
     getAgentByPath: vi.fn().mockResolvedValue(null),
     resolveAgents: vi.fn().mockResolvedValue({}),
-    createAgent: vi.fn().mockResolvedValue(mockAgent),
+    initAgent: vi.fn().mockResolvedValue(mockAgent),
     updateAgentByPath: vi.fn().mockResolvedValue(mockAgent),
+    createAgent: vi.fn().mockResolvedValue(mockAgent),
+    // Default Agent
+    setDefaultAgent: vi.fn().mockResolvedValue(undefined),
     // Relay Bindings
     getBindings: vi.fn().mockResolvedValue([]),
     createBinding: vi.fn().mockResolvedValue({
@@ -242,17 +272,21 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
       updatedAt: new Date().toISOString(),
     }),
     deleteBinding: vi.fn().mockResolvedValue(undefined),
-    updateBinding: vi.fn().mockImplementation(async (id: string, updates: Partial<AdapterBinding>) => ({
-      id,
-      adapterId: 'mock-adapter',
-      agentId: 'mock-agent',
-      sessionStrategy: 'per-chat' as const,
-      label: '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      ...updates,
-    })),
+    updateBinding: vi
+      .fn()
+      .mockImplementation(async (id: string, updates: Partial<AdapterBinding>) => ({
+        id,
+        adapterId: 'mock-adapter',
+        agentId: 'mock-agent',
+        sessionStrategy: 'per-chat' as const,
+        label: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...updates,
+      })),
     updateConfig: vi.fn().mockResolvedValue(undefined),
+    // Directory Operations
+    createDirectory: vi.fn().mockResolvedValue({ path: '/test/new-folder' }),
     // Discovery
     scan: vi.fn().mockResolvedValue(undefined),
     // Uploads
@@ -261,6 +295,10 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
     getMcpConfig: vi.fn().mockResolvedValue({ servers: [] }),
     resetAllData: vi.fn().mockResolvedValue({ message: 'Reset initiated. Server will restart.' }),
     restartServer: vi.fn().mockResolvedValue({ message: 'Restart initiated.' }),
+    // Activity Feed
+    listActivityEvents: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    // Templates
+    getTemplates: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
@@ -279,7 +317,7 @@ export function createMockTransport(overrides: Partial<Transport> = {}): Transpo
 export function signPayload(
   body: string,
   secret: string,
-  timestamp?: number,
+  timestamp?: number
 ): { signature: string; timestamp: string; nonce: string } {
   const ts = String(timestamp ?? Math.floor(Date.now() / 1000));
   const nonce = crypto.randomUUID();

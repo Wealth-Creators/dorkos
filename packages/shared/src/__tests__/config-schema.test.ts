@@ -4,6 +4,7 @@ import {
   USER_CONFIG_DEFAULTS,
   SENSITIVE_CONFIG_KEYS,
   LOG_LEVEL_MAP,
+  ONBOARDING_STEPS,
 } from '../config-schema.js';
 import type { UserConfig } from '../config-schema.js';
 
@@ -12,41 +13,44 @@ describe('UserConfigSchema', () => {
     const result = UserConfigSchema.parse({ version: 1 });
     expect(result).toEqual({
       version: 1,
-      server: { port: 4242, cwd: null, boundary: null },
-      tunnel: { enabled: false, domain: null, authtoken: null, auth: null },
+      server: { port: 4242, cwd: null, boundary: null, open: true },
+      tunnel: {
+        enabled: false,
+        domain: null,
+        authtoken: null,
+        auth: null,
+        passcodeEnabled: false,
+        passcodeHash: null,
+        passcodeSalt: null,
+      },
       ui: { theme: 'system', dismissedUpgradeVersions: [] },
       logging: { level: 'info', maxLogSizeKb: 500, maxLogFiles: 14 },
       relay: { enabled: true, dataDir: null },
       scheduler: { enabled: true, maxConcurrentRuns: 1, timezone: null, retentionCount: 100 },
       mesh: { scanRoots: [] },
       onboarding: { completedSteps: [], skippedSteps: [], startedAt: null, dismissedAt: null },
-      agentContext: { relayTools: true, meshTools: true, adapterTools: true, pulseTools: true },
+      agentContext: { relayTools: true, meshTools: true, adapterTools: true, tasksTools: true },
       uploads: { maxFileSize: 10 * 1024 * 1024, maxFiles: 10, allowedTypes: ['*/*'] },
+      agents: { defaultDirectory: '~/.dork/agents', defaultAgent: 'dorkbot' },
+      extensions: { enabled: [] },
+      sessionSecret: null,
     });
   });
 
   it('rejects invalid port below 1024', () => {
-    expect(() =>
-      UserConfigSchema.parse({ version: 1, server: { port: 80 } })
-    ).toThrow();
+    expect(() => UserConfigSchema.parse({ version: 1, server: { port: 80 } })).toThrow();
   });
 
   it('rejects invalid port above 65535', () => {
-    expect(() =>
-      UserConfigSchema.parse({ version: 1, server: { port: 70000 } })
-    ).toThrow();
+    expect(() => UserConfigSchema.parse({ version: 1, server: { port: 70000 } })).toThrow();
   });
 
   it('rejects non-integer port', () => {
-    expect(() =>
-      UserConfigSchema.parse({ version: 1, server: { port: 4242.5 } })
-    ).toThrow();
+    expect(() => UserConfigSchema.parse({ version: 1, server: { port: 4242.5 } })).toThrow();
   });
 
   it('rejects invalid theme value', () => {
-    expect(() =>
-      UserConfigSchema.parse({ version: 1, ui: { theme: 'blue' } })
-    ).toThrow();
+    expect(() => UserConfigSchema.parse({ version: 1, ui: { theme: 'blue' } })).toThrow();
   });
 
   it('accepts null for nullable fields', () => {
@@ -182,10 +186,12 @@ describe('SENSITIVE_CONFIG_KEYS', () => {
   it('contains expected sensitive keys', () => {
     expect(SENSITIVE_CONFIG_KEYS).toContain('tunnel.authtoken');
     expect(SENSITIVE_CONFIG_KEYS).toContain('tunnel.auth');
+    expect(SENSITIVE_CONFIG_KEYS).toContain('tunnel.passcodeHash');
+    expect(SENSITIVE_CONFIG_KEYS).toContain('tunnel.passcodeSalt');
   });
 
-  it('has exactly 2 sensitive keys', () => {
-    expect(SENSITIVE_CONFIG_KEYS).toHaveLength(2);
+  it('has exactly 4 sensitive keys', () => {
+    expect(SENSITIVE_CONFIG_KEYS).toHaveLength(4);
   });
 
   it('is readonly array', () => {
@@ -199,16 +205,27 @@ describe('USER_CONFIG_DEFAULTS', () => {
   it('matches schema defaults', () => {
     expect(USER_CONFIG_DEFAULTS).toEqual({
       version: 1,
-      server: { port: 4242, cwd: null, boundary: null },
-      tunnel: { enabled: false, domain: null, authtoken: null, auth: null },
+      server: { port: 4242, cwd: null, boundary: null, open: true },
+      tunnel: {
+        enabled: false,
+        domain: null,
+        authtoken: null,
+        auth: null,
+        passcodeEnabled: false,
+        passcodeHash: null,
+        passcodeSalt: null,
+      },
       ui: { theme: 'system', dismissedUpgradeVersions: [] },
       logging: { level: 'info', maxLogSizeKb: 500, maxLogFiles: 14 },
       relay: { enabled: true, dataDir: null },
       scheduler: { enabled: true, maxConcurrentRuns: 1, timezone: null, retentionCount: 100 },
       mesh: { scanRoots: [] },
       onboarding: { completedSteps: [], skippedSteps: [], startedAt: null, dismissedAt: null },
-      agentContext: { relayTools: true, meshTools: true, adapterTools: true, pulseTools: true },
+      agentContext: { relayTools: true, meshTools: true, adapterTools: true, tasksTools: true },
       uploads: { maxFileSize: 10 * 1024 * 1024, maxFiles: 10, allowedTypes: ['*/*'] },
+      agents: { defaultDirectory: '~/.dork/agents', defaultAgent: 'dorkbot' },
+      extensions: { enabled: [] },
+      sessionSecret: null,
     });
   });
 
@@ -280,15 +297,11 @@ describe('UserConfigSchema logging', () => {
   });
 
   it('logging.level rejects invalid values', () => {
-    expect(() =>
-      UserConfigSchema.parse({ version: 1, logging: { level: 'verbose' } })
-    ).toThrow();
+    expect(() => UserConfigSchema.parse({ version: 1, logging: { level: 'verbose' } })).toThrow();
   });
 
   it('logging.level rejects numeric strings', () => {
-    expect(() =>
-      UserConfigSchema.parse({ version: 1, logging: { level: '3' } })
-    ).toThrow();
+    expect(() => UserConfigSchema.parse({ version: 1, logging: { level: '3' } })).toThrow();
   });
 });
 
@@ -325,5 +338,57 @@ describe('LOG_LEVEL_MAP', () => {
     const values = Object.values(LOG_LEVEL_MAP);
     expect(new Set(values).size).toBe(values.length);
     expect(values.every(Number.isInteger)).toBe(true);
+  });
+});
+
+describe('ONBOARDING_STEPS', () => {
+  it('includes meet-dorkbot', () => {
+    expect(ONBOARDING_STEPS).toContain('meet-dorkbot');
+  });
+
+  it('has meet-dorkbot as the first step', () => {
+    expect(ONBOARDING_STEPS[0]).toBe('meet-dorkbot');
+  });
+
+  it('contains all expected steps', () => {
+    expect(ONBOARDING_STEPS).toEqual(['meet-dorkbot', 'discovery', 'tasks', 'adapters']);
+  });
+});
+
+describe('UserConfigSchema agents', () => {
+  it('agents.defaultDirectory defaults to ~/.dork/agents', () => {
+    const result = UserConfigSchema.parse({ version: 1 });
+    expect(result.agents.defaultDirectory).toBe('~/.dork/agents');
+  });
+
+  it('agents.defaultAgent defaults to dorkbot', () => {
+    const result = UserConfigSchema.parse({ version: 1 });
+    expect(result.agents.defaultAgent).toBe('dorkbot');
+  });
+
+  it('accepts custom agents.defaultDirectory', () => {
+    const result = UserConfigSchema.parse({
+      version: 1,
+      agents: { defaultDirectory: '/custom/agents' },
+    });
+    expect(result.agents.defaultDirectory).toBe('/custom/agents');
+  });
+
+  it('accepts custom agents.defaultAgent', () => {
+    const result = UserConfigSchema.parse({
+      version: 1,
+      agents: { defaultAgent: 'my-agent' },
+    });
+    expect(result.agents.defaultAgent).toBe('my-agent');
+  });
+
+  it('agents section defaults when omitted', () => {
+    const result = UserConfigSchema.parse({ version: 1 });
+    expect(result.agents).toEqual({ defaultDirectory: '~/.dork/agents', defaultAgent: 'dorkbot' });
+  });
+
+  it('agents section defaults when empty object provided', () => {
+    const result = UserConfigSchema.parse({ version: 1, agents: {} });
+    expect(result.agents).toEqual({ defaultDirectory: '~/.dork/agents', defaultAgent: 'dorkbot' });
   });
 });

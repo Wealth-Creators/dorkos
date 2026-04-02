@@ -31,9 +31,12 @@ export interface RelayCoreLike {
   publish(
     subject: string,
     payload: unknown,
-    options: PublishOptions,
+    options: PublishOptions
   ): Promise<{ messageId: string; deliveredTo: number }>;
-  subscribe(pattern: string, handler: (envelope: RelayEnvelope) => void | Promise<void>): Unsubscribe;
+  subscribe(
+    pattern: string,
+    handler: (envelope: RelayEnvelope) => void | Promise<void>
+  ): Unsubscribe;
 }
 
 export interface BindingRouterDeps {
@@ -42,8 +45,10 @@ export interface BindingRouterDeps {
   agentManager: AgentSessionCreator;
   meshCore: AdapterMeshCoreLike;
   relayDir: string;
-  /** Maps a platform type (e.g., 'telegram') to the adapter instance ID from config. */
-  resolveAdapterInstanceId?: (platformType: string) => string | undefined;
+  /** Optional recorder for binding routing failure events. */
+  eventRecorder?: {
+    insertAdapterEvent(adapterId: string, eventType: string, message: string): void;
+  };
 }
 
 /**
@@ -78,7 +83,7 @@ export class BindingRouter {
     // like `relay.human.telegram.123456` have 4+ tokens.
     this.unsubscribe = this.deps.relayCore.subscribe(
       'relay.human.>',
-      this.handleInbound.bind(this),
+      this.handleInbound.bind(this)
     );
     logger.info(`BindingRouter initialized with ${this.sessionMap.size} persisted session(s)`);
   }
@@ -102,11 +107,51 @@ export class BindingRouter {
       try {
         await this.saveSessionMap();
       } catch (err) {
-        logger.warn('BindingRouter: failed to persist session map after cleanup, will retry on next write', err);
+        logger.warn(
+          'BindingRouter: failed to persist session map after cleanup, will retry on next write',
+          err
+        );
       }
       logger.info(`Cleaned up ${removed} orphaned session mapping(s)`);
     }
     return removed;
+  }
+
+  /**
+   * Get active sessions for a specific binding.
+   *
+   * @param bindingId - Binding UUID to filter by
+   * @returns Array of session entries with parsed chatId
+   */
+  getSessionsByBinding(
+    bindingId: string
+  ): Array<{ key: string; chatId: string; sessionId: string }> {
+    const results: Array<{ key: string; chatId: string; sessionId: string }> = [];
+    for (const [key, sessionId] of this.sessionMap) {
+      if (key.startsWith(`${bindingId}:`)) {
+        const parts = key.split(':');
+        const chatId = parts.length >= 3 ? parts.slice(2).join(':') : 'unknown';
+        results.push({ key, chatId, sessionId });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Get all active sessions across all bindings.
+   *
+   * @returns Array of session entries with parsed bindingId and chatId
+   */
+  getAllSessions(): Array<{ key: string; bindingId: string; chatId: string; sessionId: string }> {
+    const results: Array<{ key: string; bindingId: string; chatId: string; sessionId: string }> =
+      [];
+    for (const [key, sessionId] of this.sessionMap) {
+      const parts = key.split(':');
+      const bindingId = parts[0] ?? 'unknown';
+      const chatId = parts.length >= 3 ? parts.slice(2).join(':') : 'unknown';
+      results.push({ key, bindingId, chatId, sessionId });
+    }
+    return results;
   }
 
   private async handleInbound(envelope: RelayEnvelope): Promise<void> {
@@ -127,9 +172,7 @@ export class BindingRouter {
 
       const binding = this.deps.bindingStore.resolve(adapterId, chatId, channelType);
       if (!binding) {
-        logger.info(
-          `BindingRouter: no binding for adapter=${adapterId} chat=${chatId}, skipping`,
-        );
+        logger.info(`BindingRouter: no binding for adapter=${adapterId} chat=${chatId}, skipping`);
         return;
       }
 
@@ -137,7 +180,7 @@ export class BindingRouter {
       if (binding.canReceive === false) {
         logger.debug(
           '[BindingRouter] Dropping inbound \u2014 canReceive=false for binding %s',
-          binding.id,
+          binding.id
         );
         return;
       }
@@ -145,7 +188,12 @@ export class BindingRouter {
       const projectPath = this.deps.meshCore.getProjectPath(binding.agentId);
       if (!projectPath) {
         logger.warn(
-          `BindingRouter: agent '${binding.agentId}' not found in mesh registry, skipping`,
+          `BindingRouter: agent '${binding.agentId}' not found in mesh registry, skipping`
+        );
+        this.deps.eventRecorder?.insertAdapterEvent(
+          binding.adapterId,
+          'binding.routing_failed',
+          `Agent '${binding.agentId}' not found in mesh registry`
         );
         return;
       }
@@ -173,12 +221,12 @@ export class BindingRouter {
 
       logger.info(
         `BindingRouter: routed ${envelope.subject} → relay.agent.${sessionId} ` +
-        `(binding=${binding.id}, projectPath=${projectPath})`,
+          `(binding=${binding.id}, projectPath=${projectPath})`
       );
     } catch (err) {
       logger.error(
         `BindingRouter: failed to route ${envelope.subject}:`,
-        err instanceof Error ? err.message : err,
+        err instanceof Error ? err.message : err
       );
     }
   }
@@ -186,7 +234,7 @@ export class BindingRouter {
   private async resolveSession(
     binding: AdapterBinding,
     chatId: string | undefined,
-    envelope: RelayEnvelope,
+    envelope: RelayEnvelope
   ): Promise<string> {
     switch (binding.sessionStrategy) {
       case 'stateless':
@@ -195,9 +243,7 @@ export class BindingRouter {
       case 'per-user': {
         const metadata = envelope as Record<string, unknown>;
         const userId =
-          (metadata.metadata as Record<string, unknown> | undefined)?.userId ??
-          chatId ??
-          'unknown';
+          (metadata.metadata as Record<string, unknown> | undefined)?.userId ?? chatId ?? 'unknown';
         const key = `${binding.id}:user:${String(userId)}`;
         return this.getOrCreateSession(key, binding);
       }
@@ -231,7 +277,10 @@ export class BindingRouter {
         try {
           await this.saveSessionMap();
         } catch (err) {
-          logger.warn('BindingRouter: failed to persist session map, will retry on next write', err);
+          logger.warn(
+            'BindingRouter: failed to persist session map, will retry on next write',
+            err
+          );
         }
         return sessionId;
       } finally {
@@ -270,23 +319,19 @@ export class BindingRouter {
       agentId: binding.agentId,
       projectPath,
     });
-    const session = await this.deps.agentManager.createSession(
-      projectPath,
-      binding.permissionMode,
-    );
+    const session = await this.deps.agentManager.createSession(projectPath, binding.permissionMode);
     return session.id;
   }
 
   /**
    * Parse a relay subject into adapter routing components.
    *
-   * Expected patterns:
-   * - `relay.human.{platformType}.{chatId}` (DM)
-   * - `relay.human.{platformType}.group.{chatId}` (group chat — chatId may be negative)
+   * Expected patterns (instance-aware format):
+   * - `relay.human.{platformType}.{instanceId}.{chatId}` (DM)
+   * - `relay.human.{platformType}.{instanceId}.group.{chatId}` (group chat)
    *
-   * The platform type (e.g., 'telegram') is resolved to the adapter instance ID
-   * via the `resolveAdapterInstanceId` dependency. Falls back to the raw
-   * platform type when no resolver is provided.
+   * The instance ID segment is the adapter's unique ID and is used directly
+   * as the `adapterId` for binding resolution.
    */
   private parseSubject(subject: string): {
     adapterId?: string;
@@ -299,21 +344,23 @@ export class BindingRouter {
     const platformType = parts[2];
     if (!platformType) return {};
 
-    // Resolve platform type → adapter instance ID (e.g., 'telegram' → 'tg-bot-1')
-    const adapterId =
-      this.deps.resolveAdapterInstanceId?.(platformType) ?? platformType;
-
-    // Remaining tokens form the chat context
     const remaining = parts.slice(3);
+
+    // First remaining token is the instance ID (adapter ID)
+    const instanceId = remaining[0];
+    if (!instanceId) return {};
+
+    const adapterId = instanceId;
+    const afterInstance = remaining.slice(1);
+
     let chatId: string | undefined;
     let channelType: string | undefined;
 
-    if (remaining.length >= 2 && remaining[0] === 'group') {
+    if (afterInstance.length >= 2 && afterInstance[0] === 'group') {
       channelType = 'group';
-      // Join remaining tokens to handle negative group IDs (e.g., '-123456')
-      chatId = remaining.slice(1).join('.');
-    } else if (remaining.length >= 1) {
-      chatId = remaining.join('.');
+      chatId = afterInstance.slice(1).join('.');
+    } else if (afterInstance.length >= 1) {
+      chatId = afterInstance.join('.');
     }
 
     return { adapterId, chatId, channelType };
@@ -336,12 +383,12 @@ export class BindingRouter {
           Array.isArray(entry) &&
           entry.length === 2 &&
           typeof entry[0] === 'string' &&
-          typeof entry[1] === 'string',
+          typeof entry[1] === 'string'
       );
 
       if (valid.length < parsed.length) {
         logger.warn(
-          `BindingRouter: discarded ${parsed.length - valid.length} malformed sessionMap entries`,
+          `BindingRouter: discarded ${parsed.length - valid.length} malformed sessionMap entries`
         );
       }
 
@@ -358,7 +405,10 @@ export class BindingRouter {
   }
 
   private saveSessionMap(): Promise<void> {
-    this.writeLock = this.writeLock.then(() => this.doSaveSessionMap(), () => this.doSaveSessionMap());
+    this.writeLock = this.writeLock.then(
+      () => this.doSaveSessionMap(),
+      () => this.doSaveSessionMap()
+    );
     return this.writeLock;
   }
 

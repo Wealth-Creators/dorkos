@@ -13,7 +13,7 @@ import type { AgentManifest } from '@dorkos/shared/mesh-schemas';
 // ---------------------------------------------------------------------------
 
 const mockToolStatus = vi.fn<() => AgentToolStatus>(() => ({
-  pulse: 'enabled',
+  tasks: 'enabled',
   relay: 'enabled',
   mesh: 'enabled',
   adapter: 'enabled',
@@ -29,9 +29,7 @@ vi.mock('@/layers/entities/relay', () => ({
   useRelayAdapters: () => mockRelayAdapters(),
 }));
 
-const mockRegisteredAgents = vi.fn<
-  () => { data: { agents: AgentManifest[] } | undefined }
->(() => ({
+const mockRegisteredAgents = vi.fn<() => { data: { agents: AgentManifest[] } | undefined }>(() => ({
   data: undefined,
 }));
 vi.mock('@/layers/entities/mesh', () => ({
@@ -44,7 +42,7 @@ vi.mock('@/layers/entities/mesh', () => ({
 
 function makeAdapter(
   id: string,
-  state: 'connected' | 'disconnected' | 'error' | 'starting' | 'stopping',
+  state: 'connected' | 'disconnected' | 'error' | 'starting' | 'stopping'
 ): AdapterListItem {
   return {
     config: {
@@ -76,7 +74,7 @@ describe('useConnectionsStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockToolStatus.mockReturnValue({
-      pulse: 'enabled',
+      tasks: 'enabled',
       relay: 'enabled',
       mesh: 'enabled',
       adapter: 'enabled',
@@ -256,7 +254,7 @@ describe('useConnectionsStatus', () => {
 
   it('returns none when relay and mesh are disabled by server (no data fetched)', () => {
     mockToolStatus.mockReturnValue({
-      pulse: 'enabled',
+      tasks: 'enabled',
       relay: 'disabled-by-server',
       mesh: 'disabled-by-server',
       adapter: 'disabled-by-server',

@@ -41,33 +41,34 @@ Tokens are defined as HSL custom properties in `:root`/`.dark` in `apps/client/s
 
 ### Light Mode
 
-| Tailwind class       | HSL value      | Usage                          |
-| -------------------- | -------------- | ------------------------------ |
-| `bg-background`      | `0 0% 98%`     | Page background                |
-| `bg-muted`           | `0 0% 96%`     | Subtle backgrounds             |
-| `bg-secondary`       | `0 0% 92%`     | User message tint              |
-| `bg-card`            | `0 0% 100%`    | Elevated cards, popovers       |
-| `text-foreground`    | `0 0% 9%`      | Body text                      |
-| `text-muted-foreground` | `0 0% 32%`  | Labels, metadata               |
-| `border-border`      | `0 0% 83%`     | Card borders, inputs           |
+| Tailwind class          | HSL value   | Usage                    |
+| ----------------------- | ----------- | ------------------------ |
+| `bg-background`         | `0 0% 98%`  | Page background          |
+| `bg-muted`              | `0 0% 96%`  | Subtle backgrounds       |
+| `bg-secondary`          | `0 0% 92%`  | User message tint        |
+| `bg-card`               | `0 0% 100%` | Elevated cards, popovers |
+| `text-foreground`       | `0 0% 9%`   | Body text                |
+| `text-muted-foreground` | `0 0% 32%`  | Labels, metadata         |
+| `border-border`         | `0 0% 83%`  | Card borders, inputs     |
 
 ### Dark Mode
 
-| Tailwind class       | HSL value      | Usage                          |
-| -------------------- | -------------- | ------------------------------ |
-| `bg-background`      | `0 0% 4%`      | Page background                |
-| `bg-muted`           | `0 0% 9%`      | Subtle backgrounds             |
-| `bg-secondary`       | `0 0% 14%`     | User message tint              |
-| `bg-card`            | `0 0% 4%`      | Elevated cards, popovers       |
-| `text-foreground`    | `0 0% 93%`     | Body text                      |
-| `text-muted-foreground` | `0 0% 64%`  | Labels, metadata               |
-| `border-border`      | `0 0% 25%`     | Card borders, inputs           |
+| Tailwind class          | HSL value  | Usage                    |
+| ----------------------- | ---------- | ------------------------ |
+| `bg-background`         | `0 0% 4%`  | Page background          |
+| `bg-muted`              | `0 0% 9%`  | Subtle backgrounds       |
+| `bg-secondary`          | `0 0% 14%` | User message tint        |
+| `bg-card`               | `0 0% 4%`  | Elevated cards, popovers |
+| `text-foreground`       | `0 0% 93%` | Body text                |
+| `text-muted-foreground` | `0 0% 64%` | Labels, metadata         |
+| `border-border`         | `0 0% 25%` | Card borders, inputs     |
 
 ### Brand Accent
 
 One brand color, used with purpose: **orange** (HSL `24 90% 44%` light / `24 88% 55%` dark). Derived from the DorkOS brand palette (`#E85D04`), slightly adjusted for AA contrast.
 
 **Where brand orange appears:**
+
 - Focus rings (`--ring`) — every `focus-visible` interaction carries the brand
 - `HoverBorderGradient` — the onboarding CTA, the first branded moment users see
 - `brand` button variant — opt-in for exceptional CTAs (`<Button variant="brand">`)
@@ -75,6 +76,7 @@ One brand color, used with purpose: **orange** (HSL `24 90% 44%` light / `24 88%
 - Assistant message links and inline code — via `--ring`
 
 **Where gray stays:**
+
 - `--primary` — default buttons, switches, badges, selections (the quiet workhorse)
 - `--accent` — hover backgrounds in menus, dropdowns
 - `--secondary` — user message tint
@@ -103,12 +105,12 @@ Users can override font family via Settings → Appearance. The app store (`setF
 
 Base values at desktop (no mobile scaling applied). Actual rendered sizes multiply by `--_st` on mobile (default 1.25x). Users can apply a further `--user-font-scale` via Settings → Appearance.
 
-| Token       | Base size | Usage                     |
-| ----------- | --------- | ------------------------- |
-| `text-xs`   | 12px      | Timestamps, tool status   |
+| Token       | Base size | Usage                                     |
+| ----------- | --------- | ----------------------------------------- |
+| `text-xs`   | 12px      | Timestamps, tool status                   |
 | `text-sm`   | 14px      | Message body text, code, metadata, labels |
 | `text-base` | 16px      | (unused in chat UI)                       |
-| `text-lg`   | 18px      | In-message headings (h3+) |
+| `text-lg`   | 18px      | In-message headings (h3+)                 |
 
 ### Weights
 
@@ -248,9 +250,9 @@ Both overlays live in a `relative flex-1 min-h-0` wrapper in ChatPanel, position
 - Send button: circular, `accent` color, icon-only
 - Stop button: circular, muted red, square icon
 
-### Sidebar (AgentSidebar)
+### Sidebar (SessionSidebar)
 
-Built on **Shadcn Sidebar** (`layers/shared/ui/sidebar.tsx`) with `collapsible="offcanvas"` mode. The main sidebar component is `AgentSidebar` (in `features/session-list/`).
+Built on **Shadcn Sidebar** (`layers/shared/ui/sidebar.tsx`) with `collapsible="offcanvas"` mode. The sidebar body swaps per route: `SessionSidebar` (in `features/session-list/`) at `/session`, `DashboardSidebar` (in `features/dashboard-sidebar/`) at `/`.
 
 - **Width**: 320px (20rem) via `--sidebar-width` CSS custom property on `SidebarProvider`
 - **CSS variables**: `--sidebar-*` in `index.css` (subtly distinct from main background — 96% vs 98% light, 6% vs 4% dark)
@@ -272,16 +274,16 @@ Built on **Shadcn Sidebar** (`layers/shared/ui/sidebar.tsx`) with `collapsible="
 
 The sidebar uses a custom tab bar (`SidebarTabRow`, not Radix Tabs) for switching between Sessions, Schedules, and Connections views. Keyboard shortcuts `Cmd+1`/`Cmd+2`/`Cmd+3` switch tabs directly.
 
-| Element | Specification |
-|---|---|
-| Tab bar height | Auto (`py-1.5`) |
-| Tab button padding | `p-2` |
-| Tab icon size | `--size-icon-sm` |
-| Sliding indicator | `h-0.5 rounded-full bg-brand` |
-| Indicator animation | Spring: stiffness 280, damping 32 |
-| Schedules badge | `text-[10px] size-4 bg-green-500` (numeric count) |
-| Connections dot | `size-1.5 rounded-full` (status indicator) |
-| Status colors | green = ok, amber = partial, red = error |
+| Element             | Specification                                     |
+| ------------------- | ------------------------------------------------- |
+| Tab bar height      | Auto (`py-1.5`)                                   |
+| Tab button padding  | `p-2`                                             |
+| Tab icon size       | `--size-icon-sm`                                  |
+| Sliding indicator   | `h-0.5 rounded-full bg-brand`                     |
+| Indicator animation | Spring: stiffness 280, damping 32                 |
+| Schedules badge     | `text-[10px] size-4 bg-green-500` (numeric count) |
+| Connections dot     | `size-1.5 rounded-full` (status indicator)        |
+| Status colors       | green = ok, amber = partial, red = error          |
 
 All three views are mounted simultaneously and use CSS `hidden` toggling to preserve state (scroll position, expanded items) across tab switches. See ADR-0107 for the decision rationale.
 
@@ -290,6 +292,7 @@ ARIA semantics follow the WAI tablist pattern: `role="tablist"` on the container
 ### Tooltip
 
 Standard shadcn Radix tooltip from `shared/ui/tooltip.tsx`. Used for:
+
 - Disabled state indicators (e.g., "Pulse is disabled" on HeartPulse icon)
 - Contextual information on icon-only buttons
 
@@ -300,10 +303,12 @@ Standard shadcn Radix tooltip from `shared/ui/tooltip.tsx`. Used for:
 Theme-aware toast via `sonner` from `shared/ui/sonner.tsx`. `<Toaster />` mounted in `App.tsx`.
 
 **When to toast:**
+
 - Background actions with no immediate visible UI change ("Run triggered", "Schedule approved")
 - Error notifications for failed mutations
 
 **When NOT to toast:**
+
 - Toggle on/off (switch state is self-evidencing)
 - Form submission success (dialog closes)
 - Cancel run (status updates inline)
@@ -335,6 +340,93 @@ Pattern: `Popover` > `PopoverTrigger` > `PopoverContent` > `Command` > `CommandI
 
 ---
 
+## FilterBar (Compound Component)
+
+A composable filter bar system for list surfaces. Built using the compound component pattern (`FilterBar.Search`, `FilterBar.Primary`, etc.) with context-based state sharing. The filter engine (`shared/lib/filter-engine.ts`) is pure TypeScript with no React dependency; the UI components (`shared/ui/filter-bar/`) and the `useFilterState` hook (`shared/model/use-filter-state.ts`) bridge it to React and TanStack Router.
+
+### Architecture
+
+```
+filter-engine.ts          ← Pure TS: filter factories, schema builder, match/sort
+  ↓
+useFilterState()          ← React hook: URL sync via TanStack Router search params
+  ↓
+<FilterBar state={...}>   ← Compound UI: provides state via context to sub-components
+  <FilterBar.Search />
+  <FilterBar.Primary />
+  <FilterBar.AddFilter />
+  <FilterBar.Sort />
+  <FilterBar.ResultCount />
+  <FilterBar.ActiveFilters />
+```
+
+### Sub-Components
+
+| Sub-component             | Purpose                                            |
+| ------------------------- | -------------------------------------------------- |
+| `FilterBar`               | Root container, provides filter state via context  |
+| `FilterBar.Search`        | Debounced text input for text filter fields        |
+| `FilterBar.Primary`       | Inline enum filter rendered as segmented pills     |
+| `FilterBar.AddFilter`     | Popover menu for activating non-primary filters    |
+| `FilterBar.Sort`          | Sort field and direction selector                  |
+| `FilterBar.ResultCount`   | "4 of 12 agents" result summary                    |
+| `FilterBar.ActiveFilters` | Removable chips for currently active filter values |
+
+### Usage
+
+```tsx
+import { FilterBar } from '@/layers/shared/ui';
+import { useFilterState } from '@/layers/shared/model';
+import { agentFilterSchema, agentSortOptions } from '../lib/agent-filter-schema';
+
+function AgentFilterBar() {
+  const filterState = useFilterState(agentFilterSchema, {
+    debounce: { search: 200 },
+  });
+
+  return (
+    <FilterBar state={filterState}>
+      <FilterBar.Search name="search" placeholder="Filter agents..." />
+      <FilterBar.Primary name="status" />
+      <FilterBar.AddFilter />
+      <FilterBar.Sort options={agentSortOptions} />
+      <FilterBar.ResultCount count={filtered.length} total={all.length} noun="agent" />
+      <FilterBar.ActiveFilters />
+    </FilterBar>
+  );
+}
+```
+
+### Filter Types
+
+The filter engine provides five filter factories:
+
+| Factory              | Value Type                | Use Case                                |
+| -------------------- | ------------------------- | --------------------------------------- |
+| `textFilter`         | `string`                  | Substring search across multiple fields |
+| `enumFilter`         | `string \| string[]`      | Single-select or multi-select dropdowns |
+| `dateRangeFilter`    | `DateRangeFilterValue`    | Preset durations or explicit bounds     |
+| `booleanFilter`      | `boolean \| null`         | Tri-state toggle (null = no filter)     |
+| `numericRangeFilter` | `NumericRangeFilterValue` | Min/max range bounds                    |
+
+### Styling
+
+- Root container: `flex flex-wrap items-center gap-2 px-4 py-3`
+- Active filter chips: removable badges with `X` icon
+- Primary filters: enum pills inline in the bar
+- Search input: standard input with `text-sm` and debounced URL sync
+- Enum filter colors: defined per-option via `colors` record in filter schema (Tailwind classes like `text-emerald-400`)
+
+### Key Files
+
+| File                               | Purpose                                                  |
+| ---------------------------------- | -------------------------------------------------------- |
+| `shared/lib/filter-engine.ts`      | Pure filter factories, schema builder, sort/filter logic |
+| `shared/model/use-filter-state.ts` | URL-synced filter state hook                             |
+| `shared/ui/filter-bar/`            | Compound UI components (7 sub-components)                |
+
+---
+
 ## Form Fields
 
 DorkOS uses [Shadcn Field](https://ui.shadcn.com/docs/components/field) as the foundation for all form field layouts. Field provides accessible label/description/error association via `aria-describedby` and `role="alert"`. Two higher-level components sit on top.
@@ -348,7 +440,7 @@ import { SettingRow, Switch } from '@/layers/shared/ui';
 
 <SettingRow label="Notifications" description="Enable push alerts">
   <Switch checked={enabled} onCheckedChange={setEnabled} />
-</SettingRow>
+</SettingRow>;
 ```
 
 For compound controls (e.g., Badge + Switch), wrap them in a flex container:
@@ -419,10 +511,10 @@ Used across settings panels, agent config tabs, adapter wizard, and binding dial
 
 ### Field Orientation Conventions
 
-| Context | Orientation | Component |
-|---|---|---|
-| Settings rows | `horizontal` | `<SettingRow>` |
-| Wizard/form fields | `vertical` | `<Field orientation="vertical">` |
+| Context            | Orientation  | Component                          |
+| ------------------ | ------------ | ---------------------------------- |
+| Settings rows      | `horizontal` | `<SettingRow>`                     |
+| Wizard/form fields | `vertical`   | `<Field orientation="vertical">`   |
 | Responsive layouts | `responsive` | `<Field orientation="responsive">` |
 
 For rows that have a label but no description (e.g., simple toggles), use `<Field orientation="horizontal">` + `<FieldLabel>` directly instead of `SettingRow`.
@@ -470,11 +562,11 @@ Opacity 0.5. No cursor change beyond `not-allowed`.
 
 Status indicators that depend on both per-entity configuration and global feature flags use a 3-state model driven by `useAgentToolStatus()`:
 
-| State | Visual | Meaning |
-|-------|--------|---------|
-| `enabled` | Full color, normal opacity | Feature is active for this agent |
-| `disabled-by-agent` | Muted/dimmed appearance (`opacity-50`) | Agent manifest has explicitly opted out |
-| `disabled-by-server` | Hidden (not rendered) | Feature is disabled server-wide |
+| State                | Visual                                 | Meaning                                 |
+| -------------------- | -------------------------------------- | --------------------------------------- |
+| `enabled`            | Full color, normal opacity             | Feature is active for this agent        |
+| `disabled-by-agent`  | Muted/dimmed appearance (`opacity-50`) | Agent manifest has explicitly opted out |
+| `disabled-by-server` | Hidden (not rendered)                  | Feature is disabled server-wide         |
 
 In the sidebar, this pattern surfaces as badge indicators on the tab bar (schedule count badge, connections status dot). The `SidebarTabRow` shows badges only when the corresponding feature is enabled.
 
@@ -482,11 +574,11 @@ In the sidebar, this pattern surfaces as badge indicators on the tab bar (schedu
 
 The CapabilitiesTab uses a 3-state display for per-agent tool group toggles:
 
-| State | Visual | Meaning |
-|-------|--------|---------|
-| Inherited (enabled) | Switch ON, "Inherited" badge | Agent inherits the global default (enabled) |
-| Overridden (disabled) | Switch OFF, "Overridden" badge | Agent explicitly disables this tool group |
-| Inherited (disabled) | Switch OFF, disabled, "Server disabled" badge | Server feature flag is off; toggle is non-interactive |
+| State                 | Visual                                        | Meaning                                               |
+| --------------------- | --------------------------------------------- | ----------------------------------------------------- |
+| Inherited (enabled)   | Switch ON, "Inherited" badge                  | Agent inherits the global default (enabled)           |
+| Overridden (disabled) | Switch OFF, "Overridden" badge                | Agent explicitly disables this tool group             |
+| Inherited (disabled)  | Switch OFF, disabled, "Server disabled" badge | Server feature flag is off; toggle is non-interactive |
 
 The toggle writes to the agent manifest's `enabledToolGroups` field. When a toggle is flipped, it sets an explicit value; when reset, the field is removed (returning to inherited behavior).
 
@@ -572,7 +664,7 @@ Usage:
 | Class                  | Applied To                   | Purpose                         |
 | ---------------------- | ---------------------------- | ------------------------------- |
 | `chat-input-container` | ChatPanel input wrapper      | Bottom safe area inset          |
-| `sidebar-container`    | AgentSidebar root            | Left + bottom safe area insets  |
+| `sidebar-container`    | Sidebar root                 | Left + bottom safe area insets  |
 | `chat-scroll-area`     | MessageList scroll container | `touch-action: pan-y` on mobile |
 
 ### Adjusting the Scale
@@ -662,14 +754,164 @@ Use instead of plain `Dialog` when the dialog content needs full-screen treatmen
 
 ---
 
+## Data Tables
+
+Use semantic `<table>` markup via the shared Table components. Do not use flex-based row layouts for columnar data.
+
+| Data Shape                                  | Use                               | Why                                       |
+| ------------------------------------------- | --------------------------------- | ----------------------------------------- |
+| Columnar data (rows × columns)              | `Table` primitives or `DataTable` | Semantic HTML, accessible, consistent     |
+| Sortable/filterable data                    | `DataTable` + TanStack Table      | Built-in interaction support              |
+| Card-based items (expandable, rich content) | Cards/custom layout               | Not tabular — each item is self-contained |
+| Sidebar lists (sessions, navigation)        | `SidebarMenu`                     | Navigation pattern, not data display      |
+
+### Table Primitives (`shared/ui/table.tsx`)
+
+Low-level semantic table building blocks with no interaction logic:
+
+```tsx
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableFooter,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableCaption,
+} from '@/layers/shared/ui';
+
+<Table>
+  <TableHeader>
+    <TableRow>
+      <TableHead>Name</TableHead>
+      <TableHead>Status</TableHead>
+    </TableRow>
+  </TableHeader>
+  <TableBody>
+    <TableRow>
+      <TableCell>dorkbot</TableCell>
+      <TableCell>active</TableCell>
+    </TableRow>
+  </TableBody>
+</Table>;
+```
+
+`Table` wraps the `<table>` in a `relative w-full overflow-auto` container for horizontal scroll. `TableRow` has hover highlight (`hover:bg-muted/50`) and a `data-[state=selected]` highlight for selection.
+
+### DataTable (`shared/ui/data-table.tsx`)
+
+Generic wrapper around TanStack Table (`@tanstack/react-table`). Takes `columns` + `data`, handles the rendering loop, and shows an empty state when there are no rows.
+
+```tsx
+import { DataTable } from '@/layers/shared/ui';
+import type { ColumnDef } from '@tanstack/react-table';
+
+const columns: ColumnDef<Agent>[] = [
+  { accessorKey: 'name', header: 'Name' },
+  {
+    accessorKey: 'status',
+    header: 'Status',
+    meta: { hideOnMobile: true }, // hidden below 768px
+    cell: ({ row }) => <StatusBadge status={row.getValue('status')} />,
+  },
+];
+
+<DataTable columns={columns} data={agents} emptyMessage="No agents found." />;
+```
+
+For sorting, selection, or pagination, pass `tableOptions`:
+
+```tsx
+<DataTable
+  columns={columns}
+  data={agents}
+  tableOptions={{
+    state: { sorting },
+    onSortingChange: setSorting,
+    getSortedRowModel: getSortedRowModel(),
+  }}
+/>
+```
+
+**`meta.hideOnMobile`** — any column with `meta: { hideOnMobile: true }` is automatically hidden on viewports below 768px. User-provided `columnVisibility` in `tableOptions` takes precedence per-column.
+
+### FSD Placement
+
+- **`Table` + `DataTable`** → `shared/ui` (presentation only — no data fetching)
+- **Column definitions** → feature module that owns them (e.g., `features/activity-feed-page/`)
+- **Data fetching** → entity hooks consumed by the feature component
+
+### Dev Playground
+
+Table showcase at `/dev/tables` — basic tables, sorting, activity log, task history, row selection, empty/loading states, compact/striped variants.
+
+---
+
+## Error Boundaries
+
+Three fallback components handle different failure scopes:
+
+| Component            | Scope                   | Recovery                          | Renders With       |
+| -------------------- | ----------------------- | --------------------------------- | ------------------ |
+| `AppCrashFallback`   | Entire app              | Full page reload                  | Inline styles only |
+| `RouteErrorFallback` | Individual route        | `router.invalidate()` retry + nav | Tailwind + shadcn  |
+| `NotFoundFallback`   | 404 (no matching route) | Navigate to Dashboard             | Tailwind + shadcn  |
+
+### `AppCrashFallback`
+
+Outermost safety net — wraps the entire React tree in `main.tsx` via `react-error-boundary`. Uses **inline styles only** because Tailwind, shadcn, and context providers may themselves have crashed. The only recovery action is a hard page reload.
+
+```tsx
+// main.tsx
+import { ErrorBoundary } from 'react-error-boundary';
+import { AppCrashFallback } from '@/layers/shared/ui/app-crash-fallback';
+
+<ErrorBoundary FallbackComponent={AppCrashFallback}>
+  <App />
+</ErrorBoundary>;
+```
+
+Dev builds show an expandable stack trace. Production builds show only the error message.
+
+### `RouteErrorFallback`
+
+Handles runtime errors thrown inside a TanStack Router route. Renders inside the app shell — the sidebar and header remain visible. Uses `router.invalidate()` for retry (not `reset()`) because `reset()` does not re-run loaders.
+
+Registered as `defaultErrorComponent` in the router root:
+
+```tsx
+// router.tsx
+const rootRoute = createRootRouteWithContext<RouterContext>()({
+  defaultErrorComponent: RouteErrorFallback,
+  defaultNotFoundComponent: NotFoundFallback,
+});
+```
+
+### `NotFoundFallback`
+
+Renders when no route matches (404). Shows a Search icon and a "Go to Dashboard" button. Registered as `notFoundComponent` on the router root and on the root layout route.
+
+All three components are exported from `@/layers/shared/ui`.
+
+---
+
 ## File Reference
 
-| Concern                  | File                                        |
-| ------------------------ | ------------------------------------------- |
-| CSS variables & Tailwind | `apps/client/src/index.css`                 |
-| shadcn config            | `apps/client/components.json`               |
-| Component library        | `apps/client/src/layers/shared/ui/`                          |
-| Chat components          | `apps/client/src/layers/features/chat/`                      |
-| Session components       | `apps/client/src/layers/features/session-list/`              |
-| App state                | `apps/client/src/layers/shared/model/app-store.ts`           |
+| Concern                  | File                                                             |
+| ------------------------ | ---------------------------------------------------------------- |
+| CSS variables & Tailwind | `apps/client/src/index.css`                                      |
+| shadcn config            | `apps/client/components.json`                                    |
+| Component library        | `apps/client/src/layers/shared/ui/`                              |
+| Table primitives         | `apps/client/src/layers/shared/ui/table.tsx`                     |
+| DataTable                | `apps/client/src/layers/shared/ui/data-table.tsx`                |
+| App crash fallback       | `apps/client/src/layers/shared/ui/app-crash-fallback.tsx`        |
+| Route error fallback     | `apps/client/src/layers/shared/ui/route-error-fallback.tsx`      |
+| Not-found fallback       | `apps/client/src/layers/shared/ui/not-found-fallback.tsx`        |
+| Chat components          | `apps/client/src/layers/features/chat/`                          |
+| Session components       | `apps/client/src/layers/features/session-list/`                  |
+| App state                | `apps/client/src/layers/shared/model/app-store.ts`               |
 | Chat state               | `apps/client/src/layers/features/chat/model/use-chat-session.ts` |
+| Filter engine            | `apps/client/src/layers/shared/lib/filter-engine.ts`             |
+| Filter state hook        | `apps/client/src/layers/shared/model/use-filter-state.ts`        |
+| FilterBar UI             | `apps/client/src/layers/shared/ui/filter-bar/`                   |

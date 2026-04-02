@@ -35,14 +35,18 @@ dorkos/
 
 ```
 src/
-├── App.tsx              # App entry — composes widgets, provides context
-├── main.tsx             # Vite entry point
+├── App.tsx              # App entry — embedded vs standalone mode switch
+├── AppShell.tsx         # Standalone shell (sidebar, header, Outlet) — layout route component
+├── router.tsx           # TanStack Router route tree (/, /session, _shell layout)
+├── main.tsx             # Vite entry point — RouterProvider
 ├── index.css            # Global styles
+├── app/
+│   └── init-extensions.ts  # Registers all built-in contributions into the extension registry at startup
 ├── layers/              # FSD architecture layers
 │   ├── shared/          # Reusable utilities, UI primitives, hooks & stores
 │   │   ├── ui/          # Shadcn components (button, card, dialog, etc.)
-│   │   ├── model/       # TransportContext, app-store, hooks (useTheme, useIsMobile, etc.)
-│   │   └── lib/         # cn(), Transports, font-config, favicon-utils, celebrations
+│   │   ├── model/       # TransportContext, app-store, extension-registry, hooks (useTheme, useIsMobile, etc.)
+│   │   └── lib/         # cn(), Transports, font-config, favicon-utils, celebrations, ui-action-dispatcher
 │   ├── entities/        # Business domain objects
 │   │   ├── session/     # Session types, hooks, transport calls
 │   │   │   ├── ui/
@@ -54,7 +58,7 @@ src/
 │   │   │   ├── api/
 │   │   │   └── index.ts
 │   │   ├── agent/       # Agent identity hooks (useCurrentAgent, useAgentToolStatus, etc.)
-│   │   ├── pulse/       # Pulse scheduler hooks (useSchedules, useRuns, etc.)
+│   │   ├── tasks/       # Task scheduler hooks (useSchedules, useRuns, etc.)
 │   │   ├── relay/       # Relay messaging hooks (useRelayMessages, useRelayAdapters, etc.)
 │   │   ├── mesh/        # Mesh discovery hooks (useRegisteredAgents, useDiscoverAgents, etc.)
 │   │   ├── discovery/   # Shared discovery scan state (Zustand store + useDiscoveryScan hook)
@@ -69,17 +73,28 @@ src/
 │   │   │   └── index.ts
 │   │   ├── command-palette/ # Global Cmd+K palette (Fuse.js search, agent preview, sub-menus)
 │   │   ├── commands/    # Inline slash command palette (chat input)
-│   │   ├── session-list/ # AgentSidebar, SidebarTabRow, tabbed views
+│   │   ├── session-list/ # SessionSidebar, SidebarTabRow, tabbed views
+│   │   ├── dashboard-sidebar/ # DashboardSidebar — navigation + recent agents list at /
+│   │   ├── dashboard-attention/ # NeedsAttentionSection — conditional zero-DOM attention zone
+│   │   ├── dashboard-status/ # SystemStatusRow — Tasks/Relay/Mesh health cards + activity sparkline
+│   │   ├── dashboard-activity/ # RecentActivityFeed — time-grouped event feed with last-visit tracking
 │   │   ├── settings/    # SettingsDialog (Appearance, Preferences, Status Bar, Server, Tools, Advanced)
 │   │   ├── agent-settings/ # AgentDialog (IdentityTab, PersonaTab, CapabilitiesTab, ConnectionsTab)
 │   │   ├── files/       # FileBrowser
-│   │   ├── pulse/       # PulsePanel, ScheduleRow, CronVisualBuilder, AgentCombobox
+│   │   ├── tasks/        # TasksPanel, ScheduleRow, CronVisualBuilder, AgentCombobox
 │   │   ├── relay/       # RelayPanel, ActivityFeed, AdapterCard, AdapterSetupWizard
 │   │   ├── mesh/        # MeshPanel, TopologyGraph, AgentNode, BindingDialog
-│   │   ├── onboarding/  # OnboardingFlow, AgentDiscoveryStep, PulsePresetsStep
+│   │   ├── onboarding/  # OnboardingFlow, AgentDiscoveryStep, TaskPresetsStep
+│   │   ├── canvas/      # AgentCanvas split-view panel (JSON, Markdown, URL content renderers)
 │   │   └── status/      # StatusLine, GitStatusItem, ModelItem
 │   └── widgets/         # Large UI compositions
-│       └── app-layout/  # Header, Layout, main workspace
+│       ├── app-layout/  # Header, Layout, main workspace
+│       │   ├── ui/
+│       │   └── index.ts
+│       ├── dashboard/   # DashboardPage — status overview at /
+│       │   ├── ui/
+│       │   └── index.ts
+│       └── session/     # SessionPage — agent chat wrapper at /session
 │           ├── ui/
 │           └── index.ts
 └── contexts/            # React Context (TransportProvider)
@@ -93,13 +108,13 @@ Unidirectional dependencies from top to bottom:
 app → widgets → features → entities → shared
 ```
 
-| Layer       | Purpose                                      | Can Import From            |
-| ----------- | -------------------------------------------- | -------------------------- |
-| `app/`      | App.tsx, main.tsx, providers                 | All lower layers           |
-| `widgets/`  | Large compositions (layout, workspace)       | features, entities, shared |
-| `features/` | Complete user functionality (chat, commands) | entities, shared           |
-| `entities/` | Business domain objects (Session, Command)   | shared only                |
-| `shared/`   | UI primitives, utilities, Transport          | Nothing (base layer)       |
+| Layer       | Purpose                                                         | Can Import From            |
+| ----------- | --------------------------------------------------------------- | -------------------------- |
+| `app/`      | App.tsx, AppShell.tsx, router.tsx, main.tsx, init-extensions.ts | All lower layers           |
+| `widgets/`  | Large compositions (layout, workspace)                          | features, entities, shared |
+| `features/` | Complete user functionality (chat, commands)                    | entities, shared           |
+| `entities/` | Business domain objects (Session, Command)                      | shared only                |
+| `shared/`   | UI primitives, utilities, Transport                             | Nothing (base layer)       |
 
 **Critical rules:**
 
@@ -281,11 +296,11 @@ apps/server/src/
 │   │       ├── sdk-utils.ts            # makeUserPrompt(), resolveClaudeCliPath()
 │   │       ├── mcp-tools/              # In-process MCP tool server for Claude Agent SDK
 │   │       └── index.ts                # Barrel export for ClaudeCodeRuntime
-│   ├── pulse/                   # Pulse scheduler services
-│   │   ├── pulse-store.ts       # SQLite + JSON schedule/run state
+│   ├── tasks/                   # Task scheduler services
+│   │   ├── tasks-store.ts       # SQLite + JSON schedule/run state
 │   │   ├── scheduler-service.ts # Cron engine (croner) with overrun protection
-│   │   ├── pulse-presets.ts     # Default schedule presets
-│   │   └── pulse-state.ts       # DORKOS_PULSE_ENABLED feature flag holder
+│   │   ├── task-presets.ts      # Default task presets
+│   │   └── tasks-state.ts       # DORKOS_TASKS_ENABLED feature flag holder
 │   ├── relay/                   # Relay messaging services
 │   │   ├── adapter-manager.ts   # Server-side adapter lifecycle management
 │   │   ├── adapter-factory.ts   # Adapter instantiation from config

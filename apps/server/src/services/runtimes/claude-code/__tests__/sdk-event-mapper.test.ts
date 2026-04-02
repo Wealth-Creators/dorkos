@@ -5,15 +5,15 @@ import type { AgentSession, ToolState } from '../agent-types.js';
 import type {
   StreamEvent,
   ErrorEvent,
+  ApiRetryEvent,
+  PromptSuggestionEvent,
   HookStartedEvent,
   HookProgressEvent,
   HookResponseEvent,
 } from '@dorkos/shared/types';
 
 /** Collect all events yielded by the mapper for a single message. */
-async function collectEvents(
-  ...args: Parameters<typeof mapSdkMessage>
-): Promise<StreamEvent[]> {
+async function collectEvents(...args: Parameters<typeof mapSdkMessage>): Promise<StreamEvent[]> {
   const events: StreamEvent[] = [];
   for await (const event of mapSdkMessage(...args)) {
     events.push(event);
@@ -49,31 +49,33 @@ function makeToolState(): ToolState {
   } as ToolState;
 }
 
-describe('sdk-event-mapper subagent lifecycle', () => {
+describe('sdk-event-mapper background task lifecycle', () => {
   const session = makeSession();
   const sessionId = 'test-session';
   const toolState = makeToolState();
 
-  it('maps task_started to subagent_started', async () => {
+  it('maps task_started to background_task_started', async () => {
     const msg = sdkTaskStarted('task-1', 'Explore codebase');
     const events = await collectEvents(msg, session, sessionId, toolState);
 
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('subagent_started');
-    expect(events[0].data).toEqual({
+    expect(events[0].type).toBe('background_task_started');
+    expect(events[0].data).toMatchObject({
       taskId: 'task-1',
+      taskType: 'agent',
       subagentSessionId: 'subagent-task-1',
       toolUseId: undefined,
       description: 'Explore codebase',
     });
+    expect((events[0].data as Record<string, unknown>).startedAt).toEqual(expect.any(Number));
   });
 
-  it('maps task_progress to subagent_progress', async () => {
+  it('maps task_progress to background_task_progress', async () => {
     const msg = sdkTaskProgress('task-1', 3, 5000, 'Read');
     const events = await collectEvents(msg, session, sessionId, toolState);
 
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('subagent_progress');
+    expect(events[0].type).toBe('background_task_progress');
     expect(events[0].data).toEqual({
       taskId: 'task-1',
       toolUses: 3,
@@ -95,12 +97,12 @@ describe('sdk-event-mapper subagent lifecycle', () => {
     });
   });
 
-  it('maps task_notification (completed) to subagent_done', async () => {
+  it('maps task_notification (completed) to background_task_done', async () => {
     const msg = sdkTaskNotification('task-1', 'completed', 'Found 7 files');
     const events = await collectEvents(msg, session, sessionId, toolState);
 
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('subagent_done');
+    expect(events[0].type).toBe('background_task_done');
     expect(events[0].data).toEqual({
       taskId: 'task-1',
       status: 'completed',
@@ -110,12 +112,12 @@ describe('sdk-event-mapper subagent lifecycle', () => {
     });
   });
 
-  it('maps task_notification (failed) to subagent_done', async () => {
+  it('maps task_notification (failed) to background_task_done', async () => {
     const msg = sdkTaskNotification('task-1', 'failed', 'Error occurred');
     const events = await collectEvents(msg, session, sessionId, toolState);
 
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('subagent_done');
+    expect(events[0].type).toBe('background_task_done');
     expect(events[0].data).toMatchObject({
       taskId: 'task-1',
       status: 'failed',
@@ -189,6 +191,25 @@ describe('sdk-event-mapper subagent lifecycle', () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('compact_boundary');
     expect(events[0].data).toEqual({});
+  });
+
+  it('yields elicitation_complete event', async () => {
+    const msg = {
+      type: 'system',
+      subtype: 'elicitation_complete',
+      mcp_server_name: 'github-oauth',
+      elicitation_id: 'elicit-456',
+      session_id: 'test',
+      uuid: '00000000-0000-4000-8000-000000000001',
+    } as unknown as Parameters<typeof mapSdkMessage>[0];
+    const events = await collectEvents(msg, session, sessionId, toolState);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('elicitation_complete');
+    expect(events[0].data).toEqual({
+      serverName: 'github-oauth',
+      elicitationId: 'elicit-456',
+    });
   });
 });
 
@@ -267,7 +288,9 @@ describe('sdk-event-mapper result messages', () => {
   });
 
   it('error_max_structured_output_retries maps to output_format_error', async () => {
-    const msg = makeResultMessage('error_max_structured_output_retries', ['Failed to produce valid JSON']);
+    const msg = makeResultMessage('error_max_structured_output_retries', [
+      'Failed to produce valid JSON',
+    ]);
     const events = await collectEvents(msg, session, sessionId, toolState);
 
     const err = events[1].data as ErrorEvent;
@@ -297,6 +320,100 @@ describe('sdk-event-mapper result messages', () => {
 
     const err = events[1].data as ErrorEvent;
     expect(err.category).toBe('execution_error');
+  });
+});
+
+describe('sdk-event-mapper prompt suggestion messages', () => {
+  const session = makeSession();
+  const sessionId = 'test-session';
+  const toolState = makeToolState();
+
+  it('maps singular suggestion field to suggestions array', async () => {
+    const msg = {
+      type: 'prompt_suggestion',
+      suggestion: 'What files were changed?',
+      uuid: 'uuid-suggestion-1',
+      session_id: 'test-session',
+    } as unknown as Parameters<typeof mapSdkMessage>[0];
+    const events = await collectEvents(msg, session, sessionId, toolState);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('prompt_suggestion');
+    const data = events[0].data as PromptSuggestionEvent;
+    expect(data.suggestions).toEqual(['What files were changed?']);
+  });
+
+  it('yields nothing for empty suggestion', async () => {
+    const msg = {
+      type: 'prompt_suggestion',
+      suggestion: '',
+      uuid: 'uuid-suggestion-2',
+      session_id: 'test-session',
+    } as unknown as Parameters<typeof mapSdkMessage>[0];
+    const events = await collectEvents(msg, session, sessionId, toolState);
+
+    expect(events).toHaveLength(0);
+  });
+
+  it('yields nothing when suggestion field is missing', async () => {
+    const msg = {
+      type: 'prompt_suggestion',
+      uuid: 'uuid-suggestion-3',
+      session_id: 'test-session',
+    } as unknown as Parameters<typeof mapSdkMessage>[0];
+    const events = await collectEvents(msg, session, sessionId, toolState);
+
+    expect(events).toHaveLength(0);
+  });
+});
+
+describe('sdk-event-mapper api_retry messages', () => {
+  const session = makeSession();
+  const sessionId = 'test-session';
+  const toolState = makeToolState();
+
+  it('maps api_retry system subtype to api_retry event', async () => {
+    const msg = {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 2,
+      max_retries: 5,
+      retry_delay_ms: 3000,
+      error_status: 429,
+      error: { type: 'overloaded_error', message: 'Overloaded' },
+      uuid: 'uuid-retry-1',
+      session_id: 'test-session',
+    } as unknown as Parameters<typeof mapSdkMessage>[0];
+    const events = await collectEvents(msg, session, sessionId, toolState);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('api_retry');
+    const data = events[0].data as ApiRetryEvent;
+    expect(data).toEqual({
+      attempt: 2,
+      maxRetries: 5,
+      retryDelayMs: 3000,
+      errorStatus: 429,
+    });
+  });
+
+  it('maps null error_status correctly', async () => {
+    const msg = {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 1,
+      max_retries: 3,
+      retry_delay_ms: 1000,
+      error_status: null,
+      error: { type: 'api_error', message: 'Connection failed' },
+      uuid: 'uuid-retry-2',
+      session_id: 'test-session',
+    } as unknown as Parameters<typeof mapSdkMessage>[0];
+    const events = await collectEvents(msg, session, sessionId, toolState);
+
+    expect(events).toHaveLength(1);
+    const data = events[0].data as ApiRetryEvent;
+    expect(data.errorStatus).toBeNull();
   });
 });
 
@@ -420,7 +537,15 @@ describe('sdk-event-mapper hook lifecycle events', () => {
 
   it('hook_response (tool-contextual, success) yields hook_response', async () => {
     const toolState = makeToolState();
-    const msg = sdkHookResponse('hook-1', 'pre-commit', 'PostToolUse', 'success', 0, 'all good', '');
+    const msg = sdkHookResponse(
+      'hook-1',
+      'pre-commit',
+      'PostToolUse',
+      'success',
+      0,
+      'all good',
+      ''
+    );
     const events = await collectEvents(msg, session, sessionId, toolState);
 
     expect(events).toHaveLength(1);

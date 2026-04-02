@@ -1,9 +1,9 @@
 import { cn } from '@/layers/shared/lib';
 import { PlaygroundSection } from '../PlaygroundSection';
+import { PlaygroundPageLayout } from '../PlaygroundPageLayout';
 import { ShowcaseLabel } from '../ShowcaseLabel';
 import { Button } from '@/layers/shared/ui';
 import { Settings } from 'lucide-react';
-import { TocSidebar } from '../TocSidebar';
 import { TOKENS_SECTIONS } from '../playground-registry';
 
 interface ColorToken {
@@ -115,46 +115,39 @@ const SHADOWS = [
 /** Design tokens reference page — colors, typography, spacing, radii, shadows. */
 export function TokensPage() {
   return (
-    <>
-      <header className="border-border border-b px-6 py-4">
-        <h1 className="text-xl font-bold">Design Tokens</h1>
-        <p className="text-muted-foreground text-sm">
-          Visual reference for the design system&apos;s color, type, spacing, and shape tokens.
-        </p>
-      </header>
-
-      <div className="flex gap-8 p-6">
-        <main className="min-w-0 flex-1 space-y-8">
-          <SemanticColorsSection />
-          <StatusColorsSection />
-          <SidebarColorsSection />
-          <TypographySection />
-          <SpacingSection />
-          <RadiiSection />
-          <ShadowsSection />
-          <SizesSection />
-        </main>
-        <TocSidebar sections={TOKENS_SECTIONS} />
-      </div>
-    </>
+    <PlaygroundPageLayout
+      title="Design Tokens"
+      description="Visual reference for the design system's color, type, spacing, and shape tokens."
+      sections={TOKENS_SECTIONS}
+    >
+      <SemanticColorsSection />
+      <StatusColorsSection />
+      <SidebarColorsSection />
+      <TypographySection />
+      <SpacingSection />
+      <RadiiSection />
+      <ShadowsSection />
+      <SizesSection />
+    </PlaygroundPageLayout>
   );
 }
 
 function ColorSwatch({ name, bg, border }: { name: string; bg: string; border?: boolean }) {
   return (
     <div className="space-y-1.5">
-      <div
-        className={cn('h-16 rounded-lg', bg, border && 'border border-border')}
-      />
+      <div className={cn('h-16 rounded-lg', bg, border && 'border-border border')} />
       <p className="text-foreground text-xs font-medium">{name}</p>
-      <p className="text-muted-foreground font-mono text-3xs">--{name}</p>
+      <p className="text-muted-foreground text-3xs font-mono">--{name}</p>
     </div>
   );
 }
 
 function SemanticColorsSection() {
   return (
-    <PlaygroundSection title="Semantic Colors" description="Core palette tokens used throughout the UI.">
+    <PlaygroundSection
+      title="Semantic Colors"
+      description="Core palette tokens used throughout the UI."
+    >
       <div className="grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-5">
         {SEMANTIC_COLORS.map((c) => (
           <ColorSwatch key={c.name} name={c.name} bg={c.bg} border={c.border} />
@@ -166,7 +159,10 @@ function SemanticColorsSection() {
 
 function StatusColorsSection() {
   return (
-    <PlaygroundSection title="Status Colors" description="Semantic status tokens with base, background, border, and foreground variants.">
+    <PlaygroundSection
+      title="Status Colors"
+      description="Semantic status tokens with base, background, border, and foreground variants."
+    >
       <div className="space-y-3">
         {STATUS_ROWS.map((status) => (
           <div key={status.name} className="flex items-center gap-3">
@@ -181,7 +177,11 @@ function StatusColorsSection() {
                 title={`status-${status.name}-bg`}
               />
               <div
-                className={cn('flex h-10 items-center rounded-md px-2 text-xs font-medium', status.fg, status.bg)}
+                className={cn(
+                  'flex h-10 items-center rounded-md px-2 text-xs font-medium',
+                  status.fg,
+                  status.bg
+                )}
                 title={`status-${status.name}-fg`}
               >
                 Text
@@ -196,7 +196,10 @@ function StatusColorsSection() {
 
 function SidebarColorsSection() {
   return (
-    <PlaygroundSection title="Sidebar Colors" description="Tokens specific to the sidebar component.">
+    <PlaygroundSection
+      title="Sidebar Colors"
+      description="Tokens specific to the sidebar component."
+    >
       <div className="grid grid-cols-3 gap-4 sm:grid-cols-4 lg:grid-cols-5">
         {SIDEBAR_COLORS.map((c) => (
           <ColorSwatch key={c.name} name={c.name} bg={c.bg} border={c.border} />
@@ -213,8 +216,10 @@ function TypographySection() {
       <div className="space-y-3">
         {TYPE_SCALE.map((t) => (
           <div key={t.cls} className="flex items-baseline gap-4">
-            <span className="text-muted-foreground w-20 shrink-0 font-mono text-3xs">{t.label}</span>
-            <span className="text-muted-foreground w-10 shrink-0 font-mono text-3xs">{t.px}</span>
+            <span className="text-muted-foreground text-3xs w-20 shrink-0 font-mono">
+              {t.label}
+            </span>
+            <span className="text-muted-foreground text-3xs w-10 shrink-0 font-mono">{t.px}</span>
             <span className={cn('text-foreground', t.cls)}>The quick brown fox</span>
           </div>
         ))}
@@ -229,8 +234,12 @@ function TypographySection() {
 
       <ShowcaseLabel>Font Families</ShowcaseLabel>
       <div className="space-y-2">
-        <p className="text-foreground text-sm font-sans">Sans: The quick brown fox jumps over the lazy dog</p>
-        <p className="text-foreground text-sm font-mono">Mono: The quick brown fox jumps over the lazy dog</p>
+        <p className="text-foreground font-sans text-sm">
+          Sans: The quick brown fox jumps over the lazy dog
+        </p>
+        <p className="text-foreground font-mono text-sm">
+          Mono: The quick brown fox jumps over the lazy dog
+        </p>
       </div>
     </PlaygroundSection>
   );
@@ -242,13 +251,10 @@ function SpacingSection() {
       <div className="space-y-3">
         {SPACING.map((s) => (
           <div key={s.key} className="flex items-center gap-4">
-            <span className="text-muted-foreground w-24 shrink-0 font-mono text-3xs">
+            <span className="text-muted-foreground text-3xs w-24 shrink-0 font-mono">
               space-{s.key} &middot; {s.px}
             </span>
-            <div
-              className="bg-primary h-3 rounded-sm"
-              style={{ width: s.px }}
-            />
+            <div className="bg-primary h-3 rounded-sm" style={{ width: s.px }} />
             <span className="text-muted-foreground text-3xs">{s.hint}</span>
           </div>
         ))}
@@ -259,12 +265,15 @@ function SpacingSection() {
 
 function RadiiSection() {
   return (
-    <PlaygroundSection title="Border Radius" description="Standard radii plus message-specific tokens.">
+    <PlaygroundSection
+      title="Border Radius"
+      description="Standard radii plus message-specific tokens."
+    >
       <div className="flex flex-wrap gap-4">
         {RADII.map((r) => (
           <div key={r.cls} className="space-y-1.5 text-center">
             <div className={cn('border-border bg-muted h-16 w-16 border-2', r.cls)} />
-            <p className="text-muted-foreground font-mono text-3xs">{r.label}</p>
+            <p className="text-muted-foreground text-3xs font-mono">{r.label}</p>
           </div>
         ))}
         <div className="space-y-1.5 text-center">
@@ -272,7 +281,7 @@ function RadiiSection() {
             className="border-border bg-muted h-16 w-16 border-2"
             style={{ borderRadius: 'var(--radius-msg)' }}
           />
-          <p className="text-muted-foreground font-mono text-3xs">radius-msg</p>
+          <p className="text-muted-foreground text-3xs font-mono">radius-msg</p>
           <p className="text-muted-foreground text-3xs">20px</p>
         </div>
         <div className="space-y-1.5 text-center">
@@ -280,7 +289,7 @@ function RadiiSection() {
             className="border-border bg-muted h-16 w-16 border-2"
             style={{ borderRadius: 'var(--radius-msg-tight)' }}
           />
-          <p className="text-muted-foreground font-mono text-3xs">radius-msg-tight</p>
+          <p className="text-muted-foreground text-3xs font-mono">radius-msg-tight</p>
           <p className="text-muted-foreground text-3xs">4px</p>
         </div>
       </div>
@@ -295,7 +304,7 @@ function ShadowsSection() {
         {SHADOWS.map((s) => (
           <div key={s.cls} className="space-y-1.5 text-center">
             <div className={cn('bg-card h-16 w-24 rounded-lg border', s.cls)} />
-            <p className="text-muted-foreground font-mono text-3xs">{s.label}</p>
+            <p className="text-muted-foreground text-3xs font-mono">{s.label}</p>
           </div>
         ))}
       </div>
@@ -305,7 +314,10 @@ function ShadowsSection() {
 
 function SizesSection() {
   return (
-    <PlaygroundSection title="Icon & Button Sizes" description="Standard size tokens for icons and interactive elements.">
+    <PlaygroundSection
+      title="Icon & Button Sizes"
+      description="Standard size tokens for icons and interactive elements."
+    >
       <ShowcaseLabel>Icon Sizes</ShowcaseLabel>
       <div className="flex items-end gap-6">
         {[
@@ -315,7 +327,7 @@ function SizesSection() {
         ].map((icon) => (
           <div key={icon.label} className="space-y-1.5 text-center">
             <Settings className={cn('text-foreground', icon.cls)} />
-            <p className="text-muted-foreground font-mono text-3xs">{icon.label}</p>
+            <p className="text-muted-foreground text-3xs font-mono">{icon.label}</p>
           </div>
         ))}
       </div>
@@ -324,15 +336,15 @@ function SizesSection() {
       <div className="flex items-end gap-4">
         <div className="space-y-1.5 text-center">
           <Button size="sm">Small</Button>
-          <p className="text-muted-foreground font-mono text-3xs">btn-sm</p>
+          <p className="text-muted-foreground text-3xs font-mono">btn-sm</p>
         </div>
         <div className="space-y-1.5 text-center">
           <Button size="default">Default</Button>
-          <p className="text-muted-foreground font-mono text-3xs">btn-md</p>
+          <p className="text-muted-foreground text-3xs font-mono">btn-md</p>
         </div>
         <div className="space-y-1.5 text-center">
           <Button size="lg">Large</Button>
-          <p className="text-muted-foreground font-mono text-3xs">btn-lg</p>
+          <p className="text-muted-foreground text-3xs font-mono">btn-lg</p>
         </div>
       </div>
     </PlaygroundSection>

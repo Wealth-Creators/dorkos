@@ -20,11 +20,11 @@ export const PermissionModeSchema = z
 
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
-export const TaskStatusSchema = z
+export const SessionTaskStatusSchema = z
   .enum(['pending', 'in_progress', 'completed'])
-  .openapi('TaskStatus');
+  .openapi('SessionTaskStatus');
 
-export type TaskStatus = z.infer<typeof TaskStatusSchema>;
+export type SessionTaskStatus = z.infer<typeof SessionTaskStatusSchema>;
 
 export const StreamEventTypeSchema = z
   .enum([
@@ -38,6 +38,7 @@ export const StreamEventTypeSchema = z
     'question_prompt',
     'error',
     'rate_limit',
+    'api_retry',
     'done',
     'session_status',
     'task_update',
@@ -47,9 +48,9 @@ export const StreamEventTypeSchema = z
     'message_delivered',
     'relay_message',
     'thinking_delta',
-    'subagent_started',
-    'subagent_progress',
-    'subagent_done',
+    'background_task_started',
+    'background_task_progress',
+    'background_task_done',
     'system_status',
     'compact_boundary',
     'prompt_suggestion',
@@ -57,6 +58,11 @@ export const StreamEventTypeSchema = z
     'hook_progress',
     'hook_response',
     'presence_update',
+    'ui_command',
+    'session_state_changed',
+    'context_usage',
+    'elicitation_prompt',
+    'elicitation_complete',
   ])
   .openapi('StreamEventType');
 
@@ -86,6 +92,9 @@ export type QuestionItem = z.infer<typeof QuestionItemSchema>;
 
 // === Session Types ===
 
+export const EffortLevelSchema = z.enum(['low', 'medium', 'high', 'max']).openapi('EffortLevel');
+export type EffortLevel = z.infer<typeof EffortLevelSchema>;
+
 export const SessionSchema = z
   .object({
     id: z.string().uuid(),
@@ -95,6 +104,7 @@ export const SessionSchema = z
     lastMessagePreview: z.string().optional(),
     permissionMode: PermissionModeSchema,
     model: z.string().optional(),
+    effort: EffortLevelSchema.optional(),
     contextTokens: z.number().int().optional(),
     cwd: z.string().optional(),
   })
@@ -115,10 +125,36 @@ export const UpdateSessionRequestSchema = z
   .object({
     permissionMode: PermissionModeSchema.optional(),
     model: z.string().optional(),
+    effort: EffortLevelSchema.optional(),
+    title: z.string().min(1).max(200).optional(),
   })
   .openapi('UpdateSessionRequest');
 
 export type UpdateSessionRequest = z.infer<typeof UpdateSessionRequestSchema>;
+
+export const ForkSessionRequestSchema = z
+  .object({
+    /** Slice transcript up to this message ID (inclusive). If omitted, full copy. */
+    upToMessageId: z.string().optional(),
+    /** Custom title for the fork. If omitted, SDK derives from original title. */
+    title: z.string().optional(),
+  })
+  .openapi('ForkSessionRequest');
+
+export type ForkSessionRequest = z.infer<typeof ForkSessionRequestSchema>;
+
+export const ReloadPluginsResultSchema = z
+  .object({
+    /** Number of commands available after reload. */
+    commandCount: z.number().int(),
+    /** Number of plugins loaded after reload. */
+    pluginCount: z.number().int(),
+    /** Number of errors encountered during reload. */
+    errorCount: z.number().int(),
+  })
+  .openapi('ReloadPluginsResult');
+
+export type ReloadPluginsResult = z.infer<typeof ReloadPluginsResultSchema>;
 
 export const SendMessageRequestSchema = z
   .object({
@@ -126,6 +162,8 @@ export const SendMessageRequestSchema = z
     cwd: z.string().optional(),
     correlationId: z.string().uuid().optional(),
     clientMessageId: z.string().optional(),
+    /** Client UI state snapshot — validated against UiStateSchema via z.lazy (forward ref). */
+    uiState: z.lazy(() => UiStateSchema).optional(),
   })
   .openapi('SendMessageRequest');
 
@@ -147,6 +185,24 @@ export const SubmitAnswersRequestSchema = z
   .openapi('SubmitAnswersRequest');
 
 export type SubmitAnswersRequest = z.infer<typeof SubmitAnswersRequestSchema>;
+
+export const ElicitationModeSchema = z.enum(['form', 'url']).openapi('ElicitationMode');
+export type ElicitationMode = z.infer<typeof ElicitationModeSchema>;
+
+export const ElicitationActionSchema = z
+  .enum(['accept', 'decline', 'cancel'])
+  .openapi('ElicitationAction');
+export type ElicitationAction = z.infer<typeof ElicitationActionSchema>;
+
+export const SubmitElicitationRequestSchema = z
+  .object({
+    interactionId: z.string(),
+    action: ElicitationActionSchema,
+    content: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('SubmitElicitationRequest');
+
+export type SubmitElicitationRequest = z.infer<typeof SubmitElicitationRequestSchema>;
 
 export const ListSessionsQuerySchema = z
   .object({
@@ -252,9 +308,21 @@ export const RateLimitEventSchema = z
 
 export type RateLimitEvent = z.infer<typeof RateLimitEventSchema>;
 
+export const ApiRetryEventSchema = z
+  .object({
+    attempt: z.number(),
+    maxRetries: z.number(),
+    retryDelayMs: z.number(),
+    errorStatus: z.number().nullable(),
+  })
+  .openapi('ApiRetryEvent');
+
+export type ApiRetryEvent = z.infer<typeof ApiRetryEventSchema>;
+
 export const DoneEventSchema = z
   .object({
     sessionId: z.string(),
+    messageIds: z.object({ user: z.string(), assistant: z.string() }).optional(),
   })
   .openapi('DoneEvent');
 
@@ -273,13 +341,35 @@ export const SessionStatusEventSchema = z
 
 export type SessionStatusEvent = z.infer<typeof SessionStatusEventSchema>;
 
+// === Context Usage Types ===
+
+export const ContextUsageCategorySchema = z.object({
+  name: z.string(),
+  tokens: z.number().int(),
+  color: z.string(),
+});
+
+export type ContextUsageCategory = z.infer<typeof ContextUsageCategorySchema>;
+
+export const ContextUsageSchema = z
+  .object({
+    totalTokens: z.number().int(),
+    maxTokens: z.number().int(),
+    percentage: z.number(),
+    model: z.string(),
+    categories: z.array(ContextUsageCategorySchema),
+  })
+  .openapi('ContextUsage');
+
+export type ContextUsage = z.infer<typeof ContextUsageSchema>;
+
 export const TaskItemSchema = z
   .object({
     id: z.string(),
     subject: z.string(),
     description: z.string().optional(),
     activeForm: z.string().optional(),
-    status: TaskStatusSchema,
+    status: SessionTaskStatusSchema,
     blockedBy: z.array(z.string()).optional(),
     blocks: z.array(z.string()).optional(),
     owner: z.string().optional(),
@@ -292,6 +382,7 @@ export const TaskUpdateEventSchema = z
   .object({
     action: z.enum(['create', 'update', 'snapshot']),
     task: TaskItemSchema,
+    tasks: z.array(TaskItemSchema).optional(),
   })
   .openapi('TaskUpdateEvent');
 
@@ -344,31 +435,45 @@ export const RelayMessageEventSchema = z
 
 export type RelayMessageEvent = z.infer<typeof RelayMessageEventSchema>;
 
-// === Subagent Lifecycle Events ===
+// === Background Task Type/Status (needed by both events and parts) ===
 
-export const SubagentStartedEventSchema = z
+export const BackgroundTaskTypeSchema = z.enum(['agent', 'bash']).openapi('BackgroundTaskType');
+export type BackgroundTaskType = z.infer<typeof BackgroundTaskTypeSchema>;
+
+export const BackgroundTaskStatusSchema = z
+  .enum(['running', 'complete', 'error', 'stopped'])
+  .openapi('BackgroundTaskStatus');
+export type BackgroundTaskStatus = z.infer<typeof BackgroundTaskStatusSchema>;
+
+// === Background Task Lifecycle Events ===
+
+export const BackgroundTaskStartedEventSchema = z
   .object({
     taskId: z.string(),
-    subagentSessionId: z.string(),
+    taskType: BackgroundTaskTypeSchema,
+    startedAt: z.number(),
+    subagentSessionId: z.string().optional(),
     toolUseId: z.string().optional(),
-    description: z.string(),
+    description: z.string().optional(),
+    command: z.string().optional(),
   })
-  .openapi('SubagentStartedEvent');
+  .openapi('BackgroundTaskStartedEvent');
 
-export type SubagentStartedEvent = z.infer<typeof SubagentStartedEventSchema>;
+export type BackgroundTaskStartedEvent = z.infer<typeof BackgroundTaskStartedEventSchema>;
 
-export const SubagentProgressEventSchema = z
+export const BackgroundTaskProgressEventSchema = z
   .object({
     taskId: z.string(),
-    toolUses: z.number().int(),
+    toolUses: z.number().int().optional(),
     lastToolName: z.string().optional(),
     durationMs: z.number().int(),
+    summary: z.string().optional(),
   })
-  .openapi('SubagentProgressEvent');
+  .openapi('BackgroundTaskProgressEvent');
 
-export type SubagentProgressEvent = z.infer<typeof SubagentProgressEventSchema>;
+export type BackgroundTaskProgressEvent = z.infer<typeof BackgroundTaskProgressEventSchema>;
 
-export const SubagentDoneEventSchema = z
+export const BackgroundTaskDoneEventSchema = z
   .object({
     taskId: z.string(),
     status: z.enum(['completed', 'failed', 'stopped']),
@@ -376,9 +481,9 @@ export const SubagentDoneEventSchema = z
     toolUses: z.number().int().optional(),
     durationMs: z.number().int().optional(),
   })
-  .openapi('SubagentDoneEvent');
+  .openapi('BackgroundTaskDoneEvent');
 
-export type SubagentDoneEvent = z.infer<typeof SubagentDoneEventSchema>;
+export type BackgroundTaskDoneEvent = z.infer<typeof BackgroundTaskDoneEventSchema>;
 
 export const SystemStatusEventSchema = z
   .object({
@@ -388,9 +493,7 @@ export const SystemStatusEventSchema = z
 
 export type SystemStatusEvent = z.infer<typeof SystemStatusEventSchema>;
 
-export const CompactBoundaryEventSchema = z
-  .object({})
-  .openapi('CompactBoundaryEvent');
+export const CompactBoundaryEventSchema = z.object({}).openapi('CompactBoundaryEvent');
 
 export type CompactBoundaryEvent = z.infer<typeof CompactBoundaryEventSchema>;
 
@@ -461,6 +564,42 @@ export const PresenceUpdateEventSchema = z
 
 export type PresenceUpdateEvent = z.infer<typeof PresenceUpdateEventSchema>;
 
+/** Authoritative SDK session state change (idle/running/requires_action). */
+export const SdkSessionStateSchema = z.enum(['idle', 'running', 'requires_action']);
+export type SdkSessionState = z.infer<typeof SdkSessionStateSchema>;
+
+export const SessionStateChangedEventSchema = z
+  .object({
+    state: SdkSessionStateSchema,
+  })
+  .openapi('SessionStateChangedEvent');
+
+export type SessionStateChangedEvent = z.infer<typeof SessionStateChangedEventSchema>;
+
+export const ElicitationPromptEventSchema = z
+  .object({
+    interactionId: z.string(),
+    serverName: z.string(),
+    message: z.string(),
+    mode: ElicitationModeSchema.optional(),
+    url: z.string().optional(),
+    elicitationId: z.string().optional(),
+    requestedSchema: z.record(z.string(), z.unknown()).optional(),
+    timeoutMs: z.number().describe('Server-side elicitation timeout in milliseconds'),
+  })
+  .openapi('ElicitationPromptEvent');
+
+export type ElicitationPromptEvent = z.infer<typeof ElicitationPromptEventSchema>;
+
+export const ElicitationCompleteEventSchema = z
+  .object({
+    serverName: z.string(),
+    elicitationId: z.string(),
+  })
+  .openapi('ElicitationCompleteEvent');
+
+export type ElicitationCompleteEvent = z.infer<typeof ElicitationCompleteEventSchema>;
+
 export const StreamEventSchema = z
   .object({
     type: StreamEventTypeSchema,
@@ -473,6 +612,7 @@ export const StreamEventSchema = z
       QuestionPromptEventSchema,
       ErrorEventSchema,
       RateLimitEventSchema,
+      ApiRetryEventSchema,
       DoneEventSchema,
       SessionStatusEventSchema,
       TaskUpdateEventSchema,
@@ -481,9 +621,9 @@ export const StreamEventSchema = z
       RelayReceiptEventSchema,
       MessageDeliveredEventSchema,
       RelayMessageEventSchema,
-      SubagentStartedEventSchema,
-      SubagentProgressEventSchema,
-      SubagentDoneEventSchema,
+      BackgroundTaskStartedEventSchema,
+      BackgroundTaskProgressEventSchema,
+      BackgroundTaskDoneEventSchema,
       SystemStatusEventSchema,
       CompactBoundaryEventSchema,
       PromptSuggestionEventSchema,
@@ -491,6 +631,10 @@ export const StreamEventSchema = z
       HookProgressEventSchema,
       HookResponseEventSchema,
       PresenceUpdateEventSchema,
+      SessionStateChangedEventSchema,
+      ContextUsageSchema,
+      ElicitationPromptEventSchema,
+      ElicitationCompleteEventSchema,
     ]),
   })
   .openapi('StreamEvent');
@@ -536,27 +680,37 @@ export const ToolCallPartSchema = z
     answers: z.record(z.string(), z.string()).optional(),
     timeoutMs: z.number().optional().describe('Approval timeout duration in milliseconds'),
     hooks: z.array(HookPartSchema).optional(),
+    /** Client-only: timestamp (ms since epoch) when tool_call_start was received. Never serialized. */
+    startedAt: z.number().optional(),
+    /** Client-only: timestamp (ms since epoch) when tool_result was received. Never serialized. */
+    completedAt: z.number().optional(),
   })
   .openapi('ToolCallPart');
 
 export type ToolCallPart = z.infer<typeof ToolCallPartSchema>;
 
-const SubagentStatusSchema = z.enum(['running', 'complete', 'error']);
+// === Background Task Part (agent and bash) ===
 
-export const SubagentPartSchema = z
+export const BackgroundTaskPartSchema = z
   .object({
-    type: z.literal('subagent'),
+    type: z.literal('background_task'),
     taskId: z.string(),
-    description: z.string(),
-    status: SubagentStatusSchema,
+    taskType: BackgroundTaskTypeSchema,
+    status: BackgroundTaskStatusSchema,
+    startedAt: z.number(),
+    // Agent-specific
+    description: z.string().optional(),
     toolUses: z.number().int().optional(),
     lastToolName: z.string().optional(),
-    durationMs: z.number().int().optional(),
     summary: z.string().optional(),
+    // Bash-specific
+    command: z.string().optional(),
+    // Shared
+    durationMs: z.number().int().optional(),
   })
-  .openapi('SubagentPart');
+  .openapi('BackgroundTaskPart');
 
-export type SubagentPart = z.infer<typeof SubagentPartSchema>;
+export type BackgroundTaskPart = z.infer<typeof BackgroundTaskPartSchema>;
 
 export const ThinkingPartSchema = z
   .object({
@@ -580,12 +734,31 @@ export const ErrorPartSchema = z
 
 export type ErrorPart = z.infer<typeof ErrorPartSchema>;
 
+export const ElicitationPartSchema = z
+  .object({
+    type: z.literal('elicitation'),
+    interactionId: z.string(),
+    serverName: z.string(),
+    message: z.string(),
+    mode: ElicitationModeSchema.optional(),
+    url: z.string().optional(),
+    elicitationId: z.string().optional(),
+    requestedSchema: z.record(z.string(), z.unknown()).optional(),
+    status: z.enum(['pending', 'submitted', 'complete']),
+    action: ElicitationActionSchema.optional(),
+    content: z.record(z.string(), z.unknown()).optional(),
+  })
+  .openapi('ElicitationPart');
+
+export type ElicitationPart = z.infer<typeof ElicitationPartSchema>;
+
 export const MessagePartSchema = z.discriminatedUnion('type', [
   TextPartSchema,
   ToolCallPartSchema,
-  SubagentPartSchema,
+  BackgroundTaskPartSchema,
   ThinkingPartSchema,
   ErrorPartSchema,
+  ElicitationPartSchema,
 ]);
 
 export type MessagePart = z.infer<typeof MessagePartSchema>;
@@ -717,10 +890,29 @@ export const TunnelStatusSchema = z
     authEnabled: z.boolean(),
     tokenConfigured: z.boolean(),
     domain: z.string().nullable(),
+    passcodeEnabled: z.boolean(),
   })
   .openapi('TunnelStatus');
 
 export type TunnelStatus = z.infer<typeof TunnelStatusSchema>;
+
+export const PasscodeVerifyRequestSchema = z.object({
+  passcode: z.string().regex(/^\d{6}$/),
+});
+export type PasscodeVerifyRequest = z.infer<typeof PasscodeVerifyRequestSchema>;
+
+export const PasscodeVerifyResponseSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  retryAfter: z.number().optional(),
+});
+export type PasscodeVerifyResponse = z.infer<typeof PasscodeVerifyResponseSchema>;
+
+export const PasscodeSessionResponseSchema = z.object({
+  authenticated: z.boolean(),
+  passcodeRequired: z.boolean(),
+});
+export type PasscodeSessionResponse = z.infer<typeof PasscodeSessionResponseSchema>;
 
 // === Health Response ===
 
@@ -740,10 +932,9 @@ export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 export const ServerConfigSchema = z
   .object({
     version: z.string().openapi({ description: 'Current server version' }),
-    latestVersion: z
-      .string()
-      .nullable()
-      .openapi({ description: 'Latest available version from npm, or null if dev mode or unknown' }),
+    latestVersion: z.string().nullable().openapi({
+      description: 'Latest available version from npm, or null if dev mode or unknown',
+    }),
     isDevMode: z
       .boolean()
       .openapi({ description: 'Whether the server is running a development build' }),
@@ -756,12 +947,12 @@ export const ServerConfigSchema = z
     nodeVersion: z.string(),
     claudeCliPath: z.string().nullable(),
     tunnel: TunnelStatusSchema,
-    pulse: z
+    tasks: z
       .object({
-        enabled: z.boolean().openapi({ description: 'Whether the Pulse scheduler is enabled' }),
+        enabled: z.boolean().openapi({ description: 'Whether the Tasks scheduler is enabled' }),
       })
       .optional()
-      .openapi({ description: 'Pulse scheduler feature state' }),
+      .openapi({ description: 'Tasks scheduler feature state' }),
     relay: z
       .object({
         enabled: z.boolean().openapi({ description: 'Whether the Relay message bus is enabled' }),
@@ -785,21 +976,46 @@ export const ServerConfigSchema = z
       .openapi({ description: 'Mesh agent discovery feature state' }),
     onboarding: z
       .object({
-        completedSteps: z.array(z.string()).openapi({ description: 'Steps the user has completed' }),
+        completedSteps: z
+          .array(z.string())
+          .openapi({ description: 'Steps the user has completed' }),
         skippedSteps: z.array(z.string()).openapi({ description: 'Steps the user has skipped' }),
-        startedAt: z.string().nullable().openapi({ description: 'ISO timestamp when onboarding was started' }),
-        dismissedAt: z.string().nullable().openapi({ description: 'ISO timestamp when onboarding was dismissed' }),
+        startedAt: z
+          .string()
+          .nullable()
+          .openapi({ description: 'ISO timestamp when onboarding was started' }),
+        dismissedAt: z
+          .string()
+          .nullable()
+          .openapi({ description: 'ISO timestamp when onboarding was dismissed' }),
       })
       .optional()
       .openapi({ description: 'First-time user onboarding state' }),
     agentContext: z
       .object({
-        relayTools: z.boolean().openapi({ description: 'Whether relay tool context is injected into agent prompts' }),
-        meshTools: z.boolean().openapi({ description: 'Whether mesh tool context is injected into agent prompts' }),
-        adapterTools: z.boolean().openapi({ description: 'Whether adapter tool context is injected into agent prompts' }),
+        relayTools: z
+          .boolean()
+          .openapi({ description: 'Whether relay tool context is injected into agent prompts' }),
+        meshTools: z
+          .boolean()
+          .openapi({ description: 'Whether mesh tool context is injected into agent prompts' }),
+        adapterTools: z
+          .boolean()
+          .openapi({ description: 'Whether adapter tool context is injected into agent prompts' }),
       })
       .optional()
       .openapi({ description: 'Agent tool context injection toggles' }),
+    agents: z
+      .object({
+        defaultDirectory: z
+          .string()
+          .openapi({ description: 'Default directory for agent workspaces' }),
+        defaultAgent: z
+          .string()
+          .openapi({ description: 'Slug of the default agent to launch after onboarding' }),
+      })
+      .optional()
+      .openapi({ description: 'Agent creation and defaults configuration' }),
   })
   .openapi('ServerConfig');
 
@@ -812,10 +1028,33 @@ export const ModelOptionSchema = z
     value: z.string().openapi({ description: 'Model identifier (e.g. claude-opus-4-6)' }),
     displayName: z.string().openapi({ description: 'Human-readable model name' }),
     description: z.string().openapi({ description: 'Short model description' }),
+    supportsEffort: z
+      .boolean()
+      .optional()
+      .openapi({ description: 'Whether this model supports effort levels' }),
+    supportedEffortLevels: z
+      .array(EffortLevelSchema)
+      .optional()
+      .openapi({ description: 'Available effort levels for this model' }),
   })
   .openapi('ModelOption');
 
 export type ModelOption = z.infer<typeof ModelOptionSchema>;
+
+// === Subagent Info ===
+
+export const SubagentInfoSchema = z
+  .object({
+    name: z.string().openapi({ description: 'Agent type identifier (e.g. "Explore")' }),
+    description: z.string().openapi({ description: 'Description of when to use this agent' }),
+    model: z
+      .string()
+      .optional()
+      .openapi({ description: 'Model alias this agent uses, or undefined to inherit parent' }),
+  })
+  .openapi('SubagentInfo');
+
+export type SubagentInfo = z.infer<typeof SubagentInfoSchema>;
 
 // === Git Status ===
 
@@ -866,64 +1105,69 @@ export const SessionLockedErrorSchema = z
 
 export type SessionLockedError = z.infer<typeof SessionLockedErrorSchema>;
 
-// === Pulse Scheduler Types ===
+// === Tasks Scheduler Types ===
 
-export const PulseScheduleStatusSchema = z
+export const TaskStatusSchema = z
   .enum(['active', 'paused', 'pending_approval'])
-  .openapi('PulseScheduleStatus');
+  .openapi('TaskStatus');
 
-export type PulseScheduleStatus = z.infer<typeof PulseScheduleStatusSchema>;
+export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
-export const PulseRunStatusSchema = z
+export const TaskRunStatusSchema = z
   .enum(['running', 'completed', 'failed', 'cancelled'])
-  .openapi('PulseRunStatus');
+  .openapi('TaskRunStatus');
 
-export type PulseRunStatus = z.infer<typeof PulseRunStatusSchema>;
+export type TaskRunStatus = z.infer<typeof TaskRunStatusSchema>;
 
-export const PulseRunTriggerSchema = z.enum(['scheduled', 'manual']).openapi('PulseRunTrigger');
+export const TaskRunTriggerSchema = z
+  .enum(['scheduled', 'manual', 'agent'])
+  .openapi('TaskRunTrigger');
 
-export type PulseRunTrigger = z.infer<typeof PulseRunTriggerSchema>;
+export type TaskRunTrigger = z.infer<typeof TaskRunTriggerSchema>;
 
-export const PulseScheduleSchema = z
+export const TaskSchema = z
   .object({
     id: z.string(),
     name: z.string(),
+    description: z.string().nullable().optional(),
     prompt: z.string(),
-    cron: z.string(),
+    cron: z.string().nullable(),
     timezone: z.string().nullable(),
     cwd: z.string().nullable(),
     agentId: z.string().nullable().default(null),
     enabled: z.boolean(),
     maxRuntime: z.number().int().nullable(),
     permissionMode: PermissionModeSchema,
-    status: PulseScheduleStatusSchema,
+    status: TaskStatusSchema,
+    filePath: z.string(),
+    tags: z.array(z.string()).default([]),
     createdAt: z.string(),
     updatedAt: z.string(),
     nextRun: z.string().nullable().optional(),
   })
-  .openapi('PulseSchedule');
+  .openapi('Task');
 
-export type PulseSchedule = z.infer<typeof PulseScheduleSchema>;
+export type Task = z.infer<typeof TaskSchema>;
 
-export const PulseRunSchema = z
+export const TaskRunSchema = z
   .object({
     id: z.string(),
     scheduleId: z.string(),
-    status: PulseRunStatusSchema,
+    status: TaskRunStatusSchema,
     startedAt: z.string().nullable(),
     finishedAt: z.string().nullable(),
     durationMs: z.number().int().nullable(),
     outputSummary: z.string().nullable(),
     error: z.string().nullable(),
     sessionId: z.string().nullable(),
-    trigger: PulseRunTriggerSchema,
+    trigger: TaskRunTriggerSchema,
     createdAt: z.string(),
   })
-  .openapi('PulseRun');
+  .openapi('TaskRun');
 
-export type PulseRun = z.infer<typeof PulseRunSchema>;
+export type TaskRun = z.infer<typeof TaskRunSchema>;
 
-export const PulsePresetSchema = z
+export const TaskTemplateSchema = z
   .object({
     id: z.string(),
     name: z.string(),
@@ -933,56 +1177,58 @@ export const PulsePresetSchema = z
     timezone: z.string().optional(),
     category: z.string().optional(),
   })
-  .openapi('PulsePreset');
+  .openapi('TaskTemplate');
 
-export type PulsePreset = z.infer<typeof PulsePresetSchema>;
+export type TaskTemplate = z.infer<typeof TaskTemplateSchema>;
 
-export const CreateScheduleRequestSchema = z
+export const CreateTaskRequestSchema = z
   .object({
     name: z.string().min(1),
     prompt: z.string().min(1),
-    cron: z.string().min(1),
+    cron: z.string().min(1).nullable().optional(),
     timezone: z.string().nullable().optional(),
     cwd: z.string().nullable().optional(),
     agentId: z.string().optional(),
     enabled: z.boolean().optional().default(true),
     maxRuntime: z.number().int().positive().nullable().optional(),
     permissionMode: PermissionModeSchema.optional().default('acceptEdits'),
+    tags: z.array(z.string()).optional().default([]),
   })
-  .openapi('CreateScheduleRequest');
+  .openapi('CreateTaskRequest');
 
-export type CreateScheduleRequest = z.infer<typeof CreateScheduleRequestSchema>;
+export type CreateTaskRequest = z.infer<typeof CreateTaskRequestSchema>;
 
 /** Input type for creating a schedule (before Zod defaults are applied). */
-export type CreateScheduleInput = z.input<typeof CreateScheduleRequestSchema>;
+export type CreateTaskInput = z.input<typeof CreateTaskRequestSchema>;
 
-export const UpdateScheduleRequestSchema = z
+export const UpdateTaskRequestSchema = z
   .object({
     name: z.string().min(1).optional(),
     prompt: z.string().min(1).optional(),
-    cron: z.string().min(1).optional(),
+    cron: z.string().min(1).nullable().optional(),
     timezone: z.string().nullable().optional(),
     cwd: z.string().nullable().optional(),
     agentId: z.string().nullable().optional(),
     enabled: z.boolean().optional(),
     maxRuntime: z.number().int().positive().nullable().optional(),
     permissionMode: PermissionModeSchema.optional(),
-    status: PulseScheduleStatusSchema.optional(),
+    status: TaskStatusSchema.optional(),
+    tags: z.array(z.string()).optional(),
   })
-  .openapi('UpdateScheduleRequest');
+  .openapi('UpdateTaskRequest');
 
-export type UpdateScheduleRequest = z.infer<typeof UpdateScheduleRequestSchema>;
+export type UpdateTaskRequest = z.infer<typeof UpdateTaskRequestSchema>;
 
-export const ListRunsQuerySchema = z
+export const ListTaskRunsQuerySchema = z
   .object({
     scheduleId: z.string().optional(),
-    status: PulseRunStatusSchema.optional(),
+    status: TaskRunStatusSchema.optional(),
     limit: z.coerce.number().int().min(1).max(500).optional().default(50),
     offset: z.coerce.number().int().min(0).optional().default(0),
   })
-  .openapi('ListRunsQuery');
+  .openapi('ListTaskRunsQuery');
 
-export type ListRunsQuery = z.infer<typeof ListRunsQuerySchema>;
+export type ListTaskRunsQuery = z.infer<typeof ListTaskRunsQuerySchema>;
 
 // === Config PATCH Schemas ===
 
@@ -1061,3 +1307,157 @@ export const UploadProgressSchema = z.object({
 });
 
 export type UploadProgress = z.infer<typeof UploadProgressSchema>;
+
+// === UI Control Schemas ===
+
+/**
+ * Content that can be rendered in the agent-controlled canvas panel.
+ * Discriminated on `type`: `'url'`, `'markdown'`, or `'json'`.
+ */
+export const UiCanvasContentSchema = z
+  .discriminatedUnion('type', [
+    z.object({
+      type: z.literal('url'),
+      url: z.string().url(),
+      title: z.string().optional(),
+      sandbox: z.string().optional(),
+    }),
+    z.object({
+      type: z.literal('markdown'),
+      content: z.string(),
+      title: z.string().optional(),
+    }),
+    z.object({
+      type: z.literal('json'),
+      data: z.unknown(),
+      title: z.string().optional(),
+    }),
+  ])
+  .openapi('UiCanvasContent');
+
+export type UiCanvasContent = z.infer<typeof UiCanvasContentSchema>;
+
+/** Identifies a named panel in the DorkOS UI. */
+export const UiPanelIdSchema = z
+  .enum(['settings', 'tasks', 'relay', 'mesh', 'picker'])
+  .openapi('UiPanelId');
+
+export type UiPanelId = z.infer<typeof UiPanelIdSchema>;
+
+/** Identifies a tab in the sidebar navigation. */
+export const UiSidebarTabSchema = z
+  .enum(['overview', 'sessions', 'schedules', 'connections'])
+  .openapi('UiSidebarTab');
+
+export type UiSidebarTab = z.infer<typeof UiSidebarTabSchema>;
+
+/** Severity level for agent-emitted toast notifications. */
+export const UiToastLevelSchema = z
+  .enum(['success', 'error', 'info', 'warning'])
+  .openapi('UiToastLevel');
+
+export type UiToastLevel = z.infer<typeof UiToastLevelSchema>;
+
+/**
+ * A command issued by an agent to mutate the DorkOS client UI.
+ * Discriminated on `action` — 14 variants covering panels, sidebar, canvas,
+ * notifications, theme, scroll, agent switching, and command palette.
+ */
+export const UiCommandSchema = z
+  .discriminatedUnion('action', [
+    // Panel commands
+    z.object({ action: z.literal('open_panel'), panel: UiPanelIdSchema }),
+    z.object({ action: z.literal('close_panel'), panel: UiPanelIdSchema }),
+    z.object({ action: z.literal('toggle_panel'), panel: UiPanelIdSchema }),
+
+    // Sidebar commands
+    z.object({ action: z.literal('open_sidebar') }),
+    z.object({ action: z.literal('close_sidebar') }),
+    z.object({ action: z.literal('switch_sidebar_tab'), tab: UiSidebarTabSchema }),
+
+    // Canvas commands
+    z.object({
+      action: z.literal('open_canvas'),
+      content: UiCanvasContentSchema.optional(),
+      preferredWidth: z.number().min(20).max(80).optional(),
+    }),
+    z.object({
+      action: z.literal('update_canvas'),
+      content: UiCanvasContentSchema,
+    }),
+    z.object({ action: z.literal('close_canvas') }),
+
+    // Notification
+    z.object({
+      action: z.literal('show_toast'),
+      message: z.string().max(500),
+      level: UiToastLevelSchema.default('info'),
+      description: z.string().max(1000).optional(),
+    }),
+
+    // Theme
+    z.object({
+      action: z.literal('set_theme'),
+      theme: z.enum(['light', 'dark']),
+    }),
+
+    // Scroll
+    z.object({
+      action: z.literal('scroll_to_message'),
+      messageId: z.string().optional(),
+    }),
+
+    // Agent switching
+    z.object({
+      action: z.literal('switch_agent'),
+      cwd: z.string(),
+    }),
+
+    // Command palette
+    z.object({ action: z.literal('open_command_palette') }),
+  ])
+  .openapi('UiCommand');
+
+export type UiCommand = z.infer<typeof UiCommandSchema>;
+
+/**
+ * SSE event wrapper for agent-issued UI commands.
+ * Carried as a `StreamEvent` with `type: 'ui_command'`.
+ */
+export const UiCommandEventSchema = z
+  .object({
+    type: z.literal('ui_command'),
+    command: UiCommandSchema,
+  })
+  .openapi('UiCommandEvent');
+
+export type UiCommandEvent = z.infer<typeof UiCommandEventSchema>;
+
+/**
+ * Client UI state reported back to the agent via the Transport layer.
+ * Gives agents situational awareness of what is visible and active.
+ */
+export const UiStateSchema = z
+  .object({
+    canvas: z.object({
+      open: z.boolean(),
+      contentType: z.enum(['url', 'markdown', 'json']).nullable(),
+    }),
+    panels: z.object({
+      settings: z.boolean(),
+      tasks: z.boolean(),
+      relay: z.boolean(),
+      mesh: z.boolean(),
+    }),
+    sidebar: z.object({
+      open: z.boolean(),
+      activeTab: UiSidebarTabSchema.nullable(),
+    }),
+    agent: z.object({
+      id: z.string().nullable(),
+      cwd: z.string().nullable(),
+    }),
+  })
+  .openapi('UiState');
+
+export type UiState = z.infer<typeof UiStateSchema>;

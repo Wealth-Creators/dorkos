@@ -24,7 +24,7 @@ const SESSION_ID_PREVIEW_LENGTH = 7;
  */
 export async function resolveSubjectLabel(
   subject: string,
-  deps: ResolverDeps,
+  deps: ResolverDeps
 ): Promise<SubjectLabel> {
   const raw = subject;
 
@@ -32,8 +32,8 @@ export async function resolveSubjectLabel(
   if (subject === 'relay.system.console') {
     return { label: 'System Console', raw };
   }
-  if (subject.startsWith('relay.system.pulse.')) {
-    return { label: 'Pulse Scheduler', raw };
+  if (subject.startsWith('relay.system.tasks.')) {
+    return { label: 'Tasks Scheduler', raw };
   }
   if (subject.startsWith('relay.human.console.')) {
     return { label: 'You', raw };
@@ -73,11 +73,11 @@ export async function resolveSubjectLabel(
  */
 export async function resolveSubjectLabels(
   subjects: string[],
-  deps: ResolverDeps,
+  deps: ResolverDeps
 ): Promise<Map<string, SubjectLabel>> {
   const unique = [...new Set(subjects)];
   const results = await Promise.all(
-    unique.map(async (s) => [s, await resolveSubjectLabel(s, deps)] as const),
+    unique.map(async (s) => [s, await resolveSubjectLabel(s, deps)] as const)
   );
   return new Map(results);
 }

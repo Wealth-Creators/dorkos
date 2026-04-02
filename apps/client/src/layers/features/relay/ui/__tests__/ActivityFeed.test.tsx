@@ -11,7 +11,10 @@ import '@testing-library/jest-dom/vitest';
 
 const mockUseRelayConversations = vi.fn();
 const mockUseSendRelayMessage = vi.fn(() => ({ mutate: vi.fn(), isPending: false }));
-const mockUseAggregatedDeadLetters = vi.fn((_enabled?: boolean) => ({ data: [] as unknown[], isLoading: false }));
+const mockUseAggregatedDeadLetters = vi.fn((_enabled?: boolean) => ({
+  data: [] as unknown[],
+  isLoading: false,
+}));
 
 vi.mock('@/layers/entities/relay', () => ({
   useRelayConversations: (...args: unknown[]) => mockUseRelayConversations(...args),
@@ -45,7 +48,7 @@ import { ActivityFeed } from '../ActivityFeed';
 const makeConversation = (
   id: string,
   subject = 'relay.system.test',
-  overrides: Record<string, unknown> = {},
+  overrides: Record<string, unknown> = {}
 ) => ({
   id,
   subject,
@@ -79,7 +82,7 @@ describe('ActivityFeed', () => {
       render(<ActivityFeed enabled={true} />);
 
       // The loading skeleton renders 3 animated placeholder divs
-      const skeletons = document.querySelectorAll('.animate-pulse');
+      const skeletons = document.querySelectorAll('.animate-tasks');
       expect(skeletons.length).toBeGreaterThan(0);
     });
 
@@ -101,7 +104,7 @@ describe('ActivityFeed', () => {
       mockUseRelayConversations.mockReturnValue({ data: { conversations: [] }, isLoading: false });
       render(<ActivityFeed enabled={true} />);
       expect(
-        screen.getByText('Messages will appear here as your agents communicate'),
+        screen.getByText('Messages will appear here as your agents communicate')
       ).toBeInTheDocument();
     });
 
@@ -176,14 +179,20 @@ describe('ActivityFeed', () => {
 
     it('renders new conversations that appear after initial load', async () => {
       const initial = [makeConversation('conv-1')];
-      mockUseRelayConversations.mockReturnValue({ data: { conversations: initial }, isLoading: false });
+      mockUseRelayConversations.mockReturnValue({
+        data: { conversations: initial },
+        isLoading: false,
+      });
 
       const { rerender } = render(<ActivityFeed enabled={true} />);
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
 
       // Simulate an SSE-delivered conversation arriving
       const updated = [makeConversation('conv-1'), makeConversation('conv-2')];
-      mockUseRelayConversations.mockReturnValue({ data: { conversations: updated }, isLoading: false });
+      mockUseRelayConversations.mockReturnValue({
+        data: { conversations: updated },
+        isLoading: false,
+      });
 
       await act(async () => {
         rerender(<ActivityFeed enabled={true} />);
@@ -197,7 +206,7 @@ describe('ActivityFeed', () => {
     it('shows all conversations when filter is "all"', () => {
       const conversations = [
         makeConversation('conv-1', 'relay.agent.session-1'),
-        makeConversation('conv-2', 'relay.system.pulse.schedule-1'),
+        makeConversation('conv-2', 'relay.system.tasks.schedule-1'),
         makeConversation('conv-3', 'relay.system.info'),
       ];
       mockUseRelayConversations.mockReturnValue({ data: { conversations }, isLoading: false });
@@ -209,7 +218,7 @@ describe('ActivityFeed', () => {
     it('filters to only chat messages when "Chat messages" is selected', () => {
       const conversations = [
         makeConversation('conv-1', 'relay.agent.session-1'),
-        makeConversation('conv-2', 'relay.system.pulse.schedule-1'),
+        makeConversation('conv-2', 'relay.system.tasks.schedule-1'),
         makeConversation('conv-3', 'relay.system.info'),
       ];
       mockUseRelayConversations.mockReturnValue({ data: { conversations }, isLoading: false });
@@ -223,14 +232,14 @@ describe('ActivityFeed', () => {
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
       expect(screen.getByTestId('conversation-row')).toHaveAttribute(
         'data-subject',
-        'relay.agent.session-1',
+        'relay.agent.session-1'
       );
     });
 
-    it('filters to only pulse jobs when "Pulse jobs" is selected', () => {
+    it('filters to only tasks jobs when "Tasks jobs" is selected', () => {
       const conversations = [
         makeConversation('conv-1', 'relay.agent.session-1'),
-        makeConversation('conv-2', 'relay.system.pulse.schedule-1'),
+        makeConversation('conv-2', 'relay.system.tasks.schedule-1'),
         makeConversation('conv-3', 'relay.system.info'),
       ];
       mockUseRelayConversations.mockReturnValue({ data: { conversations }, isLoading: false });
@@ -239,12 +248,12 @@ describe('ActivityFeed', () => {
 
       const [sourceCombobox] = screen.getAllByRole('combobox');
       fireEvent.click(sourceCombobox);
-      fireEvent.click(screen.getByRole('option', { name: 'Pulse jobs' }));
+      fireEvent.click(screen.getByRole('option', { name: 'Tasks jobs' }));
 
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
       expect(screen.getByTestId('conversation-row')).toHaveAttribute(
         'data-subject',
-        'relay.system.pulse.schedule-1',
+        'relay.system.tasks.schedule-1'
       );
     });
 
@@ -284,7 +293,10 @@ describe('ActivityFeed', () => {
       fireEvent.click(screen.getByRole('option', { name: 'Delivered' }));
 
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
-      expect(screen.getByTestId('conversation-row')).toHaveAttribute('data-subject', 'relay.system.a');
+      expect(screen.getByTestId('conversation-row')).toHaveAttribute(
+        'data-subject',
+        'relay.system.a'
+      );
     });
 
     it('filters to failed conversations when "Failed" is selected', () => {
@@ -302,7 +314,10 @@ describe('ActivityFeed', () => {
       fireEvent.click(screen.getByRole('option', { name: 'Failed' }));
 
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
-      expect(screen.getByTestId('conversation-row')).toHaveAttribute('data-subject', 'relay.system.b');
+      expect(screen.getByTestId('conversation-row')).toHaveAttribute(
+        'data-subject',
+        'relay.system.b'
+      );
     });
 
     it('filters to pending conversations when "Pending" is selected', () => {
@@ -319,7 +334,10 @@ describe('ActivityFeed', () => {
       fireEvent.click(screen.getByRole('option', { name: 'Pending' }));
 
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
-      expect(screen.getByTestId('conversation-row')).toHaveAttribute('data-subject', 'relay.system.a');
+      expect(screen.getByTestId('conversation-row')).toHaveAttribute(
+        'data-subject',
+        'relay.system.a'
+      );
     });
   });
 
@@ -448,7 +466,7 @@ describe('ActivityFeed', () => {
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
       expect(screen.getByTestId('conversation-row')).toHaveAttribute(
         'data-subject',
-        'relay.agent.session-1',
+        'relay.agent.session-1'
       );
     });
 
@@ -479,7 +497,7 @@ describe('ActivityFeed', () => {
       expect(screen.getAllByTestId('conversation-row')).toHaveLength(1);
       expect(screen.getByTestId('conversation-row')).toHaveAttribute(
         'data-subject',
-        'relay.agent.alpha',
+        'relay.agent.alpha'
       );
     });
   });
