@@ -26,11 +26,13 @@ RUN apt-get update && \
       python3 build-essential libsqlite3-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Mock Claude CLI (set MOCK_CLAUDE=false if mounting a real Claude CLI)
+# Claude CLI — mock for CI/testing, real for production
 ARG MOCK_CLAUDE=true
 RUN if [ "$MOCK_CLAUDE" = "true" ]; then \
       printf '#!/bin/sh\necho "claude mock 1.0.0"\n' > /usr/local/bin/claude && \
       chmod +x /usr/local/bin/claude; \
+    else \
+      npm install -g @anthropic-ai/claude-code; \
     fi
 
 # Install mode: "tarball" (local build) or "npm" (published package)
